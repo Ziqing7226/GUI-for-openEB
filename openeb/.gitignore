@@ -1,0 +1,22 @@
+# Build folders
+/_build*/
+/build*/
+
+# Python 
+__pycache__/
+*.pyc
+.venv/
+
+# cache
+.cache
+
+.vscode/
+.vs/
+out/
+.idea
+
+# Raw data index files
+*.raw.tmp_index
+
+# Generated open source license RST file
+doc/source/open_source_licenses.rst

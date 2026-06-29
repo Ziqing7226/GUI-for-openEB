@@ -1,0 +1,28 @@
+name: Upload Datasets
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "15 2 1 */2 *"
+
+env:
+  # we are not using an official share URL from KDrive. We found it by analyzing the http requests.
+  # we hope it will continue to work in the future.
+  dataset_download_address: "https://prophesee-bamboo.s3.eu-west-1.amazonaws.com/datasets/openeb/openeb-dataset_v5.1.0.zip"
+
+jobs:
+  get_artifacts:
+    name: Get Datasets
+    runs-on: ubuntu-latest
+    steps:
+      - name: Downloading datasets
+        timeout-minutes: 10
+        run: |
+          curl -L -o datasets.zip $dataset_download_address
+          mkdir datasets && cd datasets && unzip ../datasets.zip
+
+      - name: Uploading datasets to storage
+        uses: actions/upload-artifact@master
+        with:
+          name: datasets
+          path: datasets

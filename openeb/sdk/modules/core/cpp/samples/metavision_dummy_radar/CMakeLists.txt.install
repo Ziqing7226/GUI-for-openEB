@@ -1,0 +1,37 @@
+# Copyright (c) Prophesee S.A.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
+# Unless required by applicable law or agreed to in writing, software distributed under the License is distributed
+# on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and limitations under the License.
+
+cmake_minimum_required(VERSION 3.5)
+
+project(metavision_dummy_radar)
+
+set(CMAKE_CXX_STANDARD 17)
+
+if (MSVC)
+    # For including cmath
+    # Cf https://docs.microsoft.com/en-us/cpp/c-runtime-library/math-constants?redirectedfrom=MSDN&view=vs-2019
+    add_definitions("-D_USE_MATH_DEFINES")
+endif()
+
+find_package(MetavisionSDK COMPONENTS core stream ui REQUIRED)
+find_package(Boost COMPONENTS program_options REQUIRED)
+add_compile_definitions(BOOST_BIND_GLOBAL_PLACEHOLDERS) ## needed to get rid of warning `#pragma message: The practice of declaring the Bind placeholders (_1, _2, ...)`
+find_package(OpenCV COMPONENTS core highgui imgproc REQUIRED)
+
+set (sample metavision_dummy_radar)
+add_executable(${sample} ${sample}.cpp activity_monitoring.cpp radar_viewer.cpp)
+target_link_libraries(${sample}
+                        MetavisionSDK::base
+                        MetavisionSDK::core
+                        MetavisionSDK::stream
+                        MetavisionSDK::ui
+                        Boost::program_options
+                        opencv_core
+                        opencv_highgui
+                        opencv_imgproc)
