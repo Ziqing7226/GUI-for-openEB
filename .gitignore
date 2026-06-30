@@ -1,0 +1,42 @@
+# ---- Build artifacts ----
+build/
+cmake-build-*/
+out/
+
+# ---- CMake generated (in case build/ is not used) ----
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+install_manifest.txt
+compile_commands.json
+
+# ---- Qt / IDE / Editor ----
+*.user
+*.user.*
+*.pro.user
+*.autosave
+.vscode/
+.idea/
+*.swp
+*~
+.*.un~
+*.orig
+
+# ---- OS ----
+.DS_Store
+Thumbs.db
+
+# ---- Logs & temp ----
+*.log
+/tmp/
+qt_stderr*.log
+
+# ---- User-private launcher (local env customisation) ----
+scripts/run_gui.local.sh
+
+# ---- Python (for future tooling) ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
