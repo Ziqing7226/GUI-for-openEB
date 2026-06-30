@@ -5,6 +5,8 @@
 #include <QMouseEvent>
 #include <QPainter>
 
+#include <algorithm>
+
 namespace gui {
 
 namespace {
@@ -164,6 +166,10 @@ void EventDisplayWidget::clear() {
     update();
 }
 
+QImage EventDisplayWidget::current_frame() const {
+    return frame_;
+}
+
 void EventDisplayWidget::draw_letterboxed(int widget_w, int widget_h,
                                           int img_w, int img_h) {
     if (img_w <= 0 || img_h <= 0) {
@@ -256,6 +262,7 @@ bool EventDisplayWidget::compute_logical_letterbox(QRect& out) const {
 bool EventDisplayWidget::widget_to_sensor(const QPoint& widget_pos, QPoint& sensor_pos) const {
     QRect vp;
     if (!compute_logical_letterbox(vp)) return false;
+    if (vp.width() == 0 || vp.height() == 0) return false;
     if (!vp.contains(widget_pos)) {
         // Allow points slightly outside to avoid clipping the edges.
     }
@@ -263,7 +270,9 @@ bool EventDisplayWidget::widget_to_sensor(const QPoint& widget_pos, QPoint& sens
     const int img_h = texture_->height();
     const float sx = static_cast<float>(widget_pos.x() - vp.x()) / vp.width()  * img_w;
     const float sy = static_cast<float>(widget_pos.y() - vp.y()) / vp.height() * img_h;
-    sensor_pos = QPoint(static_cast<int>(sx), static_cast<int>(sy));
+    const int ix = static_cast<int>(sx);
+    const int iy = static_cast<int>(sy);
+    sensor_pos = QPoint(std::clamp(ix, 0, img_w - 1), std::clamp(iy, 0, img_h - 1));
     return true;
 }
 

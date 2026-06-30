@@ -44,6 +44,10 @@ public slots:
     /// coordinates). Pass enabled=false to hide it.
     void set_roi_overlay(int x, int y, int w, int h, bool enabled);
 
+    /// @brief Returns a copy of the currently displayed frame.
+    /// Useful for tools (e.g. calibration wizard) that need to grab a snapshot.
+    QImage current_frame() const;
+
 signals:
     /// @brief Emitted when the user finishes a drag in ROI drag mode.
     /// Coordinates are in sensor pixels.

@@ -1,0 +1,290 @@
+// gui/app/file_converter.cpp
+
+#include "file_converter.h"
+
+#include <atomic>
+#include <chrono>
+#include <thread>
+
+#include <QFile>
+#include <QMetaObject>
+#include <QTextStream>
+
+#include <metavision/sdk/base/events/event_cd.h>
+#include <metavision/sdk/stream/camera.h>
+#include <metavision/sdk/stream/camera_exception.h>
+#include <metavision/sdk/stream/file_config_hints.h>
+#include <metavision/sdk/stream/hdf5_event_file_writer.h>
+#include <metavision/sdk/stream/offline_streaming_control.h>
+#include <metavision/sdk/stream/raw_evt2_event_file_writer.h>
+
+namespace gui {
+
+FileConverter::FileConverter(QObject* parent) : QObject(parent) {}
+
+FileConverter::~FileConverter() {
+    cancel();
+    if (worker_.joinable()) worker_.join();
+}
+
+void FileConverter::cancel() { cancel_ = true; }
+
+void FileConverter::convert(const QString& src, const QString& dst, Format fmt) {
+    if (running_) return;
+    if (worker_.joinable()) worker_.join();  // reap previous finished worker
+    cancel_ = false;
+    running_ = true;
+    worker_ = std::thread([this, src, dst, fmt]() {
+        // Wrap the body so an exception (HDF5 writer throw, CameraException
+        // from cam.start(), add_events ordering throw, etc.) does not escape
+        // the thread and call std::terminate. Mirrors ExporterController.
+        try {
+            run_convert(src, dst, fmt);
+        } catch (const std::exception& e) {
+            QMetaObject::invokeMethod(this, [this, msg = QString::fromUtf8(e.what())]() {
+                emit failed(msg);
+            }, Qt::QueuedConnection);
+        } catch (...) {
+            QMetaObject::invokeMethod(this, [this]() {
+                emit failed(tr("Conversion failed with an unknown error."));
+            }, Qt::QueuedConnection);
+        }
+        running_ = false;
+    });
+}
+
+void FileConverter::cut(const QString& src, const QString& dst,
+                        Metavision::timestamp start_us, Metavision::timestamp end_us) {
+    if (running_) return;
+    if (worker_.joinable()) worker_.join();  // reap previous finished worker
+    cancel_ = false;
+    running_ = true;
+    worker_ = std::thread([this, src, dst, start_us, end_us]() {
+        try {
+            run_cut(src, dst, start_us, end_us);
+        } catch (const std::exception& e) {
+            QMetaObject::invokeMethod(this, [this, msg = QString::fromUtf8(e.what())]() {
+                emit failed(msg);
+            }, Qt::QueuedConnection);
+        } catch (...) {
+            QMetaObject::invokeMethod(this, [this]() {
+                emit failed(tr("Cut failed with an unknown error."));
+            }, Qt::QueuedConnection);
+        }
+        running_ = false;
+    });
+}
+
+FileInfo FileConverter::info(const QString& src) const {
+    FileInfo fi;
+    fi.path = src;
+    try {
+        Metavision::FileConfigHints hints;
+        hints.real_time_playback(false);
+        Metavision::Camera cam = Metavision::Camera::from_file(src.toStdString(), hints);
+        const auto& g = cam.geometry();
+        fi.width = g.get_width();
+        fi.height = g.get_height();
+        const auto& cfg = cam.get_camera_configuration();
+        fi.integrator = QString::fromStdString(cfg.integrator);
+        fi.serial = QString::fromStdString(cfg.serial_number);
+        fi.plugin = QString::fromStdString(cfg.plugin_name);
+        fi.encoding = QString::fromStdString(cfg.data_encoding_format);
+        try {
+            auto& osc = cam.offline_streaming_control();
+            if (osc.is_ready()) {
+                fi.duration_us = osc.get_duration();
+            }
+        } catch (const Metavision::CameraException&) {
+            // Live cameras and unsupported files have no duration.
+        }
+    } catch (const Metavision::CameraException&) {
+        // leave defaults
+    }
+    return fi;
+}
+
+void FileConverter::run_convert(const QString& src, const QString& dst, Format fmt) {
+    Metavision::Camera cam;
+    try {
+        Metavision::FileConfigHints hints;
+        hints.real_time_playback(false);
+        cam = Metavision::Camera::from_file(src.toStdString(), hints);
+    } catch (const Metavision::CameraException& e) {
+        QMetaObject::invokeMethod(this, [this, msg = QString::fromUtf8(e.what())]() {
+            emit failed(msg);
+        }, Qt::QueuedConnection);
+        return;
+    }
+
+    const auto& g = cam.geometry();
+    const int w = g.get_width();
+    const int h = g.get_height();
+
+    std::unique_ptr<Metavision::HDF5EventFileWriter> hdf5;
+    std::unique_ptr<QFile> csvf;
+    std::unique_ptr<QTextStream> csvs;
+    if (fmt == Format::HDF5) {
+        hdf5 = std::make_unique<Metavision::HDF5EventFileWriter>(dst.toStdString());
+    } else {
+        csvf = std::make_unique<QFile>(dst);
+        if (!csvf->open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QMetaObject::invokeMethod(this, [this]() {
+                emit failed(tr("Cannot open CSV output file."));
+            }, Qt::QueuedConnection);
+            return;
+        }
+        csvs = std::make_unique<QTextStream>(csvf.get());
+        *csvs << "t,x,y,p\n";
+    }
+
+    std::atomic<bool> callback_error{false};
+    auto id = cam.cd().add_callback(
+        [&](const Metavision::EventCD* b, const Metavision::EventCD* e) {
+            if (cancel_) return;
+            try {
+                if (fmt == Format::HDF5) {
+                    hdf5->add_events(b, e);
+                } else {
+                    for (auto it = b; it != e; ++it) {
+                        *csvs << it->t << ',' << it->x << ',' << it->y << ',' << it->p << '\n';
+                    }
+                }
+            } catch (const std::exception& ex) {
+                // Store error for the polling loop to pick up
+                callback_error.store(true, std::memory_order_release);
+            } catch (...) {}
+        });
+    cam.start();
+    while (!cancel_) {
+        if (callback_error.load(std::memory_order_acquire)) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        if (!cam.is_running()) break;
+    }
+    try { cam.stop(); } catch (...) {}
+    cam.cd().remove_callback(id);
+    if (hdf5) hdf5->close();
+    if (csvs) csvs->flush();
+    if (csvf) csvf->close();
+
+    if (callback_error.load(std::memory_order_acquire)) {
+        QMetaObject::invokeMethod(this, [this]() {
+            emit failed(tr("Conversion failed: error in streaming callback."));
+        }, Qt::QueuedConnection);
+        return;
+    }
+
+    // Distinguish cancel from completion: a cancelled run must not report
+    // success (the output file is partial). The caller can decide whether
+    // to delete the partial file.
+    if (cancel_) {
+        QMetaObject::invokeMethod(this, [this]() {
+            emit failed(tr("Conversion cancelled."));
+        }, Qt::QueuedConnection);
+        return;
+    }
+    QMetaObject::invokeMethod(this, [this, dst]() {
+        emit progress(1.0);
+        emit completed(dst);
+    }, Qt::QueuedConnection);
+}
+
+void FileConverter::run_cut(const QString& src, const QString& dst,
+                            Metavision::timestamp start_us, Metavision::timestamp end_us) {
+    Metavision::Camera cam;
+    try {
+        Metavision::FileConfigHints hints;
+        hints.real_time_playback(false);
+        cam = Metavision::Camera::from_file(src.toStdString(), hints);
+    } catch (const Metavision::CameraException& e) {
+        QMetaObject::invokeMethod(this, [this, msg = QString::fromUtf8(e.what())]() {
+            emit failed(msg);
+        }, Qt::QueuedConnection);
+        return;
+    }
+
+    const auto& g = cam.geometry();
+    Metavision::RAWEvt2EventFileWriter writer(g.get_width(), g.get_height(),
+                                              dst.toStdString());
+    bool seeked = false;
+    try {
+        if (start_us > 0) {
+            auto& osc = cam.offline_streaming_control();
+            if (osc.is_ready()) {
+                // osc.seek() returns bool: true if the seek succeeded. Only
+                // trust the seek when it returns true; otherwise fall back to
+                // the lower-bound filter in the callback to drop early events.
+                seeked = osc.seek(start_us);
+            }
+        }
+    } catch (const Metavision::CameraException&) {
+        // File doesn't support seeking — proceed from the start and rely on
+        // the lower-bound filter below to drop events before start_us.
+    }
+
+    // Signal to the polling loop that we've already written the last event
+    // we want, so it can stop early instead of consuming the whole file.
+    std::atomic<bool> reached_end{false};
+    std::atomic<bool> callback_error{false};
+    auto id = cam.cd().add_callback(
+        [&](const Metavision::EventCD* b, const Metavision::EventCD* e) {
+            if (cancel_) return;
+            try {
+                // Lower bound: drop events before start_us when seek was not
+                // available (or not supported by this file).
+                auto it_begin = b;
+                if (!seeked && start_us > 0) {
+                    while (it_begin != e && it_begin->t < start_us) ++it_begin;
+                    if (it_begin == e) return;
+                }
+                // Upper bound: stop writing once we pass end_us.
+                if (end_us > 0 && it_begin != e && (e - 1)->t > end_us) {
+                    auto it = it_begin;
+                    while (it != e && it->t <= end_us) ++it;
+                    writer.add_events(it_begin, it);
+                    reached_end.store(true, std::memory_order_release);
+                } else {
+                    writer.add_events(it_begin, e);
+                }
+            } catch (const std::exception& ex) {
+                // Store error for the polling loop to pick up
+                callback_error.store(true, std::memory_order_release);
+            } catch (...) {}
+        });
+    cam.start();
+    while (!cancel_) {
+        if (callback_error.load(std::memory_order_acquire)) {
+            try { cam.stop(); } catch (...) {}
+            break;
+        }
+        if (reached_end.load(std::memory_order_acquire)) {
+            try { cam.stop(); } catch (...) {}
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        if (!cam.is_running()) break;
+    }
+    try { cam.stop(); } catch (...) {}
+    cam.cd().remove_callback(id);
+    writer.close();
+
+    if (callback_error.load(std::memory_order_acquire)) {
+        QMetaObject::invokeMethod(this, [this]() {
+            emit failed(tr("Cut failed: error in streaming callback."));
+        }, Qt::QueuedConnection);
+        return;
+    }
+
+    if (cancel_) {
+        QMetaObject::invokeMethod(this, [this]() {
+            emit failed(tr("Cut cancelled."));
+        }, Qt::QueuedConnection);
+        return;
+    }
+    QMetaObject::invokeMethod(this, [this, dst]() {
+        emit progress(1.0);
+        emit completed(dst);
+    }, Qt::QueuedConnection);
+}
+
+} // namespace gui

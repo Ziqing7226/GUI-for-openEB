@@ -7,18 +7,24 @@
 #include <QScrollArea>
 #include <QVBoxLayout>
 
+#include "algorithms_panel.h"
 #include "biases_panel.h"
 #include "devices_panel.h"
 #include "display_panel.h"
 #include "esp_panel.h"
+#include "file_tools_panel.h"
 #include "information_panel.h"
+#include "preprocessing_panel.h"
 #include "roi_panel.h"
 #include "statistics_panel.h"
 #include "trigger_panel.h"
+#include "algo_bridge/algo_bridge.h"
+#include "app/file_converter.h"
 
 namespace gui {
 
-SettingsPanel::SettingsPanel(QWidget* parent) : QWidget(parent) {
+SettingsPanel::SettingsPanel(AlgoBridge* bridge, FileConverter* converter, QWidget* parent)
+    : QWidget(parent) {
     auto* outer = new QVBoxLayout(this);
     outer->setContentsMargins(0, 0, 0, 0);
 
@@ -69,8 +75,8 @@ SettingsPanel::SettingsPanel(QWidget* parent) : QWidget(parent) {
     add_group(tr("Display"), display_);
 
     // Phase 2: camera control panels (Bias / ROI / ESP / Trigger).
-    biases_  = new BiasesPanel(host);
-    add_group(tr("Biases"), biases_);
+    biases_panel_  = new BiasesPanel(host);
+    add_group(tr("Biases"), biases_panel_);
     roi_     = new RoiPanel(host);
     add_group(tr("ROI"), roi_);
     esp_     = new EspPanel(host);
@@ -78,14 +84,50 @@ SettingsPanel::SettingsPanel(QWidget* parent) : QWidget(parent) {
     trigger_ = new TriggerPanel(host);
     add_group(tr("Trigger"), trigger_);
 
-    // Phase 5+: algorithm / file-tool panels.
-    add_placeholder(tr("Preprocessing"), tr("OpenEB event filters & preprocessors — Phase 5."));
-    add_placeholder(tr("Algorithms"),    tr("Self-developed CV / analytics / calibration — Phases 6-9."));
-    add_placeholder(tr("Calibration"),   tr("Intrinsic / extrinsic calibration wizards — Phase 9."));
-    add_placeholder(tr("File Tools"),    tr("RAW → HDF5 / CSV / DAT, cutter, info — Phase 5."));
+    // Phase 5: event preprocessing & algorithm selection.
+    preprocessing_ = new PreprocessingPanel(host);
+    add_group(tr("Preprocessing"), preprocessing_);
+
+    algorithms_ = new AlgorithmsPanel(bridge, host);
+    add_group(tr("Algorithms"), algorithms_, bridge != nullptr);
+
+    file_tools_ = new FileToolsPanel(converter, host);
+    add_group(tr("File Tools"), file_tools_, converter != nullptr);
+
+    // Phase 9: calibration — placeholder until CalibrationWizard is installed.
+    calibration_group_ = add_placeholder(tr("Calibration"),
+                                         tr("Intrinsic / extrinsic calibration wizards — Phase 9."));
 
     layout->addStretch(1);
     scroll->setWidget(host);
+}
+
+void SettingsPanel::set_calibration_panel(QWidget* panel) {
+    if (!panel || !calibration_group_) return;
+    if (panel == calibration_installed_) return;
+    // Remove the previously-installed panel if any; otherwise remove the
+    // placeholder label. Using findChildren with FindDirectChildrenOnly
+    // avoids recursively deleting QLabels inside an already-installed panel
+    // (which the previous implementation did, corrupting the UI on the
+    // second call).
+    if (calibration_installed_) {
+        calibration_installed_->deleteLater();
+        calibration_installed_ = nullptr;
+    } else {
+        const auto old_lbls = calibration_group_->findChildren<QLabel*>(
+            QString(), Qt::FindDirectChildrenOnly);
+        for (auto* l : old_lbls) l->deleteLater();
+    }
+    auto* gl = qobject_cast<QVBoxLayout*>(calibration_group_->layout());
+    if (gl) {
+        gl->addWidget(panel);
+    } else {
+        auto* ngl = new QVBoxLayout(calibration_group_);
+        ngl->setContentsMargins(6, 6, 6, 6);
+        ngl->addWidget(panel);
+    }
+    calibration_group_->setEnabled(true);
+    calibration_installed_ = panel;
 }
 
 } // namespace gui

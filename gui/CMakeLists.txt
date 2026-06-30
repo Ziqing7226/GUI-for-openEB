@@ -4,20 +4,47 @@ set(GUI_SOURCES
     main.cpp
     main_window.cpp
     app/camera_controller.cpp
+    app/file_converter.cpp
     app/frame_pipeline.cpp
     app/statistics_controller.cpp
-    display/event_display_widget.cpp
-    panels/settings_panel.cpp
-    panels/information_panel.cpp
-    panels/statistics_panel.cpp
-    panels/display_panel.cpp
-    panels/devices_panel.cpp
-    panels/biases_panel.cpp
-    panels/roi_panel.cpp
-    panels/esp_panel.cpp
-    panels/trigger_panel.cpp
     algo_bridge/algo_bridge.cpp
+    algo_bridge/filter_chain.cpp
+    config/config_manager.cpp
+    display/event_display_widget.cpp
+    exporter/exporter_controller.cpp
+    exporter/export_dialog.cpp
+    panels/algorithms_panel.cpp
+    panels/biases_panel.cpp
+    panels/devices_panel.cpp
+    panels/display_panel.cpp
+    panels/esp_panel.cpp
+    panels/file_tools_panel.cpp
+    panels/information_panel.cpp
+    panels/preprocessing_panel.cpp
+    panels/roi_panel.cpp
+    panels/settings_panel.cpp
+    panels/statistics_panel.cpp
+    panels/trigger_panel.cpp
+    recorder/playback_controller.cpp
+    recorder/playback_controls.cpp
+    recorder/recorder_controller.cpp
 )
+
+# Phase 9 — calibration wizard (built when sources are present).
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/calibration/calibration_wizard.cpp")
+    list(APPEND GUI_SOURCES
+        calibration/calibration_wizard.cpp
+    )
+endif()
+
+# Phase 10 — temporal plot / multi-window / layout manager.
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/temporal/temporal_plot_window.cpp")
+    list(APPEND GUI_SOURCES
+        temporal/temporal_plot_window.cpp
+        widgets/multi_window_manager.cpp
+        config/layout_manager.cpp
+    )
+endif()
 
 add_executable(gui_for_openeb ${GUI_SOURCES})
 

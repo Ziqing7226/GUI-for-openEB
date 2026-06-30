@@ -71,7 +71,9 @@ TriggerPanel::TriggerPanel(QWidget* parent) : QWidget(parent) {
     tout_form->addRow(tr("Duty cycle"), tout_duty_);
 
     tout_freq_ = new QDoubleSpinBox(tout_group_);
-    tout_freq_->setRange(1.0, 1.0e9);
+    // Match the period range (1 µs .. 1000 s): 1 Hz .. 1 MHz. Above 1 MHz
+    // the period would round to 0 µs and set_period(0) is invalid.
+    tout_freq_->setRange(1.0, 1.0e6);
     tout_freq_->setSuffix(" Hz");
     tout_freq_->setValue(1000.0);
     tout_form->addRow(tr("Frequency"), tout_freq_);
@@ -110,10 +112,18 @@ TriggerPanel::TriggerPanel(QWidget* parent) : QWidget(parent) {
             [this](double hz) {
         if (hz <= 0.0) return;
         const int us = static_cast<int>(1.0e6 / hz);
+        // Defensive: never call set_period(0) — it is invalid and can leave
+        // the trigger output in an undefined state.
+        if (us < 1) return;
         QSignalBlocker b(tout_period_);
         tout_period_->setValue(us);
-        // The period signal handler above applies to the facility; nothing to
-        // do here to avoid double-apply.
+        // The period widget's signals are blocked above, so its handler will
+        // NOT fire — we must apply to the hardware here.
+        if (!controller_) return;
+        auto* to = controller_->trigger_out_facility();
+        if (!to) return;
+        try { to->set_period(static_cast<uint32_t>(us)); }
+        catch (const std::exception& e) { emit error_message(QString::fromUtf8(e.what())); }
     });
     connect(tout_duty_, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this,
             [this](double v) {
@@ -204,7 +214,11 @@ void TriggerPanel::populate_trigger_out() {
     try {
         QSignalBlocker b0(tout_enable_); tout_enable_->setChecked(to->is_enabled());
         const uint32_t period = to->get_period();
-        QSignalBlocker b1(tout_period_); tout_period_->setValue(static_cast<int>(period));
+        // Clamp to the spinbox range (1 µs .. 1e9 µs) before casting to int:
+        // static_cast<int>(period) wraps for period > INT_MAX (2.15e9) and
+        // would display a negative value clamped to 1 µs.
+        QSignalBlocker b1(tout_period_);
+        tout_period_->setValue(period > 1000000000u ? 1000000000 : static_cast<int>(period));
         const double duty = to->get_duty_cycle();
         QSignalBlocker b2(tout_duty_); tout_duty_->setValue(duty);
         if (period > 0) {

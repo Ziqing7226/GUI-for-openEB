@@ -73,4 +73,13 @@ void FrameGenerator::set_color_palette(const Metavision::ColorPalette& palette) 
     }
 }
 
+void FrameGenerator::set_accumulation_time_us(Metavision::timestamp us) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (auto& kv : windows_) {
+        if (kv.second.generator) {
+            kv.second.generator->set_display_accumulation_time_us(us);
+        }
+    }
+}
+
 } // namespace gui_algo

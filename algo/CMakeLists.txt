@@ -5,6 +5,8 @@ add_library(gui_algo STATIC
     common/event_buffer.cpp
     common/frame_generator.cpp
     common/data_loader.cpp
+    calibration/intrinsic.cpp
+    calibration/extrinsic.cpp
 )
 
 target_include_directories(gui_algo PUBLIC

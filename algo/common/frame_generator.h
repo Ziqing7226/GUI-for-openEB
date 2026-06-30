@@ -52,6 +52,9 @@ public:
 
     void set_color_palette(const Metavision::ColorPalette& palette);
 
+    /// @brief Updates the accumulation time for all windows.
+    void set_accumulation_time_us(Metavision::timestamp us);
+
     long width() const { return width_; }
     long height() const { return height_; }
 

@@ -42,7 +42,7 @@ signals:
 
 private:
     void populate();
-    void apply();
+    bool apply();
     void toggle_enable(bool on);
 
     QCheckBox*    enable_check_{nullptr};

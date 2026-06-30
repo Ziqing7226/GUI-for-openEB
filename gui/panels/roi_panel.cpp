@@ -65,6 +65,10 @@ RoiPanel::RoiPanel(QWidget* parent) : QWidget(parent) {
 
     connect(enable_check_, &QCheckBox::toggled, this, &RoiPanel::toggle_enable);
     connect(apply_btn_, &QPushButton::clicked, this, &RoiPanel::apply);
+    // Re-apply when mode changes so ROI/RONI takes effect immediately
+    // without requiring the user to click "Apply" again.
+    connect(mode_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [this]() { if (populated_) apply(); });
     connect(clear_btn_, &QPushButton::clicked, this, [this]() {
         if (!controller_) return;
         auto* roi = controller_->roi_facility();
@@ -186,25 +190,40 @@ void RoiPanel::toggle_enable(bool on) {
     if (!controller_) return;
     auto* roi = controller_->roi_facility();
     if (!roi) return;
-    try {
-        roi->enable(on);
-    } catch (const std::exception& e) {
-        emit error_message(QString::fromUtf8(e.what()));
-        QSignalBlocker b(enable_check_);
-        enable_check_->setChecked(!on);
-        return;
-    }
+    // SDK contract (I_ROI::enable): at least one window must have been set
+    // before enabling. Apply first, then enable. If apply() fails, do NOT
+    // call roi->enable(true) — that would violate the contract. Revert the
+    // checkbox and report the error instead.
     if (on) {
-        apply();
+        if (!apply()) {
+            QSignalBlocker b(enable_check_);
+            enable_check_->setChecked(false);
+            return;
+        }
+        try {
+            roi->enable(true);
+        } catch (const std::exception& e) {
+            emit error_message(QString::fromUtf8(e.what()));
+            QSignalBlocker b(enable_check_);
+            enable_check_->setChecked(false);
+        }
     } else {
+        try {
+            roi->enable(false);
+        } catch (const std::exception& e) {
+            emit error_message(QString::fromUtf8(e.what()));
+            QSignalBlocker b(enable_check_);
+            enable_check_->setChecked(true);
+            return;
+        }
         emit roi_applied(0, 0, 0, 0, false);
     }
 }
 
-void RoiPanel::apply() {
-    if (!controller_ || !populated_) return;
+bool RoiPanel::apply() {
+    if (!controller_ || !populated_) return false;
     auto* roi = controller_->roi_facility();
-    if (!roi) return;
+    if (!roi) return false;
 
     const int x = x_spin_->value();
     const int y = y_spin_->value();
@@ -212,7 +231,7 @@ void RoiPanel::apply() {
     const int h = h_spin_->value();
     if (w <= 0 || h <= 0) {
         emit error_message(tr("ROI width and height must be positive."));
-        return;
+        return false;
     }
 
     try {
@@ -222,9 +241,10 @@ void RoiPanel::apply() {
         roi->set_windows({win});
     } catch (const std::exception& e) {
         emit error_message(QString::fromUtf8(e.what()));
-        return;
+        return false;
     }
     emit roi_applied(x, y, w, h, enable_check_->isChecked());
+    return true;
 }
 
 } // namespace gui

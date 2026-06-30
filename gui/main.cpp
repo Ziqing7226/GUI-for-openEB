@@ -23,6 +23,17 @@ static void ensure_openeb_env_defaults() {
     if (!std::getenv("HDF5_PLUGIN_PATH")) {
         ::setenv("HDF5_PLUGIN_PATH", "/usr/local/lib/hdf5/plugin", 0);
     }
+    // On Wayland sessions Qt 6's Wayland plugin renders a black viewport for
+    // our QOpenGLWidget; the XCB plugin (via XWayland) is the reliable path.
+    // Respect any user override.
+    if (!std::getenv("QT_QPA_PLATFORM") && std::getenv("WAYLAND_DISPLAY")) {
+        ::setenv("QT_QPA_PLATFORM", "xcb", 0);
+    }
+    // Qt 6 may default to the Vulkan RHI backend and produce a black viewport
+    // on this GPU; force OpenGL unless the user has set it.
+    if (!std::getenv("QSG_RHI_BACKEND")) {
+        ::setenv("QSG_RHI_BACKEND", "opengl", 0);
+    }
     // Note: LD_LIBRARY_PATH cannot be set here (the dynamic linker has
     // already resolved shared libraries at process start).  If the SDK
     // libraries are in a non-standard path, set it in the shell or use

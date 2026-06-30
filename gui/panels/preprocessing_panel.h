@@ -1,0 +1,55 @@
+// gui/panels/preprocessing_panel.h — event filter chain UI (design §4.3.1).
+//
+// One checkbox + parameter row per FilterChain stage. Edits apply immediately
+// to the FilterChain owned by the CameraController.
+
+#ifndef GUI_PANELS_PREPROCESSING_PANEL_H
+#define GUI_PANELS_PREPROCESSING_PANEL_H
+
+#include <QWidget>
+#include <QHash>
+#include <QString>
+
+class QCheckBox;
+class QSpinBox;
+class QDoubleSpinBox;
+class QComboBox;
+class QGroupBox;
+
+namespace gui {
+
+class CameraController;
+
+class PreprocessingPanel : public QWidget {
+    Q_OBJECT
+public:
+    explicit PreprocessingPanel(QWidget* parent = nullptr);
+
+public slots:
+    void on_camera_connected(CameraController* controller);
+    void on_camera_disconnected();
+
+    /// @brief Menu-friendly accessor: sets the enable state of @p stage.
+    void set_stage_enabled(const QString& stage, bool on);
+    /// @brief Menu-friendly accessor: queries the enable state of @p stage.
+    bool is_stage_enabled(const QString& stage) const;
+
+signals:
+    void info_message(const QString& msg);
+    void error_message(const QString& msg);
+
+private:
+    void build_ui();
+    void apply_stage(const QString& name);
+
+    CameraController* controller_{nullptr};
+    QHash<QString, QCheckBox*> enables_;
+    QHash<QString, QComboBox*> combos_;
+    QHash<QString, QSpinBox*> spins_;
+    QHash<QString, QDoubleSpinBox*> double_spins_;
+    QGroupBox* group_{nullptr};
+};
+
+} // namespace gui
+
+#endif // GUI_PANELS_PREPROCESSING_PANEL_H

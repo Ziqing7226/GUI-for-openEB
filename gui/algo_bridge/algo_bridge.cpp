@@ -21,16 +21,29 @@ AlgoInstance::AlgoInstance(const AlgoInfo& info) : info_(info) {
 }
 
 void AlgoInstance::set_param(const std::string& key, const std::string& value) {
+    std::lock_guard<std::mutex> lk(mutex_);
     param_values_[key] = value;
 }
 
 std::string AlgoInstance::get_param(const std::string& key) const {
+    std::lock_guard<std::mutex> lk(mutex_);
     auto it = param_values_.find(key);
     return it == param_values_.end() ? std::string{} : it->second;
 }
 
+void AlgoInstance::set_enabled(bool e) {
+    std::lock_guard<std::mutex> lk(mutex_);
+    enabled_ = e;
+}
+
+bool AlgoInstance::is_enabled() const {
+    std::lock_guard<std::mutex> lk(mutex_);
+    return enabled_;
+}
+
 void AlgoInstance::push_events(const Metavision::EventCD* begin,
                                const Metavision::EventCD* end) {
+    std::lock_guard<std::mutex> lk(mutex_);
     if (!enabled_) {
         return;
     }
@@ -39,6 +52,7 @@ void AlgoInstance::push_events(const Metavision::EventCD* begin,
 }
 
 AlgoResult AlgoInstance::pull_result() {
+    std::lock_guard<std::mutex> lk(mutex_);
     AlgoResult r;
     r.filtered_events = std::move(buffer_);
     r.status = "pass-through (phase 1 stub)";
@@ -109,7 +123,24 @@ std::shared_ptr<AlgoInstance> AlgoBridge::create(const std::string& name) {
     if (it == registry_.end()) {
         return nullptr;
     }
-    return std::make_shared<AlgoInstance>(it->second);
+    auto inst = std::make_shared<AlgoInstance>(it->second);
+    {
+        std::lock_guard<std::mutex> lk(live_mutex_);
+        live_instances_[name] = inst;  // weak_ptr tracks the instance's lifetime
+    }
+    return inst;
+}
+
+std::shared_ptr<AlgoInstance> AlgoBridge::find_live(const std::string& name) {
+    std::lock_guard<std::mutex> lk(live_mutex_);
+    auto it = live_instances_.find(name);
+    if (it == live_instances_.end()) return nullptr;
+    auto inst = it->second.lock();  // returns nullptr if expired
+    if (!inst) {
+        // Prune expired entry.
+        live_instances_.erase(it);
+    }
+    return inst;
 }
 
 void AlgoBridge::push_events(const std::shared_ptr<AlgoInstance>& inst,

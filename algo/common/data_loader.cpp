@@ -30,6 +30,11 @@ bool DataLoader::open(const std::string& path) {
         return true;
     } catch (const Metavision::CameraException& e) {
         camera_.reset();
+        width_ = 0;
+        height_ = 0;
+        serial_.clear();
+        integrator_.clear();
+        plugin_.clear();
         return false;
     }
 }
@@ -43,7 +48,9 @@ void DataLoader::close() {
     }
     if (camera_) {
         if (camera_->is_running()) {
-            camera_->stop();
+            try {
+                camera_->stop();
+            } catch (...) {}
         }
         camera_.reset();
     }

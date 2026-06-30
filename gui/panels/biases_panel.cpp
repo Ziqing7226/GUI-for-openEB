@@ -98,9 +98,14 @@ void BiasesPanel::load_from_file(const QString& path) {
 
 void BiasesPanel::clear_rows() {
     for (auto& row : rows_) {
-        // Deleting the row widget also destroys its slider/spin/label/button
-        // children (Qt's parent-child ownership).
-        if (row.row_widget) row.row_widget->deleteLater();
+        // Remove from the layout first so synchronous repopulation below
+        // doesn't see stale layout state. Deleting the row widget also
+        // destroys its slider/spin/label/button children (Qt's parent-child
+        // ownership).
+        if (row.row_widget) {
+            rows_layout_->removeWidget(row.row_widget);
+            row.row_widget->deleteLater();
+        }
     }
     rows_.clear();
 }
@@ -138,7 +143,6 @@ void BiasesPanel::populate() {
     hint_label_->setStyleSheet("color: #444;");
 
     // Insert rows before the trailing stretch.
-    const int insert_at = rows_layout_->count() - 1; // stretch is last
     for (const auto& [name, value] : all) {
         BiasRow row;
         row.name = name;
@@ -200,7 +204,7 @@ void BiasesPanel::populate() {
         hl->addWidget(row.spin, 0);
         hl->addWidget(btn_reset, 0);
 
-        rows_layout_->insertWidget(insert_at, row_widget);
+        rows_layout_->insertWidget(rows_layout_->count() - 1, row_widget);
 
         // Wire edits. Capture name (not the row pointer) to stay safe if the
         // vector reallocates — we look up by name when applying.

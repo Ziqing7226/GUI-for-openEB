@@ -2,6 +2,7 @@
 
 #include "camera_controller.h"
 
+#include <QMetaObject>
 #include <QString>
 
 #include <metavision/sdk/stream/camera_error_code.h>
@@ -64,10 +65,16 @@ bool CameraController::connect_serial(const std::string& serial) {
 }
 
 bool CameraController::connect_file(const std::string& path) {
+    return connect_file_speed(path, 1.0);
+}
+
+bool CameraController::connect_file_speed(const std::string& path, double speed) {
     teardown();
     try {
         Metavision::FileConfigHints hints;
-        hints.real_time_playback(true);
+        // speed == 0 → as-fast-as-possible (real_time_playback disabled);
+        // otherwise real-time playback.
+        hints.real_time_playback(speed > 0.0);
         auto cam = Metavision::Camera::from_file(path, hints);
         setup_camera(std::move(cam), true);
         return true;
@@ -90,7 +97,8 @@ bool CameraController::start() {
         if (!camera_->is_running()) {
             camera_->start();
         }
-        emit started();
+        // Don't emit started() here: the status-change callback fires it
+        // exactly once when the SDK confirms the STARTED transition.
         return true;
     } catch (const Metavision::CameraException& e) {
         emit error(QString::fromUtf8(e.what()));
@@ -106,7 +114,11 @@ bool CameraController::stop() {
         if (camera_->is_running()) {
             camera_->stop();
         }
-        emit stopped();
+        // Don't emit stopped() here: the status-change callback fires it
+        // exactly once when the SDK confirms the STOPPED transition. For
+        // runtime errors (file EOF, disconnect), the error callback also
+        // emits stopped() so the UI is notified even if the status callback
+        // never fires.
         return true;
     } catch (const Metavision::CameraException& e) {
         emit error(QString::fromUtf8(e.what()));
@@ -116,6 +128,10 @@ bool CameraController::stop() {
 
 bool CameraController::is_running() const {
     return camera_ && camera_->is_running();
+}
+
+Metavision::timestamp CameraController::last_timestamp_us() const {
+    return last_ts_.load(std::memory_order_relaxed);
 }
 
 bool CameraController::save_config(const std::string& path) {
@@ -196,10 +212,15 @@ void CameraController::setup_camera(Metavision::Camera&& cam, bool is_file) {
             } else {
                 emit error(msg);
             }
-            if (camera_ && camera_->is_running()) {
-                try { camera_->stop(); } catch (...) {}
-            }
-            emit stopped();
+            // Calling camera_->stop() from within this callback can deadlock
+            // (the SDK dispatches this on the same thread that stop() would
+            // join). Defer to the GUI thread.
+            QMetaObject::invokeMethod(this, [this]() {
+                if (camera_ && camera_->is_running()) {
+                    try { camera_->stop(); } catch (...) {}
+                }
+                emit stopped();
+            }, Qt::QueuedConnection);
         });
 
     // Status change callback.
@@ -213,13 +234,42 @@ void CameraController::setup_camera(Metavision::Camera&& cam, bool is_file) {
         });
 
     // CD callback: forward events to the frame pipeline + statistics.
+    // The SDK dispatches this callback on its streaming/decoding thread with
+    // NO try/catch, so an exception escaping the lambda would call
+    // std::terminate and crash the whole GUI with no diagnostic. The filter
+    // chain allocates a copy of every batch (and each OpenEB algorithm may
+    // reallocate its output), so std::bad_alloc at high event rates is
+    // plausible. Wrap the body and surface failures to the GUI thread.
     cd_cb_id_ = camera_->cd().add_callback(
         [this](const Metavision::EventCD* b, const Metavision::EventCD* e) {
-            frame_pipeline_.add_events(b, e);
-            statistics_.add_events(b, e);
+            try {
+                statistics_.add_events(b, e);
+                if (b != e) {
+                    last_ts_.store((e - 1)->t, std::memory_order_relaxed);
+                }
+                if (filter_chain_.has_enabled()) {
+                    std::vector<Metavision::EventCD> filtered;
+                    filter_chain_.process(b, e, filtered);
+                    if (!filtered.empty()) {
+                        frame_pipeline_.add_events(filtered.data(),
+                                                   filtered.data() + filtered.size());
+                    }
+                } else {
+                    frame_pipeline_.add_events(b, e);
+                }
+            } catch (const std::exception& ex) {
+                QMetaObject::invokeMethod(this, [this, msg = std::string(ex.what())]() {
+                    emit runtime_warning(QString::fromUtf8(msg.c_str()));
+                }, Qt::QueuedConnection);
+            } catch (...) {
+                // Swallow to keep the stream alive; the SDK thread must not
+                // propagate exceptions out of the callback.
+            }
         });
 
     statistics_.reset();
+    last_ts_.store(-1, std::memory_order_relaxed);
+    filter_chain_.set_geometry(sensor_info_.width, sensor_info_.height);
 
     // Start the frame pipeline for the new sensor geometry.
     const long w = sensor_info_.width;
@@ -232,10 +282,10 @@ void CameraController::setup_camera(Metavision::Camera&& cam, bool is_file) {
 }
 
 void CameraController::teardown() {
-    // 1. Stop the frame pipeline first (so it stops pulling from the SDK).
-    frame_pipeline_.stop();
-
-    // 2. Remove callbacks before destroying the camera.
+    // 1. Remove the SDK callbacks FIRST so the SDK thread stops calling into
+    //    FramePipeline / FilterChain / StatisticsController. Without this,
+    //    stopping the pipeline (which resets generator_) races with the CD
+    //    callback's frame_pipeline_.add_events() — a use-after-free.
     if (camera_) {
         if (cd_cb_id_) {
             camera_->cd().remove_callback(*cd_cb_id_);
@@ -254,8 +304,13 @@ void CameraController::teardown() {
         }
         camera_.reset();
     }
+
+    // 2. Now that no SDK thread can touch it, stop the frame pipeline.
+    frame_pipeline_.stop();
+
     sensor_info_ = SensorInfo{};
     is_file_ = false;
+    last_ts_.store(-1, std::memory_order_relaxed);
 }
 
 void CameraController::fetch_sensor_info() {

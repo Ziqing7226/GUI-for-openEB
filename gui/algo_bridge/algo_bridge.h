@@ -13,6 +13,7 @@
 #define GUI_ALGO_BRIDGE_ALGO_BRIDGE_H
 
 #include <memory>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -58,6 +59,9 @@ struct AlgoResult {
 };
 
 /// A live algorithm instance. Phase 1: pass-through stub.
+///
+/// Methods are thread-safe: push_events() is called from the SDK data thread
+/// while set_param / set_enabled / pull_result are called from the GUI thread.
 class AlgoInstance {
 public:
     explicit AlgoInstance(const AlgoInfo& info);
@@ -67,8 +71,8 @@ public:
     void set_param(const std::string& key, const std::string& value);
     std::string get_param(const std::string& key) const;
 
-    void set_enabled(bool e) { enabled_ = e; }
-    bool is_enabled() const { return enabled_; }
+    void set_enabled(bool e);
+    bool is_enabled() const;
 
     /// Push events to the algorithm. Thread-safe.
     void push_events(const Metavision::EventCD* begin, const Metavision::EventCD* end);
@@ -78,6 +82,7 @@ public:
 
 private:
     AlgoInfo info_;
+    mutable std::mutex mutex_;
     std::unordered_map<std::string, std::string> param_values_;
     std::vector<Metavision::EventCD> buffer_;
     bool enabled_{true};
@@ -98,6 +103,11 @@ public:
     /// @return Shared pointer to the instance, or nullptr if unknown.
     std::shared_ptr<AlgoInstance> create(const std::string& name);
 
+    /// @brief Looks up a live instance by name. Returns nullptr if no live
+    /// instance exists (either never created or already destroyed).
+    /// Used by ConfigManager to capture/apply runtime parameter values.
+    std::shared_ptr<AlgoInstance> find_live(const std::string& name);
+
     void push_events(const std::shared_ptr<AlgoInstance>& inst,
                      const Metavision::EventCD* begin,
                      const Metavision::EventCD* end);
@@ -114,6 +124,11 @@ private:
     void register_self_calibration();
 
     std::unordered_map<std::string, AlgoInfo> registry_;
+    /// Weak references to live instances so ConfigManager can query/apply
+    /// runtime parameter values without owning the instances. Expired
+    /// entries are pruned lazily on each lookup.
+    std::unordered_map<std::string, std::weak_ptr<AlgoInstance>> live_instances_;
+    mutable std::mutex live_mutex_;
 };
 
 } // namespace gui

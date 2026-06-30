@@ -24,10 +24,13 @@ fi
 # ---- OpenEB runtime environment (customise for your camera) ----
 
 # SDK shared libraries (needed if installed outside the standard linker path).
-export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}:/usr/local/lib"
+# Use ${VAR:+$VAR:} so an unset/empty variable does not produce a leading
+# colon — ld.so treats an empty entry as the current working directory,
+# which would let any lib*.so in the user's CWD shadow the real SDK library.
+export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+$LD_LIBRARY_PATH:}/usr/local/lib"
 
 # HDF5 plugin path (for reading .hdf5 event files).
-export HDF5_PLUGIN_PATH="${HDF5_PLUGIN_PATH:-}:/usr/local/lib/hdf5/plugin"
+export HDF5_PLUGIN_PATH="${HDF5_PLUGIN_PATH:+$HDF5_PLUGIN_PATH:}/usr/local/lib/hdf5/plugin"
 
 # HAL plugin path — camera driver .so files.
 # Change this to match your camera vendor's install location.
@@ -35,12 +38,17 @@ export HDF5_PLUGIN_PATH="${HDF5_PLUGIN_PATH:-}:/usr/local/lib/hdf5/plugin"
 #   - CenturyArks: /usr/lib/CenturyArks/hal/plugins
 export MV_HAL_PLUGIN_PATH="${MV_HAL_PLUGIN_PATH:-/usr/local/lib/metavision/hal/plugins}"
 
-# ---- Qt platform plugin ----
-# On Wayland sessions Qt 6 may fail to render via XWayland (black window).
-# Force native Wayland if the session is Wayland; otherwise let Qt auto-detect.
+# ---- Qt platform plugin + RHI backend ----
+# Hard-won lessons from runtime testing on this host:
+#   1. On Wayland sessions Qt 6's Wayland plugin still renders a black window
+#      for QOpenGLWidget children here; the XCB plugin (via XWayland) is the
+#      reliable path.  Set QT_QPA_PLATFORM=xcb unless the user overrides it.
+#   2. Qt 6 may default to the Vulkan RHI backend on this GPU and produce a
+#      black viewport; force OpenGL with QSG_RHI_BACKEND=opengl.
 if [[ -n "${WAYLAND_DISPLAY:-}" ]]; then
-    export QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-wayland}"
+    export QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-xcb}"
 fi
+export QSG_RHI_BACKEND="${QSG_RHI_BACKEND:-opengl}"
 
 # Suppress harmless GTK/dconf warnings from Qt's GTK theme integration.
 export QT_LOGGING_RULES="${QT_LOGGING_RULES:-*.warning=false}"

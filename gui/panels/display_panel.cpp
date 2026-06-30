@@ -47,12 +47,16 @@ DisplayPanel::DisplayPanel(QWidget* parent) : QWidget(parent) {
     mode_combo_->addItem(tr("Contrast Map"));
     mode_combo_->addItem(tr("Periodic"));
     mode_combo_->addItem(tr("On-Demand"));
-    mode_combo_->setEnabled(false); // Phase 5
+    // Non-Diff frame modes require algorithm implementations from Phases 6-8,
+    // which are intentionally skipped in this build. Disable the combo so the
+    // user is not misled into thinking the selection takes effect. The signal
+    // is still wired so a future implementation can simply enable the combo.
+    mode_combo_->setEnabled(false);
+    mode_combo_->setToolTip(tr("Frame mode selection is not yet implemented "
+                               "(planned for a future phase). Only Diff Frame is available."));
     form->addRow(tr("Frame mode"), mode_combo_);
-
-    auto* note = new QLabel(tr("Frame-mode switching is wired in Phase 5."), this);
-    note->setStyleSheet("color: #888; font-style: italic;");
-    form->addRow(QString(), note);
+    connect(mode_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &DisplayPanel::frame_mode_changed);
 
     // Wire slider <-> spinbox.
     connect(accum_slider_, &QSlider::valueChanged, this,
@@ -74,6 +78,16 @@ int DisplayPanel::accumulation_time_us() const {
 
 int DisplayPanel::color_palette_index() const {
     return palette_combo_->currentIndex();
+}
+
+int DisplayPanel::frame_mode_index() const {
+    return mode_combo_->currentIndex();
+}
+
+void DisplayPanel::set_frame_mode(int index) {
+    if (index >= 0 && index < mode_combo_->count()) {
+        mode_combo_->setCurrentIndex(index);
+    }
 }
 
 } // namespace gui

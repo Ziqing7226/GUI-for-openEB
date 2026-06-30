@@ -9,6 +9,7 @@
 
 #include <QObject>
 #include <QString>
+#include <atomic>
 #include <memory>
 #include <optional>
 #include <string>
@@ -27,6 +28,7 @@
 
 #include "frame_pipeline.h"
 #include "statistics_controller.h"
+#include "algo_bridge/filter_chain.h"
 
 namespace gui {
 
@@ -75,6 +77,9 @@ public:
     bool connect_serial(const std::string& serial);
     /// @brief Opens an event file (RAW / HDF5 / DAT) for playback.
     bool connect_file(const std::string& path);
+    /// @brief Opens an event file with a playback speed hint.
+    /// @p speed == 0 → as-fast-as-possible; otherwise real-time playback.
+    bool connect_file_speed(const std::string& path, double speed);
 
     void disconnect();
 
@@ -82,10 +87,18 @@ public:
     bool stop();
     bool is_running() const;
     bool is_connected() const { return static_cast<bool>(camera_); }
+    bool is_file_source() const { return is_file_; }
+
+    /// @brief Returns the underlying Metavision::Camera (nullptr if none).
+    Metavision::Camera* camera_handle() { return camera_.get(); }
+
+    /// @brief Last CD event timestamp seen (μs), or -1 if none. Thread-safe.
+    Metavision::timestamp last_timestamp_us() const;
 
     const SensorInfo& sensor_info() const { return sensor_info_; }
     FramePipeline* frame_pipeline() { return &frame_pipeline_; }
     StatisticsController* statistics() { return &statistics_; }
+    FilterChain* filter_chain() { return &filter_chain_; }
 
     /// @brief Saves / loads camera configuration via the SDK's native format.
     bool save_config(const std::string& path);
@@ -122,9 +135,11 @@ private:
     std::optional<Metavision::CallbackId> status_cb_id_;
     SensorInfo sensor_info_;
     bool is_file_{false};
+    std::atomic<Metavision::timestamp> last_ts_{-1};
 
     FramePipeline frame_pipeline_;
     StatisticsController statistics_;
+    FilterChain filter_chain_;
 };
 
 } // namespace gui

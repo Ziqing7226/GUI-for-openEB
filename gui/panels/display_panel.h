@@ -22,10 +22,17 @@ public:
 
     int accumulation_time_us() const;
     int color_palette_index() const;
+    int frame_mode_index() const;
+
+    /// @brief Sets the active frame mode (0..6). See design §3.2.2.
+    void set_frame_mode(int index);
 
 signals:
     void accumulation_time_changed_us(int us);
     void color_palette_changed(int index); // 0=Dark,1=Light,2=CoolWarm,3=Gray
+    void frame_mode_changed(int index);    // 0=Diff,1=Integration,2=Histogram,
+                                           // 3=TimeDecay,4=ContrastMap,5=Periodic,
+                                           // 6=OnDemand
 
 private:
     QSlider* accum_slider_{nullptr};

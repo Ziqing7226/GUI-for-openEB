@@ -2,6 +2,9 @@
 
 #include "esp_panel.h"
 
+#include <algorithm>
+#include <climits>
+
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDoubleSpinBox>
@@ -274,78 +277,137 @@ void EspPanel::populate_antiflicker() {
     auto* af = controller_ ? controller_->anti_flicker_facility() : nullptr;
     if (!af) { af_group_->setEnabled(false); return; }
     af_group_->setEnabled(true);
-    try {
-        QSignalBlocker b0(af_enable_); af_enable_->setChecked(af->is_enabled());
-        QSignalBlocker b1(af_mode_);
-        const auto m = af->get_filtering_mode();
-        af_mode_->setCurrentIndex(m == Metavision::I_AntiFlickerModule::BAND_PASS ? 1 : 0);
-        QSignalBlocker b2(af_low_);
-        QSignalBlocker b3(af_high_);
-        af_low_->setValue(static_cast<int>(af->get_band_low_frequency()));
-        af_high_->setValue(static_cast<int>(af->get_band_high_frequency()));
-        const uint32_t min_f = af->get_min_supported_frequency();
-        const uint32_t max_f = af->get_max_supported_frequency();
-        af_low_->setRange(static_cast<int>(min_f), static_cast<int>(max_f));
-        af_high_->setRange(static_cast<int>(min_f), static_cast<int>(max_f));
-        QSignalBlocker b4(af_duty_);
-        af_duty_->setRange(af->get_min_supported_duty_cycle(),
-                           af->get_max_supported_duty_cycle());
-        af_duty_->setValue(af->get_duty_cycle());
-        QSignalBlocker b5(af_start_thr_);
-        af_start_thr_->setRange(static_cast<int>(af->get_min_supported_start_threshold()),
-                                static_cast<int>(af->get_max_supported_start_threshold()));
-        af_start_thr_->setValue(static_cast<int>(af->get_start_threshold()));
-        QSignalBlocker b6(af_stop_thr_);
-        af_stop_thr_->setRange(static_cast<int>(af->get_min_supported_stop_threshold()),
-                               static_cast<int>(af->get_max_supported_stop_threshold()));
-        af_stop_thr_->setValue(static_cast<int>(af->get_stop_threshold()));
-    } catch (const std::exception& e) {
-        emit error_message(tr("Anti-Flicker init: %1").arg(QString::fromUtf8(e.what())));
-    }
+    QString err;
+    auto first_err = [&](const std::exception& e) {
+        if (err.isEmpty()) err = QString::fromUtf8(e.what());
+    };
+    bool enabled = false;
+    try { enabled = af->is_enabled(); }
+    catch (const std::exception& e) { first_err(e); }
+    auto mode = Metavision::I_AntiFlickerModule::BAND_STOP;
+    try { mode = af->get_filtering_mode(); }
+    catch (const std::exception& e) { first_err(e); }
+    uint32_t low_f = 90, high_f = 110;
+    try { low_f = af->get_band_low_frequency(); }
+    catch (const std::exception& e) { first_err(e); }
+    try { high_f = af->get_band_high_frequency(); }
+    catch (const std::exception& e) { first_err(e); }
+    uint32_t min_f = 1, max_f = 100000;
+    try { min_f = af->get_min_supported_frequency(); max_f = af->get_max_supported_frequency(); }
+    catch (const std::exception& e) { first_err(e); }
+    float duty_min = 0.0f, duty_max = 1.0f, duty = 0.5f;
+    try { duty_min = af->get_min_supported_duty_cycle(); duty_max = af->get_max_supported_duty_cycle(); }
+    catch (const std::exception& e) { first_err(e); }
+    try { duty = af->get_duty_cycle(); }
+    catch (const std::exception& e) { first_err(e); }
+    uint32_t st_min = 0, st_max = 1000000, st = 1;
+    try { st_min = af->get_min_supported_start_threshold(); st_max = af->get_max_supported_start_threshold(); }
+    catch (const std::exception& e) { first_err(e); }
+    try { st = af->get_start_threshold(); }
+    catch (const std::exception& e) { first_err(e); }
+    uint32_t sp_min = 0, sp_max = 1000000, sp = 1;
+    try { sp_min = af->get_min_supported_stop_threshold(); sp_max = af->get_max_supported_stop_threshold(); }
+    catch (const std::exception& e) { first_err(e); }
+    try { sp = af->get_stop_threshold(); }
+    catch (const std::exception& e) { first_err(e); }
+    if (!err.isEmpty())
+        emit error_message(tr("Anti-Flicker init: %1").arg(err));
+    QSignalBlocker b0(af_enable_); af_enable_->setChecked(enabled);
+    QSignalBlocker b1(af_mode_);
+    af_mode_->setCurrentIndex(mode == Metavision::I_AntiFlickerModule::BAND_PASS ? 1 : 0);
+    const int minfi = static_cast<int>(std::min<uint32_t>(min_f, INT_MAX));
+    const int maxfi = static_cast<int>(std::min<uint32_t>(max_f, INT_MAX));
+    QSignalBlocker b2(af_low_);
+    QSignalBlocker b3(af_high_);
+    af_low_->setValue(static_cast<int>(std::min<uint32_t>(low_f, INT_MAX)));
+    af_high_->setValue(static_cast<int>(std::min<uint32_t>(high_f, INT_MAX)));
+    af_low_->setRange(minfi, maxfi);
+    af_high_->setRange(minfi, maxfi);
+    QSignalBlocker b4(af_duty_);
+    af_duty_->setRange(duty_min, duty_max);
+    af_duty_->setValue(duty);
+    QSignalBlocker b5(af_start_thr_);
+    af_start_thr_->setRange(static_cast<int>(std::min<uint32_t>(st_min, INT_MAX)),
+                            static_cast<int>(std::min<uint32_t>(st_max, INT_MAX)));
+    af_start_thr_->setValue(static_cast<int>(std::min<uint32_t>(st, INT_MAX)));
+    QSignalBlocker b6(af_stop_thr_);
+    af_stop_thr_->setRange(static_cast<int>(std::min<uint32_t>(sp_min, INT_MAX)),
+                           static_cast<int>(std::min<uint32_t>(sp_max, INT_MAX)));
+    af_stop_thr_->setValue(static_cast<int>(std::min<uint32_t>(sp, INT_MAX)));
 }
 
 void EspPanel::populate_trail() {
     auto* tf = controller_ ? controller_->trail_filter_facility() : nullptr;
     if (!tf) { tf_group_->setEnabled(false); return; }
     tf_group_->setEnabled(true);
+    QString err;
+    auto first_err = [&](const std::exception& e) {
+        if (err.isEmpty()) err = QString::fromUtf8(e.what());
+    };
+    std::set<Metavision::I_EventTrailFilterModule::Type> avail;
+    try { avail = tf->get_available_types(); } catch (...) {}
+    bool enabled = false;
+    try { enabled = tf->is_enabled(); }
+    catch (const std::exception& e) { first_err(e); }
+    auto cur = Metavision::I_EventTrailFilterModule::Type::TRAIL;
+    try { cur = tf->get_type(); }
+    catch (const std::exception& e) { first_err(e); }
+    uint32_t min_thr = 0, max_thr = 10000000, thr = 1000;
     try {
-        std::set<Metavision::I_EventTrailFilterModule::Type> avail;
-        try { avail = tf->get_available_types(); } catch (...) {}
-        // Filter the combo to only supported types.
-        for (int i = tf_type_->count() - 1; i >= 0; --i) {
-            const auto t = static_cast<Metavision::I_EventTrailFilterModule::Type>(
-                tf_type_->itemData(i).toInt());
-            if (!avail.empty() && avail.find(t) == avail.end()) {
-                tf_type_->removeItem(i);
-            }
+        min_thr = tf->get_min_supported_threshold();
+        max_thr = tf->get_max_supported_threshold();
+    } catch (const std::exception& e) { first_err(e); }
+    try { thr = tf->get_threshold(); }
+    catch (const std::exception& e) { first_err(e); }
+    if (!err.isEmpty())
+        emit error_message(tr("Trail Filter init: %1").arg(err));
+    // Rebuild the combo from scratch every time we connect — removing
+    // unsupported entries in place would permanently shrink the combo
+    // across reconnects to cameras with different filter support.
+    QSignalBlocker b1(tf_type_);
+    tf_type_->clear();
+    auto add_if = [&](const QString& label, Metavision::I_EventTrailFilterModule::Type t) {
+        if (avail.empty() || avail.find(t) != avail.end()) {
+            tf_type_->addItem(label, static_cast<int>(t));
         }
-        QSignalBlocker b0(tf_enable_); tf_enable_->setChecked(tf->is_enabled());
-        QSignalBlocker b1(tf_type_);
-        const auto cur = tf->get_type();
-        const int idx = tf_type_->findData(static_cast<int>(cur));
-        if (idx >= 0) tf_type_->setCurrentIndex(idx);
-        QSignalBlocker b2(tf_threshold_);
-        tf_threshold_->setRange(static_cast<int>(tf->get_min_supported_threshold()),
-                                static_cast<int>(tf->get_max_supported_threshold()));
-        tf_threshold_->setValue(static_cast<int>(tf->get_threshold()));
-    } catch (const std::exception& e) {
-        emit error_message(tr("Trail Filter init: %1").arg(QString::fromUtf8(e.what())));
-    }
+    };
+    add_if(tr("Trail"),          Metavision::I_EventTrailFilterModule::Type::TRAIL);
+    add_if(tr("STC Cut Trail"),  Metavision::I_EventTrailFilterModule::Type::STC_CUT_TRAIL);
+    add_if(tr("STC Keep Trail"), Metavision::I_EventTrailFilterModule::Type::STC_KEEP_TRAIL);
+    QSignalBlocker b0(tf_enable_); tf_enable_->setChecked(enabled);
+    const int idx = tf_type_->findData(static_cast<int>(cur));
+    if (idx >= 0) tf_type_->setCurrentIndex(idx);
+    QSignalBlocker b2(tf_threshold_);
+    tf_threshold_->setRange(static_cast<int>(std::min<uint32_t>(min_thr, INT_MAX)),
+                            static_cast<int>(std::min<uint32_t>(max_thr, INT_MAX)));
+    tf_threshold_->setValue(static_cast<int>(std::min<uint32_t>(thr, INT_MAX)));
 }
 
 void EspPanel::populate_erc() {
     auto* erc = controller_ ? controller_->erc_facility() : nullptr;
     if (!erc) { erc_group_->setEnabled(false); return; }
     erc_group_->setEnabled(true);
+    QString err;
+    auto first_err = [&](const std::exception& e) {
+        if (err.isEmpty()) err = QString::fromUtf8(e.what());
+    };
+    bool enabled = false;
+    try { enabled = erc->is_enabled(); }
+    catch (const std::exception& e) { first_err(e); }
+    uint32_t min_rate = 1, max_rate = 1000000000, rate = 1000000;
     try {
-        QSignalBlocker b0(erc_enable_); erc_enable_->setChecked(erc->is_enabled());
-        QSignalBlocker b1(erc_rate_);
-        erc_rate_->setRange(static_cast<int>(erc->get_min_supported_cd_event_rate()),
-                            static_cast<int>(erc->get_max_supported_cd_event_rate()));
-        erc_rate_->setValue(static_cast<int>(erc->get_cd_event_rate()));
-    } catch (const std::exception& e) {
-        emit error_message(tr("ERC init: %1").arg(QString::fromUtf8(e.what())));
-    }
+        min_rate = erc->get_min_supported_cd_event_rate();
+        max_rate = erc->get_max_supported_cd_event_rate();
+    } catch (const std::exception& e) { first_err(e); }
+    try { rate = erc->get_cd_event_rate(); }
+    catch (const std::exception& e) { first_err(e); }
+    if (!err.isEmpty())
+        emit error_message(tr("ERC init: %1").arg(err));
+    QSignalBlocker b0(erc_enable_); erc_enable_->setChecked(enabled);
+    QSignalBlocker b1(erc_rate_);
+    erc_rate_->setRange(static_cast<int>(std::min<uint32_t>(min_rate, INT_MAX)),
+                        static_cast<int>(std::min<uint32_t>(max_rate, INT_MAX)));
+    erc_rate_->setValue(static_cast<int>(std::min<uint32_t>(rate, INT_MAX)));
 }
 
 void EspPanel::set_all_enabled(bool on) {
