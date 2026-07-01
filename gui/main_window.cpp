@@ -12,9 +12,15 @@
 #include <QLabel>
 #include <QMenuBar>
 #include <QMessageBox>
+#include <QSet>
 #include <QStatusBar>
+#include <QVBoxLayout>
+
+#include <vector>
 
 #include <metavision/sdk/core/utils/colors.h>
+
+#include <opencv2/imgproc.hpp>
 
 #include "panels/algorithms_panel.h"
 #include "panels/biases_panel.h"
@@ -31,6 +37,26 @@
 #include "calibration/calibration_wizard.h"
 
 namespace gui {
+
+namespace {
+
+/// Converts a cv::Mat (1-channel gray or 3-channel BGR) to a deep-copied
+/// RGB888 QImage suitable for display.
+QImage mat_to_qimage(const cv::Mat& mat) {
+    if (mat.empty()) return QImage();
+    cv::Mat rgb;
+    if (mat.channels() == 1) {
+        cv::cvtColor(mat, rgb, cv::COLOR_GRAY2RGB);
+    } else if (mat.channels() == 3) {
+        cv::cvtColor(mat, rgb, cv::COLOR_BGR2RGB);
+    } else {
+        return QImage();
+    }
+    return QImage(rgb.data, rgb.cols, rgb.rows,
+                  static_cast<int>(rgb.step), QImage::Format_RGB888).copy();
+}
+
+} // namespace
 
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent),
@@ -106,6 +132,13 @@ void MainWindow::closeEvent(QCloseEvent* event) {
         delete calibration_wizard_;
         // calibration_wizard_ is nulled by the destroyed signal handler.
     }
+    // Standalone algorithm windows — same reason as above: their
+    // destroyed() handlers reset AlgoInstance shared_ptrs and QPointer
+    // members that reference MainWindow state.
+    if (time_surface_window_) { delete time_surface_window_.data(); }
+    if (event_to_video_window_) { delete event_to_video_window_.data(); }
+    if (freq_detector_window_) { delete freq_detector_window_.data(); }
+    if (xyt_display_) { delete xyt_display_.data(); }
     // Pre-delete child widgets that hold raw pointers to MainWindow members.
     // Without this, ~QObject child cleanup runs after member destructors,
     // causing use-after-free in widget destructors.
@@ -186,6 +219,13 @@ void MainWindow::build_menus() {
         auto* dock = findChild<QDockWidget*>("SettingsDock");
         if (dock) dock->setVisible(on);
     });
+    auto* pb_toggle = m_view->addAction(tr("Toggle Playback Panel"));
+    pb_toggle->setCheckable(true);
+    pb_toggle->setChecked(false);
+    connect(pb_toggle, &QAction::toggled, this, [this](bool on) {
+        auto* dock = findChild<QDockWidget*>("PlaybackDock");
+        if (dock) dock->setVisible(on);
+    });
     m_view->addAction(tr("Reset Layout"), this, &MainWindow::on_reset_layout);
     m_view->addAction(tr("Save Layout..."), this, &MainWindow::on_save_layout);
     m_view->addAction(tr("Load Layout..."), this, &MainWindow::on_load_layout);
@@ -247,21 +287,22 @@ void MainWindow::build_menus() {
         });
     }
 
-    // Frame Mode (Phase 5) — selects items in the DisplayPanel mode combo.
-    // Non-Diff modes require algorithm implementations from Phases 6-8
-    // (skipped in this build), so the menu is disabled to avoid misleading
-    // the user. It is kept here so a future implementation can simply enable it.
+    // Frame Mode (Phase 5) — controls event accumulation time per frame.
+    // Feasible modes adjust the accumulation window; unimplemented modes
+    // are disabled.
     auto* m_frame = mb->addMenu(tr("Frame &Mode"));
-    m_frame->setEnabled(false);
     {
         const QStringList modes = {
-            tr("Diff"), tr("Integration"), tr("Histogram"),
-            tr("Time Decay"), tr("Contrast Map"), tr("Periodic"), tr("On-Demand")
+            tr("Diff (10ms)"), tr("Integration (50ms)"), tr("Histogram"),
+            tr("Time Decay (30ms)"), tr("Contrast Map"), tr("Periodic"), tr("On-Demand")
         };
+        // Modes that are not yet implemented (disabled).
+        const QSet<int> disabled = {2, 4, 5, 6};
         auto* grp = new QActionGroup(this);
         for (int i = 0; i < modes.size(); ++i) {
             auto* a = m_frame->addAction(modes[i]);
             a->setCheckable(true);
+            a->setEnabled(!disabled.contains(i));
             if (i == 0) a->setChecked(true);
             grp->addAction(a);
             connect(a, &QAction::triggered, this, [this, i]() {
@@ -270,22 +311,55 @@ void MainWindow::build_menus() {
         }
     }
 
-    // Algorithm (Phase 5+) — focus the Algorithms panel; per-algorithm
-    // implementations are stubs until Phases 6-8 (skipped in this build).
+    // Algorithm (design §5.4) — 30 self-developed modules.
     auto* m_algo = mb->addMenu(tr("&Algorithm"));
     {
-        const QStringList names = {
-            tr("Noise Filter"), tr("Optical Flow (Sparse)"), tr("Optical Flow (Dense)"),
-            tr("Blob Detect"), tr("Object Tracker"), tr("Corner Detect"),
-            tr("Counter"), tr("Ultra Slow Motion"), tr("XYT View"),
-            tr("Time Surface"), tr("Stereo Match"), tr("Active Marker"),
-            tr("Event -> Video")
+        // Maps menu display name → algo_bridge name.
+        const std::vector<std::pair<QString, QString>> algos = {
+            {tr("Noise Filter"), "noise_filter"},
+            {tr("Hot Pixel Filter"), "hot_pixel_filter"},
+            {tr("Orientation Filter"), "orientation_filter"},
+            {tr("Direction Selective"), "direction_selective"},
+            {tr("Optical Flow (Sparse)"), "sparse_optical_flow"},
+            {tr("Blob Detect"), "blob_detector"},
+            {tr("Object Tracker"), "object_tracker"},
+            {tr("Corner Detect"), "corner_detector"},
+            {tr("Line Segment (ELiSeD)"), "line_segment"},
+            {tr("Hough Line"), "hough_line"},
+            {tr("Hough Circle"), "hough_circle"},
+            {tr("Hinge Line"), "hinge_line"},
+            {tr("Orientation Cluster"), "orientation_cluster"},
+            {tr("Cluster LIF"), "cluster_lif"},
+            {tr("Background Mask"), "background_mask"},
+            {tr("Perspective Undistort"), "perspective_undistort"},
+            {tr("Trigger Synced"), "trigger_synced"},
+            {tr("Bandpass Filter"), "bandpass_filter"},
+            {tr("EIS (Optical Gyro)"), "optical_gyro"},
+            {tr("Ultra Slow Motion"), "ultra_slow_motion"},
+            {tr("XYT 3D"), "xyt_visualizer"},
+            {tr("Time Surface"), "time_surface"},
+            {tr("Active Marker"), "active_marker"},
+            {tr("Event -> Video"), "event_to_video"},
+            {tr("Flow Statistics"), "flow_statistics"},
+            {tr("ISI Analyzer"), "isi_analyzer"},
+            {tr("Particle Counter"), "particle_counter"},
+            {tr("Auto Bias"), "auto_bias"},
+            {tr("Freq Detector"), "freq_detector"},
+            {tr("Overlay"), "overlay"},
         };
-        for (const auto& n : names) {
-            m_algo->addAction(n, this, [this, n]() {
-                auto* dock = findChild<QDockWidget*>("SettingsDock");
-                if (dock) { dock->show(); dock->raise(); }
-                statusBar()->showMessage(tr("Enable '%1' in the Algorithms panel.").arg(n), 4000);
+        for (const auto& [label, name] : algos) {
+            m_algo->addAction(label, this, [this, name, label]() {
+                const auto key = name.toStdString();
+                auto inst = algo_bridge_.find_live(key);
+                if (!inst) {
+                    inst = algo_bridge_.create(key);
+                }
+                if (inst) {
+                    bool now_on = !inst->is_enabled();
+                    inst->set_enabled(now_on);
+                    statusBar()->showMessage(
+                        tr("%1: %2").arg(label).arg(now_on ? "ON" : "OFF"), 3000);
+                }
             });
         }
     }
@@ -293,25 +367,31 @@ void MainWindow::build_menus() {
     // Calibration (Phase 9) — launches the wizard lazily.
     m_calibration_ = mb->addMenu(tr("&Calibration"));
     m_calibration_->addAction(tr("&Intrinsic Wizard..."), this, &MainWindow::on_intrinsic_wizard);
-    m_calibration_->addAction(tr("&Extrinsic Wizard..."), this, &MainWindow::on_extrinsic_wizard);
 
-    // Tools (Phase 10).
+    // Tools (design §5.5).
     m_tools_ = mb->addMenu(tr("&Tools"));
-    m_tools_->addAction(tr("&Temporal Plot..."), this, &MainWindow::on_open_temporal_plot,
+    // Standalone algorithm windows (design §5.6.1).
+    m_tools_->addAction(tr("&Time Surface..."), this, &MainWindow::on_open_time_surface,
                         QKeySequence("Ctrl+Shift+T"));
+    m_tools_->addAction(tr("&XYT 3D View..."), this, &MainWindow::on_open_xyt_view,
+                        QKeySequence("Ctrl+Shift+X"));
+    m_tools_->addAction(tr("&Event -> Video..."), this, &MainWindow::on_open_event_to_video,
+                        QKeySequence("Ctrl+Shift+E"));
+    m_tools_->addAction(tr("&Frequency Detector..."), this, &MainWindow::on_open_freq_detector,
+                        QKeySequence("Ctrl+Shift+F"));
+    m_tools_->addSeparator();
+    m_tools_->addAction(tr("&Temporal Plot (legacy)..."), this, &MainWindow::on_open_temporal_plot);
     m_tools_->addAction(tr("&Add Display Window..."), this, &MainWindow::on_add_display_window);
     m_tools_->addAction(tr("&Tile Windows"), this, &MainWindow::on_tile_windows);
     m_tools_->addAction(tr("&Cascade Windows"), this, [this]() {
         if (multi_window_) multi_window_->cascade();
+        else statusBar()->showMessage(tr("No display windows open."), 3000);
     });
     m_tools_->addAction(tr("&Close All Windows"), this, [this]() {
         if (multi_window_) multi_window_->close_all();
+        else statusBar()->showMessage(tr("No display windows open."), 3000);
     });
     m_tools_->addSeparator();
-    // Frame Composer / Data Synchronizer / Timing Profiler are registered in
-    // AlgoBridge but have no concrete implementation in this build (Phases 6-8
-    // skipped). Disable them with a tooltip so the menu still documents their
-    // existence without misleading the user into thinking they are functional.
     auto* a_fc = m_tools_->addAction(tr("&Frame Composer..."));
     a_fc->setEnabled(false);
     a_fc->setToolTip(tr("Not yet implemented (planned for a future phase)."));
@@ -353,6 +433,9 @@ void MainWindow::wire_signals() {
     connect(&camera_, &CameraController::connected, this, [this](const SensorInfo& info) {
         settings_->information_panel()->set_info(info);
         settings_->devices_panel()->set_connected(true);
+        // Propagate actual sensor dimensions to the algorithm bridge so
+        // algorithm backends are created with the correct width/height.
+        algo_bridge_.set_sensor_dimensions(info.width, info.height);
         status_conn_->setText(tr("Connected: %1").arg(info.generation_name.isEmpty()
                                                            ? info.integrator
                                                            : info.generation_name));
@@ -385,6 +468,7 @@ void MainWindow::wire_signals() {
             temporal_plot_->set_sensor_geometry(info.width, info.height);
         }
         install_temporal_callback();
+        install_algo_callback();
         camera_.start();
     });
     connect(&camera_, &CameraController::disconnected, this, [this]() {
@@ -392,6 +476,8 @@ void MainWindow::wire_signals() {
         // was removed by the SDK. Just clear our ID so a fresh one can be
         // registered on the next connect.
         temporal_cd_cb_id_.reset();
+        algo_cd_cb_id_.reset();
+        prev_frame_ts_ = 0;
         settings_->information_panel()->clear();
         settings_->statistics_panel()->clear();
         settings_->devices_panel()->set_connected(false);
@@ -436,11 +522,17 @@ void MainWindow::wire_signals() {
     });
 
     // Frame pipeline -> display
-    connect(camera_.frame_pipeline(), &FramePipeline::frame_ready, display_,
+    connect(camera_.frame_pipeline(), &FramePipeline::frame_ready, this,
             [this](QImage frame, Metavision::timestamp ts) {
+                process_algo_results(frame);
                 display_->set_frame(frame);
                 settings_->statistics_panel()->set_timestamp(ts);
                 status_ts_->setText(QStringLiteral("t: %1 s").arg(ts / 1.0e6, 0, 'f', 3));
+                if (prev_frame_ts_ > 0 && ts > prev_frame_ts_) {
+                    const double fps = 1.0e6 / static_cast<double>(ts - prev_frame_ts_);
+                    settings_->statistics_panel()->set_fps(fps);
+                }
+                prev_frame_ts_ = ts;
             });
 
     // Statistics controller -> panel + status bar
@@ -465,7 +557,14 @@ void MainWindow::wire_signals() {
             &MainWindow::update_palettes);
     connect(settings_->display_panel(), &DisplayPanel::frame_mode_changed, this,
             [this](int idx) {
-                statusBar()->showMessage(tr("Frame mode set to %1").arg(idx), 3000);
+                // Map frame mode to accumulation time. Only feasible modes
+                // (Diff/Integration/Time Decay) are enabled in the menu; the
+                // others are disabled and won't reach here.
+                const int us[] = {10000, 50000, 30000, 30000, 10000, 10000, 10000};
+                const int accumulation = (idx >= 0 && idx < 7) ? us[idx] : 10000;
+                camera_.frame_pipeline()->set_accumulation_time_us(accumulation);
+                statusBar()->showMessage(
+                    tr("Frame mode %1 (accumulation %2 us)").arg(idx).arg(accumulation), 3000);
             });
     connect(settings_->display_panel(), &DisplayPanel::accumulation_time_changed_us,
             this, [this](int us) {
@@ -766,6 +865,186 @@ void MainWindow::remove_temporal_callback() {
     temporal_cd_cb_id_.reset();
 }
 
+// ---------------------------------------------------------------------------
+// Algorithm event/result pipeline (design §3.8, §5.6.1)
+// ---------------------------------------------------------------------------
+
+void MainWindow::install_algo_callback() {
+    if (algo_cd_cb_id_) return;              // already installed
+    auto* cam = camera_.camera_handle();
+    if (!cam) return;
+    algo_cd_cb_id_ = cam->cd().add_callback(
+        [this](const Metavision::EventCD* b, const Metavision::EventCD* e) {
+            if (b == nullptr || e == nullptr || b >= e) return;
+            try {
+                // Push events to every live algorithm instance. AlgoInstance
+                // is internally mutex-guarded, so this is safe from the SDK
+                // data thread. The reinterpret_cast inside AlgoBackend is
+                // valid because gui_algo::Event is layout-compatible with
+                // Metavision::EventCD (POD x,y,p,t).
+                auto instances = algo_bridge_.list_live();
+                for (auto& inst : instances) {
+                    if (inst->is_enabled()) {
+                        inst->push_events(b, e);
+                    }
+                }
+            } catch (...) {}
+
+            // Throttled, downsampled feed to the XYT 3D window. The
+            // SpaceTimeDisplay is a QOpenGLWidget and must only be touched
+            // from the GUI thread, so we marshal via QMetaObject::invokeMethod.
+            // (Same throttle/downsample pattern as install_temporal_callback.)
+            if (xyt_display_) {
+                const Metavision::timestamp cur_ts = (e - 1)->t;
+                const Metavision::timestamp last =
+                    algo_last_xyt_post_us_.load(std::memory_order_relaxed);
+                if (cur_ts - last >= 50000) {  // 50ms minimum interval
+                    algo_last_xyt_post_us_.store(cur_ts, std::memory_order_relaxed);
+                    const std::size_t count = static_cast<std::size_t>(e - b);
+                    auto copy = std::make_shared<std::vector<Metavision::EventCD>>();
+                    if (count > 5000) {
+                        const std::size_t stride = count / 5000;
+                        copy->reserve(count / stride + 1);
+                        for (std::size_t i = 0; i < count; i += stride) {
+                            copy->push_back(b[i]);
+                        }
+                    } else {
+                        copy->assign(b, e);
+                    }
+                    QMetaObject::invokeMethod(this, [this, copy]() {
+                        if (xyt_display_) {
+                            xyt_display_->push_events(copy->data(),
+                                                      copy->data() + copy->size());
+                        }
+                    }, Qt::QueuedConnection);
+                }
+            }
+        });
+}
+
+void MainWindow::remove_algo_callback() {
+    if (!algo_cd_cb_id_) return;
+    if (auto* cam = camera_.camera_handle()) {
+        try { cam->cd().remove_callback(*algo_cd_cb_id_); } catch (...) {}
+    }
+    algo_cd_cb_id_.reset();
+}
+
+void MainWindow::process_algo_results(QImage& frame) {
+    // Iterate a snapshot of live instances and pull each one's latest result.
+    // For Overlay/Replace instances we mutate @p frame in place; for
+    // Standalone instances we route the result frame (if any) to the
+    // dedicated child display widget. Passive instances are skipped.
+    auto instances = algo_bridge_.list_live();
+    for (auto& inst : instances) {
+        if (!inst->is_enabled()) continue;
+        const auto mode = inst->info().display_mode;
+        if (mode == AlgoDisplayMode::Passive) continue;
+
+        AlgoResult r;
+        try {
+            r = inst->pull_result();
+        } catch (...) {
+            continue;
+        }
+
+        if (mode == AlgoDisplayMode::Overlay) {
+            // Convert AlgoResult overlay primitives into FrameAnnotator calls.
+            // Boxes: tracked-object boxes with optional id.
+            if (!r.boxes.empty()) {
+                std::vector<FrameAnnotator::Box> boxes;
+                boxes.reserve(r.boxes.size());
+                for (const auto& b : r.boxes) {
+                    FrameAnnotator::Box box;
+                    box.rect = QRect(b.x, b.y, b.w, b.h);
+                    box.id = b.id;
+                    boxes.push_back(std::move(box));
+                }
+                annotator_.draw_boxes(frame, boxes);
+            }
+            // Lines.
+            if (!r.lines.empty()) {
+                std::vector<QLineF> lines;
+                lines.reserve(r.lines.size());
+                for (const auto& l : r.lines) {
+                    lines.emplace_back(QPointF(l.x1, l.y1), QPointF(l.x2, l.y2));
+                }
+                annotator_.draw_lines(frame, lines);
+            }
+            // Points.
+            if (!r.points.empty()) {
+                std::vector<QPointF> pts;
+                pts.reserve(r.points.size());
+                for (const auto& p : r.points) {
+                    pts.emplace_back(p.x, p.y);
+                }
+                annotator_.draw_points(frame, pts);
+            }
+            // Circles.
+            if (!r.circles.empty()) {
+                std::vector<std::pair<QPointF, double>> circs;
+                circs.reserve(r.circles.size());
+                for (const auto& c : r.circles) {
+                    circs.emplace_back(QPointF(c.cx, c.cy), c.r);
+                }
+                annotator_.draw_circles(frame, circs);
+            }
+            // Text labels.
+            if (!r.texts.empty()) {
+                for (const auto& t : r.texts) {
+                    annotator_.draw_text(frame, QString::fromStdString(t.text),
+                                         QPoint(t.x, t.y));
+                }
+            }
+            continue;
+        }
+
+        if (mode == AlgoDisplayMode::Replace) {
+            // Replace the main display frame with the algorithm output.
+            if (r.has_frame && !r.frame.empty()) {
+                frame = mat_to_qimage(r.frame);
+            }
+            continue;
+        }
+
+        if (mode == AlgoDisplayMode::Standalone) {
+            const std::string& name = inst->info().name;
+            if (name == "time_surface") {
+                if (time_surface_display_ && r.has_frame && !r.frame.empty()) {
+                    QImage q = mat_to_qimage(r.frame);
+                    QMetaObject::invokeMethod(time_surface_display_.data(),
+                        "set_frame", Qt::QueuedConnection, Q_ARG(QImage, q));
+                }
+            } else if (name == "event_to_video") {
+                if (event_to_video_display_ && r.has_frame && !r.frame.empty()) {
+                    QImage q = mat_to_qimage(r.frame);
+                    QMetaObject::invokeMethod(event_to_video_display_.data(),
+                        "set_frame", Qt::QueuedConnection, Q_ARG(QImage, q));
+                }
+            } else if (name == "freq_detector") {
+                if (freq_detector_label_) {
+                    // Build a multi-line status string: header line + one
+                    // line per detected light source (frequency in Hz).
+                    QString text = QString::fromStdString(r.status);
+                    for (const auto& t : r.texts) {
+                        text += QStringLiteral("\n  ");
+                        text += QString::fromStdString(t.text);
+                    }
+                    QMetaObject::invokeMethod(this, [this, text]() {
+                        if (freq_detector_label_) {
+                            freq_detector_label_->setText(text);
+                        }
+                    }, Qt::QueuedConnection);
+                }
+            }
+            // Other Standalone algorithms (e.g. xyt_visualizer, flow_statistics,
+            // isi_analyzer, calibration modules) are driven through their own
+            // dedicated windows and callbacks; pull_result is a no-op for them
+            // or the result is consumed elsewhere.
+        }
+    }
+}
+
 void MainWindow::on_intrinsic_wizard() {
     if (!calibration_wizard_) {
         calibration_wizard_ = new CalibrationWizard(this);
@@ -777,19 +1056,6 @@ void MainWindow::on_intrinsic_wizard() {
     calibration_wizard_->set_camera(&camera_);
     calibration_wizard_->set_display(display_);
     calibration_wizard_->show_intrinsic();
-}
-
-void MainWindow::on_extrinsic_wizard() {
-    if (!calibration_wizard_) {
-        calibration_wizard_ = new CalibrationWizard(this);
-        calibration_wizard_->setAttribute(Qt::WA_DeleteOnClose);
-        connect(calibration_wizard_, &QObject::destroyed, this, [this]() {
-            calibration_wizard_ = nullptr;
-        });
-    }
-    calibration_wizard_->set_camera(&camera_);
-    calibration_wizard_->set_display(display_);
-    calibration_wizard_->show_extrinsic();
 }
 
 void MainWindow::on_add_display_window() {
@@ -810,6 +1076,7 @@ void MainWindow::on_add_display_window() {
 
 void MainWindow::on_tile_windows() {
     if (multi_window_) multi_window_->tile();
+    else statusBar()->showMessage(tr("No display windows open."), 3000);
 }
 
 void MainWindow::on_save_layout() {
@@ -864,12 +1131,135 @@ void MainWindow::on_refresh_devices() {
 void MainWindow::on_about() {
     QMessageBox::about(this, tr("About GUI for openEB"),
         tr("<h3>GUI for openEB</h3>"
-           "<p>Phases 1-5 + 9-10 — Qt 6 + OpenEB 5.2.0.</p>"
+           "<p>Phases 1-12 — Qt 6 + OpenEB 5.2.0.</p>"
            "<p>Camera discovery, real-time OpenGL event display, statistics, "
            "Bias / ROI / ESP / Trigger panels, recording & playback, HDF5 / AVI "
            "export, JSON config with presets, OpenEB filter-chain preprocessing, "
-           "file conversion tools, calibration wizard, and temporal plot.</p>"
+           "file conversion tools, calibration wizard, temporal plot, "
+           "30 self-developed CV/analytics algorithms with overlay/replace/"
+           "standalone display modes, XYT 3D point cloud, and more.</p>"
            "<p>See doc/design.md for the full roadmap.</p>"));
+}
+
+// ---------------------------------------------------------------------------
+// Standalone algorithm windows (design §5.6.1)
+// ---------------------------------------------------------------------------
+
+void MainWindow::on_open_time_surface() {
+    if (!time_surface_window_) {
+        time_surface_window_ = new QWidget(this, Qt::Window);
+        time_surface_window_->setWindowTitle(tr("Time Surface"));
+        time_surface_window_->setAttribute(Qt::WA_DeleteOnClose);
+        // Host an EventDisplayWidget so the Standalone Time Surface result
+        // (a cv::Mat from TimeSurfaceBackend) can be shown as a real frame
+        // rather than a blank placeholder QLabel. The result is pushed via
+        // process_algo_results() each time frame_ready fires.
+        time_surface_display_ = new EventDisplayWidget(time_surface_window_);
+        auto* layout = new QVBoxLayout(time_surface_window_);
+        layout->setContentsMargins(0, 0, 0, 0);
+        layout->addWidget(time_surface_display_);
+        time_surface_algo_ = algo_bridge_.find_live("time_surface");
+        if (!time_surface_algo_) time_surface_algo_ = algo_bridge_.create("time_surface");
+        if (time_surface_algo_) time_surface_algo_->set_enabled(true);
+        // Null out QPointer members when the window is closed so the
+        // process_algo_results() guard `if (time_surface_display_)` works.
+        connect(time_surface_window_, &QObject::destroyed, this, [this]() {
+            time_surface_display_ = nullptr;
+            time_surface_algo_.reset();
+        });
+        time_surface_window_->resize(640, 480);
+    }
+    time_surface_window_->show();
+    time_surface_window_->raise();
+    statusBar()->showMessage(tr("Time Surface window opened"), 2000);
+}
+
+void MainWindow::on_open_xyt_view() {
+    if (!xyt_display_) {
+        xyt_display_ = new SpaceTimeDisplay(this);
+        xyt_display_->setWindowFlag(Qt::Window, true);
+        xyt_display_->setWindowTitle(tr("XYT 3D Event Cloud"));
+        xyt_display_->setAttribute(Qt::WA_DeleteOnClose);
+        if (camera_.is_connected()) {
+            const auto& info = camera_.sensor_info();
+            xyt_display_->set_sensor_geometry(info.width, info.height);
+        }
+        xyt_algo_ = algo_bridge_.find_live("xyt_visualizer");
+        if (!xyt_algo_) xyt_algo_ = algo_bridge_.create("xyt_visualizer");
+        if (xyt_algo_) xyt_algo_->set_enabled(true);
+        // The QOpenGLWidget is itself the window; on close we must null
+        // xyt_display_ (QPointer does this) and clear xyt_algo_ so the
+        // throttled push in install_algo_callback()'s `if (xyt_display_)`
+        // guard stops dispatching.
+        connect(xyt_display_, &QObject::destroyed, this, [this]() {
+            xyt_algo_.reset();
+        });
+        xyt_display_->resize(800, 600);
+        // Install the algo callback if a camera is already connected so the
+        // XYT window starts receiving events immediately.
+        install_algo_callback();
+    }
+    xyt_display_->show();
+    xyt_display_->raise();
+    statusBar()->showMessage(tr("XYT 3D window opened"), 2000);
+}
+
+void MainWindow::on_open_event_to_video() {
+    if (!event_to_video_window_) {
+        event_to_video_window_ = new QWidget(this, Qt::Window);
+        event_to_video_window_->setWindowTitle(tr("Event -> Video"));
+        event_to_video_window_->setAttribute(Qt::WA_DeleteOnClose);
+        // Host an EventDisplayWidget so the Standalone E2VID result (cv::Mat
+        // from EventToVideoBackend) can be shown as a real reconstructed
+        // intensity frame.
+        event_to_video_display_ = new EventDisplayWidget(event_to_video_window_);
+        auto* layout = new QVBoxLayout(event_to_video_window_);
+        layout->setContentsMargins(0, 0, 0, 0);
+        layout->addWidget(event_to_video_display_);
+        e2v_algo_ = algo_bridge_.find_live("event_to_video");
+        if (!e2v_algo_) e2v_algo_ = algo_bridge_.create("event_to_video");
+        if (e2v_algo_) e2v_algo_->set_enabled(true);
+        connect(event_to_video_window_, &QObject::destroyed, this, [this]() {
+            event_to_video_display_ = nullptr;
+            e2v_algo_.reset();
+        });
+        event_to_video_window_->resize(640, 480);
+    }
+    event_to_video_window_->show();
+    event_to_video_window_->raise();
+    statusBar()->showMessage(tr("Event -> Video window opened"), 2000);
+}
+
+void MainWindow::on_open_freq_detector() {
+    if (!freq_detector_window_) {
+        freq_detector_window_ = new QWidget(this, Qt::Window);
+        freq_detector_window_->setWindowTitle(tr("Frequency Detector"));
+        freq_detector_window_->setAttribute(Qt::WA_DeleteOnClose);
+        // FreqDetectorBackend emits a textual status string (peak frequency,
+        // confidence, etc.); use a monospace QLabel so the result, posted
+        // via process_algo_results(), renders as readable text.
+        freq_detector_label_ = new QLabel(freq_detector_window_);
+        QFont f(QStringLiteral("Monospace"));
+        f.setStyleHint(QFont::TypeWriter);
+        f.setPointSize(10);
+        freq_detector_label_->setFont(f);
+        freq_detector_label_->setAlignment(Qt::AlignTop | Qt::AlignLeft);
+        freq_detector_label_->setText(tr("Waiting for events..."));
+        auto* layout = new QVBoxLayout(freq_detector_window_);
+        layout->setContentsMargins(4, 4, 4, 4);
+        layout->addWidget(freq_detector_label_);
+        freq_algo_ = algo_bridge_.find_live("freq_detector");
+        if (!freq_algo_) freq_algo_ = algo_bridge_.create("freq_detector");
+        if (freq_algo_) freq_algo_->set_enabled(true);
+        connect(freq_detector_window_, &QObject::destroyed, this, [this]() {
+            freq_detector_label_ = nullptr;
+            freq_algo_.reset();
+        });
+        freq_detector_window_->resize(640, 480);
+    }
+    freq_detector_window_->show();
+    freq_detector_window_->raise();
+    statusBar()->showMessage(tr("Frequency Detector window opened"), 2000);
 }
 
 } // namespace gui

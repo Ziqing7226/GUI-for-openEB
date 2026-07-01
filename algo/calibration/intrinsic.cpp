@@ -141,6 +141,14 @@ IntrinsicResult IntrinsicCalibration::run() {
         result.rvecs = std::move(rvecs);
         result.tvecs = std::move(tvecs);
         result.frames_used = image_points_.size();
+        // Cache the calibrated intrinsics so precompute_undistort_lut() can
+        // build the LUT, and so it may be re-run with a different image size.
+        K_ = K;
+        dist_coeffs_ = dist;
+        // Precompute the undistort LUT for runtime O(1) remap (design §4.5.1).
+        precompute_undistort_lut(image_size_);
+        result.undistort_map_x = undistort_map_x_;
+        result.undistort_map_y = undistort_map_y_;
     } catch (const cv::Exception& e) {
         result.error = e.what();
     } catch (const std::exception& e) {
@@ -149,10 +157,29 @@ IntrinsicResult IntrinsicCalibration::run() {
     return result;
 }
 
+void IntrinsicCalibration::precompute_undistort_lut(cv::Size image_size) {
+    if (image_size.area() == 0) {
+        return;
+    }
+    // K/dist_coeffs are populated by run(); guard against unset intrinsics.
+    if (K_.empty() || dist_coeffs_.empty()) {
+        return;
+    }
+    // newK = K: keep the original principal-point/focal geometry so the LUT
+    // only undistorts (no rectification scaling). R = identity.
+    cv::Mat newK = K_.clone();
+    cv::initUndistortRectifyMap(newK, dist_coeffs_, cv::Mat(), newK,
+        image_size, CV_32FC1, undistort_map_x_, undistort_map_y_);
+}
+
 void IntrinsicCalibration::reset() {
     image_points_.clear();
     object_points_.clear();
     image_size_ = cv::Size(0, 0);
+    K_.release();
+    dist_coeffs_.release();
+    undistort_map_x_.release();
+    undistort_map_y_.release();
 }
 
 } // namespace gui_algo

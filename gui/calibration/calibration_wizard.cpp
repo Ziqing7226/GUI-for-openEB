@@ -47,11 +47,9 @@ CalibrationWizard::CalibrationWizard(QWidget* parent) : QDialog(parent) {
     setMinimumSize(700, 520);
 
     intrinsic_ = std::make_unique<gui_algo::IntrinsicCalibration>();
-    extrinsic_ = std::make_unique<gui_algo::ExtrinsicCalibration>();
 
     tabs_ = new QTabWidget(this);
     build_intrinsic_tab();
-    build_extrinsic_tab();
 
     auto* layout = new QVBoxLayout(this);
     layout->addWidget(tabs_);
@@ -67,7 +65,6 @@ void CalibrationWizard::set_camera(CameraController* controller) {
     camera_ = controller;
     const bool has_camera = (camera_ != nullptr && camera_->is_connected());
     in_capture_btn_->setEnabled(has_camera);
-    ex_capture_btn_->setEnabled(has_camera);
 }
 
 void CalibrationWizard::set_display(EventDisplayWidget* display) {
@@ -76,13 +73,6 @@ void CalibrationWizard::set_display(EventDisplayWidget* display) {
 
 void CalibrationWizard::show_intrinsic() {
     tabs_->setCurrentIndex(0);
-    show();
-    raise();
-    activateWindow();
-}
-
-void CalibrationWizard::show_extrinsic() {
-    tabs_->setCurrentIndex(1);
     show();
     raise();
     activateWindow();
@@ -262,220 +252,6 @@ void CalibrationWizard::update_intrinsic_preview(const QImage& img) {
     in_preview_label_->setPixmap(QPixmap::fromImage(img).scaledToWidth(
         in_preview_area_->viewport()->width(), Qt::SmoothTransformation));
     in_preview_label_->resize(in_preview_label_->pixmap().size());
-}
-
-// ---------------------------------------------------------------------------
-// Extrinsic tab
-// ---------------------------------------------------------------------------
-
-void CalibrationWizard::build_extrinsic_tab() {
-    auto* page = new QWidget(this);
-    auto* outer = new QVBoxLayout(page);
-
-    auto* form = new QFormLayout();
-    ex_pattern_ = new QComboBox(page);
-    ex_pattern_->addItem(tr("Chessboard"), static_cast<int>(gui_algo::CalibrationPattern::Chessboard));
-    ex_pattern_->addItem(tr("Circle Grid"), static_cast<int>(gui_algo::CalibrationPattern::CircleGrid));
-    ex_pattern_->addItem(tr("Asymmetric Circles"), static_cast<int>(gui_algo::CalibrationPattern::AsymmetricCircles));
-    form->addRow(tr("Pattern"), ex_pattern_);
-
-    ex_cols_ = new QSpinBox(page);
-    ex_cols_->setRange(2, 30);
-    ex_cols_->setValue(9);
-    ex_rows_ = new QSpinBox(page);
-    ex_rows_->setRange(2, 30);
-    ex_rows_->setValue(6);
-    auto* dims_row = new QWidget(page);
-    auto* dims_layout = new QHBoxLayout(dims_row);
-    dims_layout->setContentsMargins(0, 0, 0, 0);
-    dims_layout->addWidget(new QLabel(tr("Cols:"), dims_row));
-    dims_layout->addWidget(ex_cols_);
-    dims_layout->addWidget(new QLabel(tr("Rows:"), dims_row));
-    dims_layout->addWidget(ex_rows_);
-    dims_layout->addStretch();
-    form->addRow(tr("Board dims"), dims_row);
-
-    ex_square_ = new QDoubleSpinBox(page);
-    ex_square_->setRange(0.1, 100.0);
-    ex_square_->setValue(25.0);
-    ex_square_->setSuffix(" mm");
-    form->addRow(tr("Square size"), ex_square_);
-
-    outer->addLayout(form);
-
-    auto* btn_row = new QHBoxLayout();
-    ex_capture_btn_ = new QPushButton(tr("Capture Pair"), page);
-    ex_run_btn_ = new QPushButton(tr("Run Stereo Calib"), page);
-    ex_reset_btn_ = new QPushButton(tr("Reset"), page);
-    ex_save_btn_ = new QPushButton(tr("Save Result..."), page);
-    ex_save_btn_->setEnabled(false);
-    btn_row->addWidget(ex_capture_btn_);
-    btn_row->addWidget(ex_run_btn_);
-    btn_row->addWidget(ex_reset_btn_);
-    btn_row->addWidget(ex_save_btn_);
-    btn_row->addStretch();
-    outer->addLayout(btn_row);
-
-    // Two side-by-side previews.
-    auto* preview_row = new QHBoxLayout();
-    ex_preview_first_ = new QLabel(page);
-    ex_preview_first_->setText(tr("Camera 1 preview"));
-    ex_preview_first_->setAlignment(Qt::AlignCenter);
-    ex_preview_first_->setMinimumSize(280, 200);
-    ex_preview_second_ = new QLabel(page);
-    ex_preview_second_->setText(tr("Camera 2 preview"));
-    ex_preview_second_->setAlignment(Qt::AlignCenter);
-    ex_preview_second_->setMinimumSize(280, 200);
-    preview_row->addWidget(ex_preview_first_, 1);
-    preview_row->addWidget(ex_preview_second_, 1);
-    outer->addLayout(preview_row, 1);
-
-    ex_status_ = new QLabel(tr("Captured: 0 pairs"), page);
-    outer->addWidget(ex_status_);
-
-    connect(ex_capture_btn_, &QPushButton::clicked, this, &CalibrationWizard::on_extrinsic_capture);
-    connect(ex_run_btn_, &QPushButton::clicked, this, &CalibrationWizard::on_extrinsic_run);
-    connect(ex_reset_btn_, &QPushButton::clicked, this, &CalibrationWizard::on_extrinsic_reset);
-    connect(ex_save_btn_, &QPushButton::clicked, this, &CalibrationWizard::on_extrinsic_save);
-
-    on_extrinsic_reset();
-    tabs_->addTab(page, tr("Extrinsic"));
-}
-
-void CalibrationWizard::on_extrinsic_capture() {
-    if (!camera_ || !camera_->is_connected()) {
-        QMessageBox::warning(this, tr("Calibration"), tr("No camera connected."));
-        return;
-    }
-    // Refresh detector config from the current controls before capturing.
-    extrinsic_->set_pattern(
-        static_cast<gui_algo::CalibrationPattern>(ex_pattern_->currentData().toInt()),
-        ex_cols_->value(), ex_rows_->value(),
-        static_cast<float>(ex_square_->value()));
-    // Phase 9 single-camera limitation: capture the same frame into both
-    // slots (useful for verifying the pipeline). True stereo capture requires
-    // multi-camera support added in a later phase.
-    auto* display = display_;
-    if (!display) return;
-    const QImage qimg = display->current_frame();
-    if (qimg.isNull()) {
-        ex_status_->setText(tr("No frame available yet."));
-        return;
-    }
-    cv::Mat bgr = qimage_to_bgr(qimg);
-    auto pr = extrinsic_->add_pair(bgr, bgr, true);
-    if (pr.both_found) {
-        ex_last_first_ = cv_to_qimage(pr.first.image);
-        ex_last_second_ = cv_to_qimage(pr.second.image);
-        update_extrinsic_preview_first(ex_last_first_);
-        update_extrinsic_preview_second(ex_last_second_);
-        ex_status_->setText(tr("Captured: %1 pairs").arg(extrinsic_->pair_count()));
-    } else {
-        ex_status_->setText(tr("Pattern not visible in both. Pairs: %1.")
-            .arg(extrinsic_->pair_count()));
-    }
-}
-
-void CalibrationWizard::on_extrinsic_run() {
-    // Without two real cameras, stereo calibration on identical frames is
-    // degenerate (R=I, T=0). We still run it to validate the pipeline; users
-    // with two cameras supply K1/d1/K2/d2 via the file dialog.
-    const QString k1_path = QFileDialog::getOpenFileName(
-        this, tr("Load Camera 1 Intrinsics (YAML)"), {}, tr("YAML (*.yml *.yaml)"));
-    if (k1_path.isEmpty()) return;
-    const QString k2_path = QFileDialog::getOpenFileName(
-        this, tr("Load Camera 2 Intrinsics (YAML)"), {}, tr("YAML (*.yml *.yaml)"));
-    if (k2_path.isEmpty()) return;
-
-    cv::Mat K1, d1, K2, d2;
-    try {
-        cv::FileStorage fs1(k1_path.toStdString(), cv::FileStorage::READ);
-        fs1["camera_matrix"] >> K1;
-        fs1["distortion_coefficients"] >> d1;
-        fs1.release();
-        cv::FileStorage fs2(k2_path.toStdString(), cv::FileStorage::READ);
-        fs2["camera_matrix"] >> K2;
-        fs2["distortion_coefficients"] >> d2;
-        fs2.release();
-    } catch (const std::exception& e) {
-        QMessageBox::warning(this, tr("Load failed"), e.what());
-        return;
-    }
-    if (K1.empty() || d1.empty() || K2.empty() || d2.empty()) {
-        QMessageBox::warning(this, tr("Load failed"),
-            tr("Could not read K/distortion from one or both files."));
-        return;
-    }
-
-    extrinsic_->set_pattern(
-        static_cast<gui_algo::CalibrationPattern>(ex_pattern_->currentData().toInt()),
-        ex_cols_->value(), ex_rows_->value(),
-        static_cast<float>(ex_square_->value()));
-    ex_status_->setText(tr("Running stereo calibration..."));
-    QApplication::processEvents();
-    extrinsic_result_ = extrinsic_->run(K1, d1, K2, d2);
-    if (extrinsic_result_.ok) {
-        ex_status_->setText(tr("Stereo OK. RMS = %1 (%2 pairs).")
-            .arg(extrinsic_result_.rms, 0, 'f', 3)
-            .arg(extrinsic_result_.pairs_used));
-        ex_save_btn_->setEnabled(true);
-    } else {
-        QMessageBox::warning(this, tr("Stereo failed"),
-            QString::fromStdString(extrinsic_result_.error));
-        ex_status_->setText(tr("Failed: %1").arg(QString::fromStdString(extrinsic_result_.error)));
-    }
-}
-
-void CalibrationWizard::on_extrinsic_reset() {
-    extrinsic_->set_pattern(
-        static_cast<gui_algo::CalibrationPattern>(ex_pattern_->currentData().toInt()),
-        ex_cols_->value(), ex_rows_->value(),
-        static_cast<float>(ex_square_->value()));
-    extrinsic_->reset();
-    extrinsic_result_ = {};
-    ex_last_first_ = QImage();
-    ex_last_second_ = QImage();
-    ex_preview_first_->clear();
-    ex_preview_first_->setText(tr("Camera 1 preview"));
-    ex_preview_second_->clear();
-    ex_preview_second_->setText(tr("Camera 2 preview"));
-    ex_status_->setText(tr("Captured: 0 pairs"));
-    ex_save_btn_->setEnabled(false);
-}
-
-void CalibrationWizard::on_extrinsic_save() {
-    if (!extrinsic_result_.ok) return;
-    const QString path = QFileDialog::getSaveFileName(
-        this, tr("Save Extrinsic Calibration"),
-        QStringLiteral("extrinsic_%1.yml").arg(
-            QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss")),
-        tr("YAML (*.yml *.yaml);;All Files (*)"));
-    if (path.isEmpty()) return;
-    try {
-        cv::FileStorage fs(path.toStdString(), cv::FileStorage::WRITE);
-        if (!fs.isOpened()) throw std::runtime_error("Cannot open file");
-        fs << "R" << extrinsic_result_.R;
-        fs << "T" << extrinsic_result_.T;
-        fs << "E" << extrinsic_result_.E;
-        fs << "F" << extrinsic_result_.F;
-        fs << "rms" << extrinsic_result_.rms;
-        fs.release();
-        ex_status_->setText(tr("Saved to %1").arg(path));
-    } catch (const std::exception& e) {
-        QMessageBox::warning(this, tr("Save failed"), e.what());
-    }
-}
-
-void CalibrationWizard::update_extrinsic_preview_first(const QImage& img) {
-    if (img.isNull()) return;
-    ex_preview_first_->setPixmap(QPixmap::fromImage(img).scaled(
-        ex_preview_first_->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation));
-}
-
-void CalibrationWizard::update_extrinsic_preview_second(const QImage& img) {
-    if (img.isNull()) return;
-    ex_preview_second_->setPixmap(QPixmap::fromImage(img).scaled(
-        ex_preview_second_->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation));
 }
 
 QImage CalibrationWizard::cv_to_qimage(const cv::Mat& mat) {

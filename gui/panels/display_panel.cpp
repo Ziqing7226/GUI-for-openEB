@@ -8,6 +8,7 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QSlider>
+#include <QStandardItemModel>
 
 namespace gui {
 
@@ -47,13 +48,20 @@ DisplayPanel::DisplayPanel(QWidget* parent) : QWidget(parent) {
     mode_combo_->addItem(tr("Contrast Map"));
     mode_combo_->addItem(tr("Periodic"));
     mode_combo_->addItem(tr("On-Demand"));
-    // Non-Diff frame modes require algorithm implementations from Phases 6-8,
-    // which are intentionally skipped in this build. Disable the combo so the
-    // user is not misled into thinking the selection takes effect. The signal
-    // is still wired so a future implementation can simply enable the combo.
-    mode_combo_->setEnabled(false);
-    mode_combo_->setToolTip(tr("Frame mode selection is not yet implemented "
-                               "(planned for a future phase). Only Diff Frame is available."));
+    // Histogram / Contrast Map / Periodic / On-Demand require algorithm
+    // backends that are not yet implemented. Disable those items so only
+    // feasible modes (Diff / Integration / Time Decay) are selectable,
+    // matching the Frame Mode menu in MainWindow.
+    for (int i : {2, 4, 5, 6}) {
+        auto* model = qobject_cast<QStandardItemModel*>(mode_combo_->model());
+        if (model) {
+            QStandardItem* item = model->item(i);
+            if (item) item->setEnabled(false);
+        }
+    }
+    mode_combo_->setToolTip(tr("Selects event accumulation mode. "
+                               "Diff / Integration / Time Decay are available; "
+                               "other modes require future algorithm backends."));
     form->addRow(tr("Frame mode"), mode_combo_);
     connect(mode_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &DisplayPanel::frame_mode_changed);

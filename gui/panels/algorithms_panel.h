@@ -3,11 +3,12 @@
 // Lists every registered algorithm from AlgoBridge, grouped by category, with
 // an enable checkbox and an expandable parameter editor per algorithm.
 //
-// Note: Phases 6-8 (self-developed CV/analytics algorithm implementations) are
-// intentionally skipped in this build, so enabled algorithms run as
-// pass-through stubs. The UI, parameter management and persistence are fully
-// wired here so future algorithm implementations can be dropped in without GUI
-// changes.
+// Phases 6-8 self-developed CV/analytics algorithms are fully implemented in
+// algo/cv and algo/analytics, and wired through AlgoBackend instances in
+// algo_backend.cpp. Enabling an algorithm here activates its real processing
+// pipeline (push_events / pull_result) and routes results to the display via
+// FrameAnnotator (Overlay), frame replacement (Replace), or standalone
+// windows (Standalone).
 
 #ifndef GUI_PANELS_ALGORITHMS_PANEL_H
 #define GUI_PANELS_ALGORITHMS_PANEL_H

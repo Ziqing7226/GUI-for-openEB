@@ -32,11 +32,13 @@
 #include "config/config_manager.h"
 #include "config/layout_manager.h"
 #include "display/event_display_widget.h"
+#include "display/frame_annotator.h"
 #include "exporter/exporter_controller.h"
 #include "panels/settings_panel.h"
 #include "recorder/playback_controller.h"
 #include "recorder/recorder_controller.h"
 #include "temporal/temporal_plot_window.h"
+#include "display/space_time_display.h"
 #include "widgets/multi_window_manager.h"
 
 class QLabel;
@@ -81,10 +83,13 @@ private slots:
 
     // Phase 9 — calibration.
     void on_intrinsic_wizard();
-    void on_extrinsic_wizard();
 
     // Phase 10 — temporal plot / multi-window / layout.
     void on_open_temporal_plot();
+    void on_open_time_surface();
+    void on_open_xyt_view();
+    void on_open_event_to_video();
+    void on_open_freq_detector();
     void on_add_display_window();
     void on_tile_windows();
     void on_save_layout();
@@ -107,6 +112,12 @@ private:
     // when the raw pointer was read from the SDK thread.
     void install_temporal_callback();
     void remove_temporal_callback();
+
+    // Algorithm event/result pipeline — pushes CD events to all live
+    // AlgoInstances and pulls results for overlay/replace/standalone display.
+    void install_algo_callback();
+    void remove_algo_callback();
+    void process_algo_results(QImage& frame);
 
     EventDisplayWidget* display_{nullptr};
     SettingsPanel* settings_{nullptr};
@@ -163,6 +174,25 @@ private:
     std::atomic<Metavision::timestamp> temporal_last_post_us_{0};
     std::unique_ptr<MultiWindowManager> multi_window_;
     std::unique_ptr<LayoutManager> layout_manager_;
+
+    // Standalone algorithm windows (design §5.6.1).
+    QPointer<QWidget> time_surface_window_;
+    QPointer<SpaceTimeDisplay> xyt_display_;
+    QPointer<QWidget> event_to_video_window_;
+    QPointer<QWidget> freq_detector_window_;
+    std::shared_ptr<AlgoInstance> time_surface_algo_;
+    std::shared_ptr<AlgoInstance> xyt_algo_;
+    std::shared_ptr<AlgoInstance> e2v_algo_;
+    std::shared_ptr<AlgoInstance> freq_algo_;
+
+    // Algorithm event/result pipeline.
+    std::optional<Metavision::CallbackId> algo_cd_cb_id_;
+    std::atomic<Metavision::timestamp> algo_last_xyt_post_us_{0};
+    FrameAnnotator annotator_;
+    QPointer<EventDisplayWidget> time_surface_display_;
+    QPointer<EventDisplayWidget> event_to_video_display_;
+    QPointer<QLabel> freq_detector_label_;
+    Metavision::timestamp prev_frame_ts_{0};
 };
 
 } // namespace gui

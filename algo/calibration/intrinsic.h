@@ -44,6 +44,8 @@ struct IntrinsicResult {
     std::vector<cv::Mat> tvecs;    ///< Per-frame translation vectors
     std::size_t frames_used{0};
     std::string error;             ///< Empty when ok==true
+    cv::Mat undistort_map_x;       ///< Precomputed undistort LUT (x), design §4.5.1
+    cv::Mat undistort_map_y;       ///< Precomputed undistort LUT (y), design §4.5.1
 };
 
 /// @brief Intrinsic calibration accumulator.
@@ -64,6 +66,7 @@ public:
     DetectionResult add_frame(const cv::Mat& frame, bool annotate = true);
 
     /// @brief Runs cv::calibrateCamera on all collected observations.
+    /// On success, precomputes the undistort LUT (design §4.5.1).
     IntrinsicResult run();
 
     /// @brief Discards all collected observations.
@@ -73,6 +76,16 @@ public:
     cv::Size board_size() const { return board_size_; }
     cv::Size image_size() const { return image_size_; }
 
+    /// @brief Precomputes the HxW undistort LUT via cv::initUndistortRectifyMap.
+    /// Fills undistort_map_x_ / undistort_map_y_ for O(1) runtime remap.
+    /// @param image_size Output image size for the LUT.
+    void precompute_undistort_lut(cv::Size image_size);
+
+    /// @brief Accessor for the precomputed x-map (empty until run/precompute).
+    const cv::Mat& undistort_map_x() const { return undistort_map_x_; }
+    /// @brief Accessor for the precomputed y-map (empty until run/precompute).
+    const cv::Mat& undistort_map_y() const { return undistort_map_y_; }
+
 private:
     CalibrationPattern pattern_{CalibrationPattern::Chessboard};
     cv::Size board_size_{0, 0};    ///< (cols-1, rows-1) for chessboard, (cols, rows) for circles
@@ -81,6 +94,11 @@ private:
 
     std::vector<std::vector<cv::Point2f>> image_points_;
     std::vector<std::vector<cv::Point3f>> object_points_;
+
+    cv::Mat K_;                ///< Cached camera matrix (from last successful run)
+    cv::Mat dist_coeffs_;      ///< Cached distortion coefficients (from last run)
+    cv::Mat undistort_map_x_;  ///< Precomputed undistort LUT (x), design §4.5.1
+    cv::Mat undistort_map_y_;  ///< Precomputed undistort LUT (y), design §4.5.1
 
     std::vector<cv::Point3f> make_object_grid() const;
 };

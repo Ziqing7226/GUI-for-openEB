@@ -1,8 +1,7 @@
 // gui/algo_bridge/algo_bridge.cpp
 //
-// Phase 1: registry of all 46 algorithms (27 OpenEB capabilities + 19
-// self-developed). create() returns a pass-through stub. Per-algorithm
-// wiring is added in later phases.
+// AlgoInstance 持有真实的 AlgoBackend 实例，真正调用 algo/cv 与 algo/analytics
+// 的算法类。注册表列出全部 31 个自研模块 + 30 个 openEB 能力 = 61 项。
 
 #include "algo_bridge.h"
 
@@ -14,15 +13,27 @@ namespace gui {
 // AlgoInstance
 // ---------------------------------------------------------------------------
 
-AlgoInstance::AlgoInstance(const AlgoInfo& info) : info_(info) {
+AlgoInstance::AlgoInstance(const AlgoInfo& info, int width, int height)
+    : info_(info), width_(width), height_(height) {
     for (const auto& p : info_.params) {
         param_values_[p.key] = p.default_value;
+    }
+    // 创建真实后端（自研算法）。OpenEB 包装算法返回 nullptr → 透传。
+    backend_ = create_algo_backend(info_.name, width_, height_);
+    if (backend_) {
+        // 应用默认参数到后端。
+        for (const auto& p : info_.params) {
+            backend_->set_param(p.key, p.default_value);
+        }
     }
 }
 
 void AlgoInstance::set_param(const std::string& key, const std::string& value) {
     std::lock_guard<std::mutex> lk(mutex_);
     param_values_[key] = value;
+    if (backend_) {
+        backend_->set_param(key, value);
+    }
 }
 
 std::string AlgoInstance::get_param(const std::string& key) const {
@@ -47,17 +58,30 @@ void AlgoInstance::push_events(const Metavision::EventCD* begin,
     if (!enabled_) {
         return;
     }
-    // Phase 1 stub: pass-through copy.
-    buffer_.insert(buffer_.end(), begin, end);
+    if (backend_) {
+        // 真实算法后端处理事件。
+        backend_->push_events(begin, end);
+    } else {
+        // OpenEB 包装算法：透传（由 filter_chain 处理）。
+    }
 }
 
 AlgoResult AlgoInstance::pull_result() {
     std::lock_guard<std::mutex> lk(mutex_);
+    if (backend_) {
+        return backend_->pull_result();
+    }
+    // 透传：返回空结果（OpenEB 算法由 filter_chain 处理）。
     AlgoResult r;
-    r.filtered_events = std::move(buffer_);
-    r.status = "pass-through (phase 1 stub)";
-    buffer_.clear();
+    r.status = "pass-through (openeb)";
     return r;
+}
+
+void AlgoInstance::reset() {
+    std::lock_guard<std::mutex> lk(mutex_);
+    if (backend_) {
+        backend_->reset();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -123,24 +147,42 @@ std::shared_ptr<AlgoInstance> AlgoBridge::create(const std::string& name) {
     if (it == registry_.end()) {
         return nullptr;
     }
-    auto inst = std::make_shared<AlgoInstance>(it->second);
+    auto inst = std::make_shared<AlgoInstance>(it->second, sensor_w_, sensor_h_);
     {
         std::lock_guard<std::mutex> lk(live_mutex_);
-        live_instances_[name] = inst;  // weak_ptr tracks the instance's lifetime
+        live_instances_[name] = inst;
     }
     return inst;
+}
+
+void AlgoBridge::set_sensor_dimensions(int width, int height) {
+    sensor_w_ = (width > 0) ? width : 1280;
+    sensor_h_ = (height > 0) ? height : 720;
 }
 
 std::shared_ptr<AlgoInstance> AlgoBridge::find_live(const std::string& name) {
     std::lock_guard<std::mutex> lk(live_mutex_);
     auto it = live_instances_.find(name);
     if (it == live_instances_.end()) return nullptr;
-    auto inst = it->second.lock();  // returns nullptr if expired
+    auto inst = it->second.lock();
     if (!inst) {
-        // Prune expired entry.
         live_instances_.erase(it);
     }
     return inst;
+}
+
+std::vector<std::shared_ptr<AlgoInstance>> AlgoBridge::list_live() {
+    std::vector<std::shared_ptr<AlgoInstance>> out;
+    std::lock_guard<std::mutex> lk(live_mutex_);
+    for (auto it = live_instances_.begin(); it != live_instances_.end(); ) {
+        if (auto inst = it->second.lock()) {
+            out.push_back(std::move(inst));
+            ++it;
+        } else {
+            it = live_instances_.erase(it);
+        }
+    }
+    return out;
 }
 
 void AlgoBridge::push_events(const std::shared_ptr<AlgoInstance>& inst,
@@ -159,7 +201,7 @@ AlgoResult AlgoBridge::pull_result(const std::shared_ptr<AlgoInstance>& inst) {
 }
 
 // ---------------------------------------------------------------------------
-// OpenEB-wrapped filters (design §4.3.1)
+// OpenEB-wrapped filters (design §4.3.1) — unchanged
 // ---------------------------------------------------------------------------
 
 void AlgoBridge::register_openeb_filters() {
@@ -213,7 +255,7 @@ void AlgoBridge::register_openeb_filters() {
 }
 
 // ---------------------------------------------------------------------------
-// OpenEB-wrapped frame generators (design §4.3.2)
+// OpenEB-wrapped frame generators (design §4.3.2) — unchanged
 // ---------------------------------------------------------------------------
 
 void AlgoBridge::register_openeb_frame_modes() {
@@ -255,7 +297,7 @@ void AlgoBridge::register_openeb_frame_modes() {
 }
 
 // ---------------------------------------------------------------------------
-// OpenEB-wrapped preprocessors (design §4.3.3)
+// OpenEB-wrapped preprocessors (design §4.3.3) — unchanged
 // ---------------------------------------------------------------------------
 
 void AlgoBridge::register_openeb_preprocessors() {
@@ -297,7 +339,7 @@ void AlgoBridge::register_openeb_preprocessors() {
 }
 
 // ---------------------------------------------------------------------------
-// OpenEB-wrapped utilities (design §4.3.4)
+// OpenEB-wrapped utilities (design §4.3.4) — unchanged
 // ---------------------------------------------------------------------------
 
 void AlgoBridge::register_openeb_utils() {
@@ -323,7 +365,8 @@ void AlgoBridge::register_openeb_utils() {
 }
 
 // ---------------------------------------------------------------------------
-// Self-developed CV algorithms (design §4.3.5 - §4.3.15)
+// Self-developed CV algorithms (design §4.3.5 - §4.3.27)
+// 23 modules, all with real algo_backend wiring.
 // ---------------------------------------------------------------------------
 
 void AlgoBridge::register_self_cv() {
@@ -333,81 +376,156 @@ void AlgoBridge::register_self_cv() {
         registry_[a.name] = std::move(a);
     };
 
+    // §4.3.5 Noise Filter (8 modes)
     add({"noise_filter", "Noise Filter", "cv", "self",
-         AlgoDisplayMode::Overlay,
-         {pint("time_window_us", "Time window (us)", "5000", "1000", "100000"),
-          pint("spatial_radius_px", "Spatial radius (px)", "5", "1", "20"),
-          pint("min_neighbors", "Min neighbors", "2", "1", "10")}});
+         AlgoDisplayMode::Passive,
+         {penum("mode", "Mode", "1", {"0=BAF", "1=STCF", "2=Refractory",
+           "3=DWF", "4=AgePolarity", "5=Harmonic", "6=Repetitious", "7=SpatialBP"}),
+          pfloat("correlation_time_s", "Correlation time (s)", "0.005", "0.001", "0.1"),
+          pint("min_neighbors", "Min neighbors", "2", "1", "8"),
+          pint("baf_dt_us", "BAF dt (us)", "1000", "1000", "100000"),
+          pint("refractory_us", "Refractory (us)", "1000", "100", "100000"),
+          pbool("filter_hot_pixels", "Filter hot pixels", "false"),
+          pbool("adaptive_correlation_time", "Adaptive corr time", "false"),
+          penum("line_freq_hz", "Line freq (Hz)", "50", {"50", "60"})}});
 
+    // §4.3.6 Hot Pixel Filter
+    add({"hot_pixel_filter", "Hot Pixel Filter", "cv", "self",
+         AlgoDisplayMode::Passive,
+         {pfloat("learning_window_s", "Learning window (s)", "5.0", "0.1", "60.0"),
+          pfloat("n_sigma", "N-sigma", "4.0", "1.0", "10.0"),
+          pbool("enable_fpn_correction", "FPN correction", "false"),
+          pfloat("fpn_target_rate_hz", "FPN target rate (Hz)", "100", "1", "1000")}});
+
+    // §4.3.7 Orientation Filter
+    add({"orientation_filter", "Orientation Filter", "cv", "self",
+         AlgoDisplayMode::Overlay,
+         {pint("tau_us", "Time constant (us)", "10000", "1000", "100000")}});
+
+    // §4.3.8 Direction Selective Filter
+    add({"direction_selective", "Direction Selective Filter", "cv", "self",
+         AlgoDisplayMode::Overlay,
+         {pint("direction", "Direction", "0", "0", "7"),
+          pint("tau_us", "Time constant (us)", "10000", "1000", "100000")}});
+
+    // §4.3.9 Sparse Optical Flow (4 modes: LocalPlanes/LucasKanade/BlockMatch/ClusterOF)
     add({"sparse_optical_flow", "Sparse Optical Flow", "cv", "self",
          AlgoDisplayMode::Overlay,
-         {pint("time_window_us", "Time window (us)", "10000", "1000", "100000"),
-          pint("spatial_radius_px", "Spatial radius (px)", "8", "3", "30"),
-          pint("min_events_per_cluster", "Min events/cluster", "10", "3", "100")}});
+         {penum("mode", "Mode", "0", {"0=LocalPlanes", "1=LucasKanade",
+           "2=BlockMatch", "3=ClusterOF"}),
+          pint("search_radius", "Search radius (px)", "8", "3", "30")}});
 
-    add({"dense_optical_flow", "Dense Optical Flow", "cv", "self",
-         AlgoDisplayMode::Overlay,
-         {pint("block_size", "Block size", "16", "4", "64"),
-          pint("step", "Step", "8", "1", "32"),
-          pint("time_window_us", "Time window (us)", "10000", "1000", "100000")}});
-
+    // §4.3.10 Blob Detector
     add({"blob_detector", "Blob Detector", "cv", "self",
          AlgoDisplayMode::Overlay,
-         {pfloat("accumulation_ms", "Accumulation (ms)", "33.3", "1", "1000"),
-          pint("threshold", "Threshold", "50", "1", "254"),
-          pint("min_area", "Min area (px)", "10", "1", "100000")}});
+         {pfloat("threshold", "Threshold", "10", "1", "254"),
+          pfloat("learning_rate", "Learning rate", "0.05", "0.001", "1.0")}});
 
+    // §4.3.11 Object Tracker (4 modes)
     add({"object_tracker", "Object Tracker", "cv", "self",
          AlgoDisplayMode::Overlay,
-         {pint("cluster_time_us", "Cluster time (us)", "5000", "1000", "50000"),
-          pint("cluster_radius_px", "Cluster radius (px)", "10", "3", "50"),
+         {penum("mode", "Mode", "0", {"0=RCT", "1=Median", "2=Kalman", "3=MultiHypothesis"}),
+          pint("cluster_size_px", "Cluster size (px)", "10", "3", "50"),
+          pint("cluster_time_us", "Cluster time (us)", "5000", "1000", "50000"),
           pint("min_cluster_events", "Min cluster events", "50", "10", "500"),
-          pfloat("max_lost_age_s", "Max lost age (s)", "1.0", "0.1", "5.0")}});
+          pfloat("max_lost_age_s", "Max lost age (s)", "1.0", "0.1", "5.0"),
+          pbool("enable_velocity_prediction", "Velocity prediction", "true")}});
 
+    // §4.3.12 Corner Detector (3 modes)
     add({"corner_detector", "Corner Detector", "cv", "self",
          AlgoDisplayMode::Overlay,
-         {pfloat("accumulation_ms", "Accumulation (ms)", "10", "1", "100"),
-          pfloat("harris_threshold", "Harris threshold", "0.01", "0", "0.1"),
-          pint("track_radius_px", "Track radius (px)", "5", "1", "30"),
-          pint("min_track_len", "Min track length", "10", "1", "100"),
-          pint("output_hz", "Output rate (Hz)", "100", "10", "500")}});
+         {penum("mode", "Mode", "0", {"0=Harris", "1=FAST", "2=AGAST"}),
+          pfloat("min_score", "Min score", "0.01", "0", "1.0")}});
 
-    add({"counter", "Counter", "cv", "self",
+    // §4.3.13 Line Segment Detector (ELiSeD)
+    add({"line_segment", "Line Segment (ELiSeD)", "cv", "self",
          AlgoDisplayMode::Overlay,
-         {penum("direction", "Direction", "bidirectional",
-                {"bidirectional", "forward", "reverse"}),
-          pfloat("debounce_ms", "Debounce (ms)", "100", "0", "1000")}});
+         {pint("min_length", "Min length (px)", "10", "3", "100"),
+          pint("gap", "Max gap (px)", "3", "1", "20")}});
 
-    add({"ultra_slow_motion", "Ultra Slow Motion", "cv", "self",
+    // §4.3.14 Hough Line Tracker
+    add({"hough_line", "Hough Line Tracker", "cv", "self",
+         AlgoDisplayMode::Overlay,
+         {pint("threshold", "Threshold", "50", "10", "500"),
+          pint("min_length", "Min length (px)", "20", "5", "200")}});
+
+    // §4.3.15 Hough Circle Tracker
+    add({"hough_circle", "Hough Circle Tracker", "cv", "self",
+         AlgoDisplayMode::Overlay,
+         {pint("min_radius", "Min radius (px)", "5", "1", "100"),
+          pint("max_radius", "Max radius (px)", "50", "5", "500"),
+          pint("threshold", "Threshold", "30", "5", "500")}});
+
+    // §4.3.16 Hinge Line Tracker
+    add({"hinge_line", "Hinge Line Tracker", "cv", "self",
+         AlgoDisplayMode::Overlay,
+         {pfloat("angle_tolerance_deg", "Angle tolerance (deg)", "5", "1", "45")}});
+
+    // §4.3.17 Orientation Cluster
+    add({"orientation_cluster", "Orientation Cluster", "cv", "self",
+         AlgoDisplayMode::Overlay,
+         {pint("min_events", "Min events", "20", "5", "500")}});
+
+    // §4.3.18 Cluster LIF
+    add({"cluster_lif", "Cluster LIF", "cv", "self",
+         AlgoDisplayMode::Overlay,
+         {pfloat("tau_ms", "Tau (ms)", "10", "1", "1000"),
+          pfloat("threshold", "Threshold", "1.0", "0.1", "10.0")}});
+
+    // §4.3.19 Background Mask Filter
+    add({"background_mask", "Background Mask Filter", "cv", "self",
          AlgoDisplayMode::Replace,
-         {pfloat("dilation_factor", "Dilation factor", "10", "1", "10000"),
-          pint("min_accumulation_us", "Min accumulation (us)", "5", "1", "1000")}});
+         {pfloat("learning_rate", "Learning rate", "0.05", "0.001", "1.0"),
+          pfloat("threshold", "Threshold", "10", "1", "100")}});
 
-    add({"xyt_visualizer", "XYT Visualizer", "cv", "self",
+    // §4.3.20 Perspective Undistort
+    add({"perspective_undistort", "Perspective Undistort", "cv", "self",
+         AlgoDisplayMode::Passive,
+         {pbool("enable", "Enable", "false"),
+          pfloat("zoom", "Zoom", "1.0", "0.1", "10.0")}});
+
+    // §4.3.21 Trigger Synced Filter
+    add({"trigger_synced", "Trigger Synced Filter", "cv", "self",
+         AlgoDisplayMode::Passive,
+         {pint("window_us", "Window (us)", "10000", "1000", "1000000")}});
+
+    // §4.3.22 Bandpass Filter
+    add({"bandpass_filter", "Bandpass Filter", "cv", "self",
+         AlgoDisplayMode::Overlay,
+         {pfloat("low_cutoff_hz", "Low cutoff (Hz)", "1.0", "0.01", "100"),
+          pfloat("high_cutoff_hz", "High cutoff (Hz)", "10.0", "0.01", "1000")}});
+
+    // §4.3.23 Optical Gyro (EIS)
+    add({"optical_gyro", "EIS (Optical Gyro)", "cv", "self",
+         AlgoDisplayMode::Passive,
+         {pbool("stabilize", "Stabilize", "true"),
+          pfloat("smoothing_window_ms", "Smoothing window (ms)", "100", "10", "1000")}});
+
+    // §4.3.24 Ultra Slow Motion
+    add({"ultra_slow_motion", "Ultra Slow Motion", "cv", "self",
+         AlgoDisplayMode::Passive,
+         {pint("factor", "Dilation factor", "10", "1", "1000")}});
+
+    // §4.3.25 XYT Visualizer
+    add({"xyt_visualizer", "XYT 3D Visualizer", "cv", "self",
          AlgoDisplayMode::Standalone,
-         {penum("axis", "Axis", "X", {"X", "Y"}),
-          pint("line_position_px", "Line position (px)", "0", "0", ""),
-          pfloat("time_window_ms", "Time window (ms)", "1000", "10", "10000"),
-          pfloat("accumulation_ms", "Accumulation (ms)", "100", "1", "1000")}});
+         {pint("time_window_us", "Time window (us)", "1000000", "10000", "10000000"),
+          pint("max_points", "Max points", "50000", "1000", "500000")}});
 
-    add({"time_surface_window", "Time Surface Window", "cv", "self",
-         AlgoDisplayMode::Standalone,
-         {penum("channels", "Channels", "1", {"1=merged", "2=split"}),
-          pint("decay_time_us", "Decay time (us)", "100000", "10000", "5000000"),
-          penum("palette", "Palette", "Hot", {"Gray", "Hot", "Plasma", "Turbo"}),
-          pint("refresh_rate_hz", "Refresh (Hz)", "30", "10", "120")}});
-
-    add({"stereo_matcher", "Stereo Matcher", "cv", "self",
-         AlgoDisplayMode::Standalone,
-         {pint("disparity_range", "Disparity range", "64", "16", "256"),
-          pint("block_size", "Block size", "7", "3", "21")}});
-
+    // §4.3.26 Overlay
     add({"overlay", "Overlay", "cv", "self",
          AlgoDisplayMode::Overlay, {}});
+
+    // §4.3.27 Time Surface
+    add({"time_surface", "Time Surface", "cv", "self",
+         AlgoDisplayMode::Standalone,
+         {pint("decay_time_us", "Decay time (us)", "100000", "10000", "5000000"),
+          penum("palette", "Palette", "1", {"0=Gray", "1=Hot", "2=Plasma", "3=Turbo"}),
+          penum("channels", "Channels", "1", {"1=merged", "2=split"})}});
 }
 
 // ---------------------------------------------------------------------------
-// Self-developed analytics (design §4.4)
+// Self-developed analytics (design §4.4) — 7 modules
 // ---------------------------------------------------------------------------
 
 void AlgoBridge::register_self_analytics() {
@@ -417,20 +535,47 @@ void AlgoBridge::register_self_analytics() {
         registry_[a.name] = std::move(a);
     };
 
+    // §4.4.1 Active Marker
     add({"active_marker", "Active Marker Tracking", "analytics", "self",
          AlgoDisplayMode::Overlay,
-         {pint("min_frequency_hz", "Min frequency (Hz)", "100", "1", "10000"),
-          pint("max_frequency_hz", "Max frequency (Hz)", "5000", "1", "100000")}});
+         {pint("window_us", "Window (us)", "10000", "1000", "100000"),
+          pint("min_events", "Min events", "20", "5", "500")}});
 
+    // §4.4.2 Event To Video (3 modes)
     add({"event_to_video", "Event -> Video (E2VID)", "analytics", "self",
          AlgoDisplayMode::Standalone,
-         {{"model_path", "Model path", "string", "", "", "", {}},
-          pint("output_fps", "Output FPS", "30", "1", "120"),
-          pfloat("accumulation_ms", "Accumulation (ms)", "33.3", "1", "1000")}});
+         {penum("mode", "Mode", "0", {"0=BardowVariational", "1=InteractingMaps", "2=E2VID"})}});
+
+    // §4.4.3 Flow Statistics (requires ground-truth; Passive in real-time)
+    add({"flow_statistics", "Flow Statistics", "analytics", "self",
+         AlgoDisplayMode::Passive, {}});
+
+    // §4.4.4 ISI Analyzer
+    add({"isi_analyzer", "ISI Analyzer", "analytics", "self",
+         AlgoDisplayMode::Standalone,
+         {pbool("per_pixel", "Per pixel", "false"),
+          pfloat("max_isi_ms", "Max ISI (ms)", "100", "1", "1000")}});
+
+    // §4.4.5 Particle Counter
+    add({"particle_counter", "Particle Counter", "analytics", "self",
+         AlgoDisplayMode::Overlay,
+         {pint("line_y", "Line Y (px)", "360", "0", ""),
+          pint("min_area", "Min area (px)", "10", "1", "10000")}});
+
+    // §4.4.6 Auto Bias Controller
+    add({"auto_bias", "Auto Bias Controller", "analytics", "self",
+         AlgoDisplayMode::Overlay,
+         {pfloat("target_event_rate_mev", "Target rate (Mev/s)", "5.0", "0.1", "50.0")}});
+
+    // §4.4.7 Freq Detector
+    add({"freq_detector", "Frequency Detector", "analytics", "self",
+         AlgoDisplayMode::Standalone,
+         {pfloat("update_interval_s", "Update interval (s)", "0.5", "0.1", "10"),
+          pint("min_events", "Min events", "50", "10", "1000")}});
 }
 
 // ---------------------------------------------------------------------------
-// Self-developed calibration (design §4.5)
+// Self-developed calibration (design §4.5) — unchanged
 // ---------------------------------------------------------------------------
 
 void AlgoBridge::register_self_calibration() {
@@ -448,10 +593,6 @@ void AlgoBridge::register_self_calibration() {
           pint("squares_x", "Squares X", "9", "2", "30"),
           pint("squares_y", "Squares Y", "6", "2", "30"),
           pfloat("square_size_mm", "Square size (mm)", "25", "1", "200")}});
-
-    add({"extrinsic_calibration", "Extrinsic Calibration", "calibration", "self",
-         AlgoDisplayMode::Standalone,
-         {pint("num_cameras", "Num cameras", "2", "2", "8")}});
 }
 
 } // namespace gui

@@ -96,7 +96,7 @@ SettingsPanel::SettingsPanel(AlgoBridge* bridge, FileConverter* converter, QWidg
 
     // Phase 9: calibration — placeholder until CalibrationWizard is installed.
     calibration_group_ = add_placeholder(tr("Calibration"),
-                                         tr("Intrinsic / extrinsic calibration wizards — Phase 9."));
+                                         tr("Intrinsic calibration wizard — Phase 9."));
 
     layout->addStretch(1);
     scroll->setWidget(host);

@@ -29,3 +29,7 @@ set(CMAKE_AUTORCC ON)
 
 add_subdirectory(algo)
 add_subdirectory(gui)
+
+# --- Testing ---------------------------------------------------------------
+enable_testing()
+add_subdirectory(algo/tests)

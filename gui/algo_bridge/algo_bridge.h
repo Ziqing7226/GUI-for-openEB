@@ -4,10 +4,10 @@
 //
 // Design reference: design.md §3.8 and §4.
 //
-// Phase 1 status: interface skeleton. The registry lists every algorithm
-// (27 OpenEB capabilities + 19 self-developed modules) so the GUI can present
-// them. create() returns a pass-through AlgoInstance stub; real per-algorithm
-// wiring is added in Phases 5-9.
+// The bridge真正实例化并调用 algo/cv 与 algo/analytics 的真实算法类。
+// AlgoInstance 持有一个 AlgoBackend，push_events 时零拷贝 reinterpret_cast
+// EventCD→gui_algo::Event 后调用真实 process()/filter()，pull_result 返回
+// 过滤事件 + 叠加层 + 帧。注册表列出全部 31 个自研模块 + 30 个 openEB 能力。
 
 #ifndef GUI_ALGO_BRIDGE_ALGO_BRIDGE_H
 #define GUI_ALGO_BRIDGE_ALGO_BRIDGE_H
@@ -19,6 +19,8 @@
 #include <vector>
 
 #include <metavision/sdk/base/events/event_cd.h>
+
+#include "algo_backend.h"  // AlgoBackend, AlgoResult, Overlay* structs
 
 namespace gui {
 
@@ -51,20 +53,13 @@ struct AlgoInfo {
     std::vector<AlgoParamSpec> params;
 };
 
-/// Result of one algorithm processing pull.
-struct AlgoResult {
-    std::vector<Metavision::EventCD> filtered_events; ///< pass-through output (for filters)
-    std::string status;
-    bool has_frame{false};
-};
-
-/// A live algorithm instance. Phase 1: pass-through stub.
+/// A live algorithm instance. Holds a real AlgoBackend that wraps an algo/ class.
 ///
 /// Methods are thread-safe: push_events() is called from the SDK data thread
 /// while set_param / set_enabled / pull_result are called from the GUI thread.
 class AlgoInstance {
 public:
-    explicit AlgoInstance(const AlgoInfo& info);
+    explicit AlgoInstance(const AlgoInfo& info, int width = 1280, int height = 720);
 
     const AlgoInfo& info() const { return info_; }
 
@@ -74,17 +69,22 @@ public:
     void set_enabled(bool e);
     bool is_enabled() const;
 
-    /// Push events to the algorithm. Thread-safe.
+    /// Push events to the algorithm backend. Thread-safe.
     void push_events(const Metavision::EventCD* begin, const Metavision::EventCD* end);
 
-    /// Pull the latest result. Phase 1: returns the buffered events verbatim.
+    /// Pull the latest result (filtered events + overlay + frame).
     AlgoResult pull_result();
+
+    /// Reset the underlying backend.
+    void reset();
 
 private:
     AlgoInfo info_;
+    int width_;
+    int height_;
     mutable std::mutex mutex_;
     std::unordered_map<std::string, std::string> param_values_;
-    std::vector<Metavision::EventCD> buffer_;
+    std::unique_ptr<AlgoBackend> backend_;
     bool enabled_{true};
 };
 
@@ -103,10 +103,17 @@ public:
     /// @return Shared pointer to the instance, or nullptr if unknown.
     std::shared_ptr<AlgoInstance> create(const std::string& name);
 
+    /// @brief Sets the actual sensor dimensions so new instances are created
+    /// with the correct width/height instead of the 1280x720 default.
+    void set_sensor_dimensions(int width, int height);
+
     /// @brief Looks up a live instance by name. Returns nullptr if no live
     /// instance exists (either never created or already destroyed).
     /// Used by ConfigManager to capture/apply runtime parameter values.
     std::shared_ptr<AlgoInstance> find_live(const std::string& name);
+
+    /// @brief Returns all live instances (for batch event push / result pull).
+    std::vector<std::shared_ptr<AlgoInstance>> list_live();
 
     void push_events(const std::shared_ptr<AlgoInstance>& inst,
                      const Metavision::EventCD* begin,
@@ -129,6 +136,8 @@ private:
     /// entries are pruned lazily on each lookup.
     std::unordered_map<std::string, std::weak_ptr<AlgoInstance>> live_instances_;
     mutable std::mutex live_mutex_;
+    int sensor_w_{1280};
+    int sensor_h_{720};
 };
 
 } // namespace gui
