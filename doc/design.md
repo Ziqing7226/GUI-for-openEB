@@ -46,6 +46,7 @@ GUI-for-openEB/
 │   │   ├── target_labeler.h / .cpp   🆕 数据集标注工具（参考 jAER TargetLabeler）
 │   │   ├── pixel_probe.h / .cpp      🆕 像素探针（点击查看事件序列/ISI/极性）
 │   │   ├── mouse_adaptor.h / .cpp    🆕 鼠标交互（多矩形 ROI 绘制）
+│   │   ├── algo_window.h / .cpp      🆕 算法参数+显示窗口（§5.6.6，全算法支持）
 │   │   └── multiline_text.h / .cpp   🆕 多行文本渲染（计数/统计 HUD）
 │   ├── panels/                  # 设置面板（Biases/ROI/ESP/Trigger 等）
 │   │   ├── biases_panel.h / .cpp
@@ -1117,6 +1118,8 @@ openEB 未提供光流算法，需自研。结果以箭头/颜色图叠加到主
 
 **参数与合法范围**：`time_window_ms`：float，`[10, 10000]`，默认 `1000`（显示最近 N ms 事件）；`color_mode`：枚举（Polarity / Age），默认 `Polarity`；`point_size`：float，`[0.5, 10]`，默认 `2.5`；`auto_rotate`：bool，默认 `false`；`depth_shade`：bool，默认 `false`
 
+**ROI 处理区**（默认启用，详见 §5.6.6）：`roi_enabled`：bool，默认 `true`；`roi_x`/`roi_y`：int，`-1` 表示自动居中，默认 `-1`；`roi_w`/`roi_h`：int，`0` 表示全幅，默认 `128`（即默认 128×128 中心区域）。启用时仅向 3D 点云推送 ROI 内事件，主显示帧同步绘制黄色 ROI 边框。
+
 #### 4.3.26 🆕 可视化叠加 (Overlay)
 
 将叠加型算法结果叠加到渲染帧上：光流箭头/颜色图、目标 bbox+ID、检测线、轨迹线、角点标记、线段、圆环、统计文字等。
@@ -1137,7 +1140,9 @@ openEB 未提供光流算法，需自研。结果以箭头/颜色图叠加到主
 - `palette`：色彩映射枚举（Gray/Hot/Plasma/Turbo 等），默认 `Hot`
 - `refresh_rate_hz`：int，范围 `[10, 120]`，默认 `30`
 
-**一键操作**：菜单 Algorithm → Time Surface 或工具栏按钮，单击即弹出独立 Time Surface 窗口；窗口可拖拽、停靠、缩放。
+**ROI 处理区**（默认启用，详见 §5.6.6）：`roi_enabled`：bool，默认 `true`；`roi_x`/`roi_y`：int，`-1` 表示自动居中，默认 `-1`；`roi_w`/`roi_h`：int，`0` 表示全幅，默认 `128`（即默认 128×128 中心区域）。启用时仅向 Time Surface 推送 ROI 内事件并按 ROI 尺寸重建 MostRecentTimestampBuffer，主显示帧同步绘制黄色 ROI 边框。
+
+**一键操作**：菜单 Algorithm → Time Surface 或工具栏按钮，单击即弹出独立 Time Surface 窗口；窗口可拖拽、停靠、缩放。Algorithm 菜单项为可勾选状态，再次点击或关闭窗口即可手动停用该功能。
 
 ### 4.4 algo/analytics/ — 分析模块
 
@@ -1180,7 +1185,9 @@ openEB 未提供光流算法，需自研。结果以箭头/颜色图叠加到主
 - InteractingMaps 模式：`relaxation_step`：float，`(0, 1)`，默认 `0.1`（松弛步长）；`num_iterations`：int，`[10, 1000]`，默认 `50`
 - E2VID 模式：`model_path`：string（ONNX 模型路径，加载失败自动回退到启发式）；`num_bins`：int，`[1, 20]`，默认 `5`（时间体素分箱数）；`auto_hdr`：bool，默认 `false`（自动 HDR 强度重缩放）；`unsharp_amount`：float，默认 `0.3`（锐化强度）；`unsharp_sigma`：float，默认 `1.0`（高斯模糊 σ）；`bilateral_sigma`：float，默认 `0.0`（双边滤波 σ，0 = 禁用）；`hot_pixel_mask`：uint8 向量（热像素掩码，长度 = width × height）
 
-**用途**：事件数据可视化、帧基算法输入、视频导出。
+**ROI 处理区**（默认启用，详见 §5.6.6）：`roi_enabled`：bool，默认 `true`；`roi_x`/`roi_y`：int，`-1` 表示自动居中，默认 `-1`；`roi_w`/`roi_h`：int，`0` 表示全幅，默认 `128`（即默认 128×128 中心区域）。启用时仅向重建算法推送 ROI 内事件并按 ROI 尺寸重建算法实例（避免全幅高延迟），主显示帧同步绘制黄色 ROI 边框。重建窗口以 ROI 大小独立显示灰度帧。
+
+**用途**：事件数据可视化、帧基算法输入、视频导出。Algorithm 菜单项为可勾选状态，可手动停用。
 
 #### 4.4.3 🆕 光流评估 (FlowStatistics)
 
@@ -1205,6 +1212,8 @@ openEB 未提供光流算法，需自研。结果以箭头/颜色图叠加到主
 | 异常检测 | ISI 异常短/长 → 标记噪声像素 |
 
 **参数与合法范围**：`bin_count`：int，`[8, 256]`，默认 `32`；`max_isi_ms`：float，`[1, 1000]`，默认 `100`；`per_pixel`：bool，默认 `false`（全图统计）
+
+**ROI 处理区**（默认启用，详见 §5.6.6）：`roi_enabled`：bool，默认 `true`；`roi_x`/`roi_y`：int，`-1` 表示自动居中，默认 `-1`；`roi_w`/`roi_h`：int，`0` 表示全幅，默认 `128`（即默认 128×128 中心区域）。启用时仅统计 ROI 内事件的 ISI。Algorithm 菜单项为可勾选状态，可手动停用。
 
 #### 4.4.5 🆕 通用颗粒计数器 (ParticleCounter)
 
@@ -1246,6 +1255,8 @@ openEB 未提供光流算法，需自研。结果以箭头/颜色图叠加到主
 **频率定义**：事件频率 = 2 × LED 物理闪烁频率（LED 每次亮/灭各触发一个事件）。
 
 **参数与合法范围**：`f_min`：float，`[10, 1000]`，默认 `100`（Hz）；`f_max`：float，`[1000, 50000]`，默认 `10000`（Hz）；`bin_dt_us`：float，`[10, 1000]`，默认 `50`（时间分箱步长）；`heatmap_threshold`：int，`[1, 1000]`，默认 `50`；`min_cc_area`：int，`[1, 100]`，默认 `3`；`region_radius`：int，`[0, 5]`，默认 `1`（1=3×3 像素区域）；`peak_alpha`：float，`[1, 20]`，默认 `5`（峰值检测阈值系数）；`first_analysis_s`：float，`[0.5, 10]`，默认 `2.0`；`max_duration_s`：float，`[5, 120]`，默认 `20.0`；`update_interval_s`：float，`[0.1, 5]`，默认 `1.0`
+
+**ROI 处理区**（默认启用，详见 §5.6.6）：`roi_enabled`：bool，默认 `true`；`roi_x`/`roi_y`：int，`-1` 表示自动居中，默认 `-1`；`roi_w`/`roi_h`：int，`0` 表示全幅，默认 `128`（即默认 128×128 中心区域）。启用时仅分析 ROI 内事件。Algorithm 菜单项为可勾选状态，可手动停用。
 
 **可视化**：热图 colormap（Inferno）+ 光源位置圆圈标注 + 频率文本（Hz）。
 
@@ -1377,7 +1388,7 @@ openEB 未提供光流算法，需自研。结果以箭头/颜色图叠加到主
 | **Camera** | Connect/Disconnect, Device List, Platform Info, Monitor (Temperature/Power), Sync Multi-Camera, HAL Showcase |
 | **Preprocess** | ROI Filter, Polarity Filter, Polarity Invert, Flip X/Y, Rotate (0°/90°/180°/270°), Transpose, Rescale, Adaptive Rate Split |
 | **Frame Mode** | Integration, Diff, Histogram, Time Decay, Contrast Map, Periodic, On-Demand |
-| **Algorithm** | Noise Filter, Hot Pixel Filter, Orientation Filter, Direction Selective Filter, Optical Flow (Sparse), Blob Detect, Object Tracker, Corner Detect, Line Segment (ELiSeD), Hough Line, Hough Circle, Orientation Cluster, LIF Cluster, Background Mask, Perspective Undistort, Trigger Synced, Bandpass Filter, EIS (Optical Gyro), Ultra Slow Motion, XYT 3D, Time Surface, Active Marker, Event→Video, Flow Statistics, ISI Analyzer, Particle Counter, Auto Bias, Freq Detector, Overlay |
+| **Algorithm** | Noise Filter, Hot Pixel Filter, Orientation Filter, Direction Selective Filter, Optical Flow (Sparse), Blob Detect, Object Tracker, Corner Detect, Line Segment (ELiSeD), Hough Line, Hough Circle, Orientation Cluster, LIF Cluster, Background Mask, Perspective Undistort, Trigger Synced, Bandpass Filter, EIS (Optical Gyro), Ultra Slow Motion, XYT 3D, Time Surface, Active Marker, Event→Video, Flow Statistics, ISI Analyzer, Particle Counter, Auto Bias, Freq Detector, Overlay（其中 XYT 3D / Time Surface / Event→Video / Freq Detector / ISI Analyzer 为可勾选项，详见 §5.6.6） |
 | **Calibration** | Intrinsic Wizard |
 | **Tools** | Frame Composer, Data Synchronizer, Timing Profiler |
 | **Help** | About, Documentation, Software Info |
@@ -1468,6 +1479,53 @@ openEB 未提供光流算法，需自研。结果以箭头/颜色图叠加到主
 #### 5.6.5 实现技术
 
 基于 Qt 6 的 `QDockWidget` 或 `QMdiArea`（多文档接口）实现可停靠/浮动子窗口；主窗口采用 `QMainWindow`，中央区域为主显示，子窗口作为 dock widget 可拖拽至四周或浮动。布局自动重排通过 `QMainWindow.resizeDocks` / `QMdiArea.tileSubWindows` 实现。
+
+#### 5.6.6 🆕 算法 ROI 处理区（全算法支持，128×128 中心默认）
+
+**核心需求**：全部自研算法（22 个 CV + 7 个 Analytics，共 29 个）均支持"算法 ROI"处理区。GUI 默认启用 ROI 且默认区域为中心 128×128 内侧，使算法只处理 ROI 内事件、GUI 只渲染 ROI 区域的输出。用户可在 Algorithm 菜单的每个算法子菜单中勾选"算法ROI"开关，并通过"Configure..."打开的 AlgoWindow 调节 ROI 坐标/尺寸及全部算法参数。
+
+**适用算法**：全部 29 个自研算法（包括 Overlay / Replace / Standalone / Passive 四种显示模式）。每个算法在 `algo_bridge.cpp` 注册时由 `add()` lambda 自动追加 5 个 ROI 参数；每个 `AlgoBackend` 通过 `RoiFilter` helper（或等价的 `ProcessRegion` 成员）实现事件过滤。
+
+**两种后端过滤模式**：
+- **In-place compaction**（用于输出事件向量的滤波器，Group A/F/G）：在原缓冲区上将 ROI 外事件覆盖式压缩，算法仅处理压缩后的事件子集；`filtered_events` 输出仅含 ROI 内事件
+- **Apply / keep-coords**（用于 Overlay 检测器、分析器、帧生成器，Group B/C/D/E/H）：将 ROI 内事件拷贝到独立缓冲区供算法处理，`filtered_events` 输出全部事件（passthrough），叠加层坐标保持传感器尺度
+
+**参数（29 个算法共用同一组参数键，自动追加）**：
+
+| 参数 | 类型 | 默认 | 范围 | 说明 |
+|------|------|------|------|------|
+| `roi_enabled` | bool | `true` | — | 是否启用算法 ROI |
+| `roi_x` | int | `-1` | `[-1, sensor_w]` | ROI 左上角 x，`-1` 表示自动居中 |
+| `roi_y` | int | `-1` | `[-1, sensor_h]` | ROI 左上角 y，`-1` 表示自动居中 |
+| `roi_w` | int | `128` | `[0, sensor_w]` | ROI 宽度，`0` 表示全幅 |
+| `roi_h` | int | `128` | `[0, sensor_h]` | ROI 高度，`0` 表示全幅 |
+
+**计算规则**（`ProcessRegion::compute`）：
+1. `rw = (roi_w ≤ 0) ? sensor_w : min(roi_w, sensor_w)`，`rh` 同理
+2. `rx = (roi_x < 0) ? (sensor_w - rw) / 2 : clamp(roi_x, 0, sensor_w - rw)`
+3. `ry` 同理
+4. 钳位后 `x0=rx, y0=ry, x1=min(rx+rw, sensor_w), y1=min(ry+rh, sensor_h)`，最终 `rw=x1-x0, rh=y1-y0`
+
+**事件过滤**：每个事件 `(x, y, p, t)` 若 `x0 ≤ x < x1 && y0 ≤ y < y1` 则保留（坐标平移与否取决于过滤模式），否则丢弃。
+
+**GUI 行为（Algorithm 菜单结构）**：
+1. **每个算法一个子菜单**（`QMenu`），包含三个条目：
+   - **"Enable"**（`checkable QAction`）：勾选时启用 AlgoInstance 并自动打开 AlgoWindow；取消勾选时关闭 AlgoWindow 并停用算法
+   - **"算法ROI"**（`checkable QAction`，默认勾选）：勾选时设置 `roi_enabled=true`，算法仅处理 ROI 内事件；取消勾选时设置 `roi_enabled=false`，算法处理全幅事件
+   - **"Configure..."**（普通 `QAction`）：打开该算法的 AlgoWindow 独立窗口
+2. **使用 `triggered(bool)` 信号**（非 `toggled`）避免程序化 `setChecked` 触发重入
+3. **AlgoWindow**（`gui/widgets/algo_window.h`）：
+   - 顶部为滚动参数面板，自动从 `AlgoParamSpec` 生成控件（QSpinBox/QDoubleSpinBox/QComboBox/QLineEdit），ROI 参数分组置顶
+   - 底部为显示区域：Standalone 帧类算法（`time_surface`/`event_to_video`/`isi_analyzer`/`background_mask`）安装 `EventDisplayWidget`；其余算法使用 `QLabel` 显示状态文本
+   - `xyt_visualizer` 额外维护独立的 `SpaceTimeDisplay`（QOpenGLWidget 3D 渲染），AlgoWindow 仅提供参数控制
+   - 关闭 AlgoWindow → 触发 `closing` 信号 → `set_enabled(false)` + 菜单 "Enable" 取消勾选
+4. **主显示帧 ROI 叠加**：`process_algo_results()` 中调用 `draw_roi_overlays()`，遍历所有启用的自研算法（`source == "self"`），对每个 `roi_enabled=true` 的算法在主显示帧上绘制黄色矩形框 + 算法名标注
+5. **参数面板**：AlgoWindow 与 Algorithms 面板均可调节参数，参数变更即时同步到 AlgoInstance
+
+**手动停用方式**：
+- Algorithm 菜单 → 算法子菜单 → 取消勾选 "Enable"
+- 关闭对应 AlgoWindow
+- 取消勾选 "算法ROI"（保留全幅处理）或在 AlgoWindow 中调整 ROI 尺寸为 `0`（全幅）
 
 ---
 

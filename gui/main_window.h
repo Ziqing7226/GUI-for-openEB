@@ -18,11 +18,13 @@
 #ifndef GUI_MAIN_WINDOW_H
 #define GUI_MAIN_WINDOW_H
 
+#include <QHash>
 #include <QMainWindow>
 #include <QPointer>
 #include <atomic>
 #include <memory>
 #include <optional>
+#include <string>
 
 #include <metavision/sdk/base/utils/callback_id.h>
 
@@ -39,6 +41,7 @@
 #include "recorder/recorder_controller.h"
 #include "temporal/temporal_plot_window.h"
 #include "display/space_time_display.h"
+#include "widgets/algo_window.h"
 #include "widgets/multi_window_manager.h"
 
 class QLabel;
@@ -90,6 +93,7 @@ private slots:
     void on_open_xyt_view();
     void on_open_event_to_video();
     void on_open_freq_detector();
+    void on_open_algo_window(const std::string& algo_name);
     void on_add_display_window();
     void on_tile_windows();
     void on_save_layout();
@@ -175,24 +179,39 @@ private:
     std::unique_ptr<MultiWindowManager> multi_window_;
     std::unique_ptr<LayoutManager> layout_manager_;
 
-    // Standalone algorithm windows (design §5.6.1).
-    QPointer<QWidget> time_surface_window_;
+    // Standalone algorithm windows (design §5.6.1 / §5.6.6).
+    // xyt_visualizer keeps a dedicated SpaceTimeDisplay (QOpenGLWidget with
+    // 3D rendering); all other algorithms use the generic AlgoWindow
+    // (algo_windows_) for both parameter control and result display.
     QPointer<SpaceTimeDisplay> xyt_display_;
-    QPointer<QWidget> event_to_video_window_;
-    QPointer<QWidget> freq_detector_window_;
-    std::shared_ptr<AlgoInstance> time_surface_algo_;
     std::shared_ptr<AlgoInstance> xyt_algo_;
-    std::shared_ptr<AlgoInstance> e2v_algo_;
-    std::shared_ptr<AlgoInstance> freq_algo_;
+
+    /// Generic AlgoWindow instances keyed by algo name (design §5.6.6).
+    /// Every self-developed algorithm gets an AlgoWindow when enabled, so the
+    /// user can adjust any parameter (including the 5 ROI params) at runtime.
+    QHash<std::string, QPointer<AlgoWindow>> algo_windows_;
+
+    /// Algorithm ROI actions keyed by algo name (the "算法ROI" checkable
+    /// submenu item that toggles roi_enabled). Kept separate from
+    /// algo_actions_ (the "Enable" item) so the two can be toggled
+    /// independently.
+    QHash<std::string, QAction*> algo_roi_actions_;
 
     // Algorithm event/result pipeline.
     std::optional<Metavision::CallbackId> algo_cd_cb_id_;
     std::atomic<Metavision::timestamp> algo_last_xyt_post_us_{0};
     FrameAnnotator annotator_;
-    QPointer<EventDisplayWidget> time_surface_display_;
-    QPointer<EventDisplayWidget> event_to_video_display_;
-    QPointer<QLabel> freq_detector_label_;
     Metavision::timestamp prev_frame_ts_{0};
+
+    /// Algorithm menu actions keyed by algo name (for checkable state sync
+    /// between the menu, AlgorithmsPanel, and standalone windows).
+    QHash<std::string, QAction*> algo_actions_;
+
+    /// Draws the ROI rectangle of any enabled self-developed algorithm
+    /// (design §5.6.6: all self-developed algos support ROI) on the main
+    /// display frame so the user can see which region is being processed.
+    /// Called from process_algo_results().
+    void draw_roi_overlays(QImage& frame);
 };
 
 } // namespace gui

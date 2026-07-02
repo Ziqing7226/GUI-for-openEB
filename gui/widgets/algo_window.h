@@ -1,0 +1,97 @@
+// gui/widgets/algo_window.h — generic algorithm parameter + display window.
+//
+// Design §5.6.6: every self-developed algorithm exposes an AlgoWindow after
+// being enabled. The window auto-generates a parameter panel from the
+// algorithm's AlgoParamSpec list (including the 5 ROI parameters) so the user
+// can tune any algorithm at runtime. For Standalone algorithms the window
+// also hosts the result display widget (EventDisplayWidget for frame
+// producers, QLabel for text producers); for Overlay/Replace/Passive
+// algorithms the display area shows the algorithm's status string and the
+// visual output remains on the main display frame.
+//
+// The window is opened by MainWindow when the algorithm's "Enable" menu item
+// is checked, and is closed automatically when the algorithm is disabled.
+// Closing the window disables the algorithm and unchecks the menu item.
+
+#ifndef GUI_WIDGETS_ALGO_WINDOW_H
+#define GUI_WIDGETS_ALGO_WINDOW_H
+
+#include <QLabel>
+#include <QString>
+#include <QWidget>
+#include <memory>
+#include <string>
+
+#include "algo_bridge/algo_bridge.h"
+
+class QScrollArea;
+class QVBoxLayout;
+
+namespace gui {
+
+class EventDisplayWidget;
+
+class AlgoWindow : public QWidget {
+    Q_OBJECT
+public:
+    /// @brief Constructs an AlgoWindow for the named algorithm.
+    /// @p bridge must outlive the window. The constructor finds (or creates)
+    /// the live AlgoInstance and enables it.
+    AlgoWindow(AlgoBridge* bridge, const std::string& algo_name,
+               QWidget* parent = nullptr);
+
+    /// @brief Returns the algorithm name this window manages.
+    const std::string& algo_name() const { return algo_name_; }
+
+    /// @brief Returns the live instance managed by this window (may be null
+    /// if the algorithm was unknown).
+    std::shared_ptr<AlgoInstance> instance() const { return instance_; }
+
+    /// @brief Returns the status QLabel (the default display widget).
+    /// @note Only valid when no custom display widget has been installed.
+    QLabel* status_label() const { return status_label_; }
+
+    /// @brief Returns the frame display widget if one was installed, else
+    /// nullptr. Used by MainWindow to route Standalone frame results.
+    EventDisplayWidget* frame_display() const;
+
+    /// @brief Installs a custom display widget, replacing the default status
+    /// label. Ownership transfers to the window's layout.
+    void set_display_widget(QWidget* w);
+
+    /// @brief Updates the status label text (if present). Called from
+    /// MainWindow::process_algo_results for text-based Standalone algos.
+    void set_status_text(const QString& text);
+
+signals:
+    /// @brief Emitted when the window is about to close (closeEvent).
+    /// MainWindow connects this to disable the algo instance and uncheck
+    /// the menu item.
+    void closing(const std::string& algo_name);
+
+protected:
+    void closeEvent(QCloseEvent* event) override;
+
+private:
+    /// Builds the auto-generated parameter panel (same widget pattern as
+    /// AlgorithmsPanel). Parameters are sorted with the 5 ROI params at the
+    /// top so the user can quickly toggle/resize the ROI region.
+    void build_param_panel(QVBoxLayout* outer);
+
+    /// Forwards a parameter edit to the live AlgoInstance.
+    void apply_param(const std::string& key, const std::string& value);
+
+    AlgoBridge* bridge_;
+    std::string algo_name_;
+    AlgoInfo info_;
+    std::shared_ptr<AlgoInstance> instance_;
+
+    QScrollArea* param_scroll_{nullptr};
+    QLabel* status_label_{nullptr};
+    QWidget* display_widget_{nullptr};
+    QVBoxLayout* display_layout_{nullptr};
+};
+
+} // namespace gui
+
+#endif // GUI_WIDGETS_ALGO_WINDOW_H

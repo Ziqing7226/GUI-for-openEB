@@ -55,6 +55,7 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/display/space_time_display.cpp")
         widgets/target_labeler.cpp
         widgets/pixel_probe.cpp
         widgets/mouse_adaptor.cpp
+        widgets/algo_window.cpp
         display/frame_annotator.cpp
         display/space_time_display.cpp
         panels/bias_tweaks_panel.cpp

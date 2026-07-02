@@ -135,9 +135,10 @@ void MainWindow::closeEvent(QCloseEvent* event) {
     // Standalone algorithm windows — same reason as above: their
     // destroyed() handlers reset AlgoInstance shared_ptrs and QPointer
     // members that reference MainWindow state.
-    if (time_surface_window_) { delete time_surface_window_.data(); }
-    if (event_to_video_window_) { delete event_to_video_window_.data(); }
-    if (freq_detector_window_) { delete freq_detector_window_.data(); }
+    for (auto it = algo_windows_.begin(); it != algo_windows_.end(); ++it) {
+        if (it.value()) { delete it.value().data(); }
+    }
+    algo_windows_.clear();
     if (xyt_display_) { delete xyt_display_.data(); }
     // Pre-delete child widgets that hold raw pointers to MainWindow members.
     // Without this, ~QObject child cleanup runs after member destructors,
@@ -311,7 +312,15 @@ void MainWindow::build_menus() {
         }
     }
 
-    // Algorithm (design §5.4) — 30 self-developed modules.
+    // Algorithm (design §5.4 / §5.6.6) — 29 self-developed modules.
+    // Each algorithm gets a submenu with:
+    //   - "Enable" (checkable)        — toggles the algorithm on/off
+    //   - "算法ROI" (checkable)        — toggles roi_enabled (design §5.6.6)
+    //   - "Configure..."              — opens the AlgoWindow for parameter
+    //                                   adjustment (incl. ROI x/y/w/h)
+    // When "Enable" is checked, the AlgoWindow opens automatically so the
+    // user can tune any parameter at runtime. For Standalone algorithms the
+    // AlgoWindow also hosts the result display widget.
     auto* m_algo = mb->addMenu(tr("&Algorithm"));
     {
         // Maps menu display name → algo_bridge name.
@@ -347,17 +356,64 @@ void MainWindow::build_menus() {
             {tr("Overlay"), "overlay"},
         };
         for (const auto& [label, name] : algos) {
-            m_algo->addAction(label, this, [this, name, label]() {
+            auto* sub = m_algo->addMenu(label);
+
+            // "Enable" checkable action.
+            auto* a_enable = sub->addAction(tr("Enable"));
+            a_enable->setCheckable(true);
+            a_enable->setChecked(false);
+            algo_actions_[name.toStdString()] = a_enable;
+
+            // "算法ROI" checkable action — toggles roi_enabled. Defaults to
+            // true (design §5.6.6: ROI is on by default with center 128×128).
+            auto* a_roi = sub->addAction(tr("算法ROI"));
+            a_roi->setCheckable(true);
+            a_roi->setChecked(true);
+            a_roi->setToolTip(tr("When checked, the algorithm only processes "
+                                 "events inside the Algorithm ROI region "
+                                 "(default: center 128×128)."));
+            algo_roi_actions_[name.toStdString()] = a_roi;
+
+            sub->addSeparator();
+
+            // "Configure..." action — opens the AlgoWindow.
+            sub->addAction(tr("Configure..."), this,
+                           [this, name]() { on_open_algo_window(name.toStdString()); });
+
+            // Use `triggered` (not `toggled`) so programmatic setChecked()
+            // from window close handlers doesn't re-enter this slot.
+            connect(a_enable, &QAction::triggered, this, [this, name, label](bool on) {
                 const auto key = name.toStdString();
                 auto inst = algo_bridge_.find_live(key);
-                if (!inst) {
-                    inst = algo_bridge_.create(key);
-                }
+                if (!inst) inst = algo_bridge_.create(key);
                 if (inst) {
-                    bool now_on = !inst->is_enabled();
-                    inst->set_enabled(now_on);
+                    inst->set_enabled(on);
                     statusBar()->showMessage(
-                        tr("%1: %2").arg(label).arg(now_on ? "ON" : "OFF"), 3000);
+                        tr("%1: %2").arg(label).arg(on ? "ON" : "OFF"), 3000);
+                }
+                if (on) {
+                    // Auto-open the AlgoWindow so the user can tune params.
+                    on_open_algo_window(key);
+                } else {
+                    // Close the AlgoWindow (if any) when disabled.
+                    auto it = algo_windows_.find(key);
+                    if (it != algo_windows_.end() && it.value()) {
+                        it.value()->close();
+                    }
+                    // xyt_visualizer has a separate SpaceTimeDisplay window.
+                    if (name == "xyt_visualizer" && xyt_display_) xyt_display_->close();
+                }
+            });
+
+            // ROI toggle — forward to the live instance's roi_enabled param.
+            connect(a_roi, &QAction::triggered, this, [this, name](bool on) {
+                const auto key = name.toStdString();
+                auto inst = algo_bridge_.find_live(key);
+                if (!inst) inst = algo_bridge_.create(key);
+                if (inst) {
+                    inst->set_param("roi_enabled", on ? "true" : "false");
+                    statusBar()->showMessage(
+                        tr("%1 ROI: %2").arg(name).arg(on ? "ON" : "OFF"), 3000);
                 }
             });
         }
@@ -1008,38 +1064,87 @@ void MainWindow::process_algo_results(QImage& frame) {
 
         if (mode == AlgoDisplayMode::Standalone) {
             const std::string& name = inst->info().name;
-            if (name == "time_surface") {
-                if (time_surface_display_ && r.has_frame && !r.frame.empty()) {
-                    QImage q = mat_to_qimage(r.frame);
-                    QMetaObject::invokeMethod(time_surface_display_.data(),
-                        "set_frame", Qt::QueuedConnection, Q_ARG(QImage, q));
+            // Route results to the AlgoWindow (design §5.6.6). Frame-producing
+            // algos (time_surface, event_to_video, isi_analyzer, background_mask)
+            // use an EventDisplayWidget; text-producing algos (freq_detector,
+            // flow_statistics, auto_bias, etc.) use the default status QLabel.
+            // xyt_visualizer is handled separately via SpaceTimeDisplay.
+            auto wit = algo_windows_.find(name);
+            if (wit != algo_windows_.end() && wit.value()) {
+                AlgoWindow* w = wit.value();
+                if (r.has_frame && !r.frame.empty()) {
+                    if (auto* disp = w->frame_display()) {
+                        QImage q = mat_to_qimage(r.frame);
+                        QMetaObject::invokeMethod(disp,
+                            "set_frame", Qt::QueuedConnection, Q_ARG(QImage, q));
+                    }
                 }
-            } else if (name == "event_to_video") {
-                if (event_to_video_display_ && r.has_frame && !r.frame.empty()) {
-                    QImage q = mat_to_qimage(r.frame);
-                    QMetaObject::invokeMethod(event_to_video_display_.data(),
-                        "set_frame", Qt::QueuedConnection, Q_ARG(QImage, q));
-                }
-            } else if (name == "freq_detector") {
-                if (freq_detector_label_) {
-                    // Build a multi-line status string: header line + one
-                    // line per detected light source (frequency in Hz).
+                if (!r.status.empty()) {
                     QString text = QString::fromStdString(r.status);
                     for (const auto& t : r.texts) {
                         text += QStringLiteral("\n  ");
                         text += QString::fromStdString(t.text);
                     }
-                    QMetaObject::invokeMethod(this, [this, text]() {
-                        if (freq_detector_label_) {
-                            freq_detector_label_->setText(text);
-                        }
+                    QMetaObject::invokeMethod(this, [w, text]() {
+                        w->set_status_text(text);
                     }, Qt::QueuedConnection);
                 }
             }
-            // Other Standalone algorithms (e.g. xyt_visualizer, flow_statistics,
-            // isi_analyzer, calibration modules) are driven through their own
-            // dedicated windows and callbacks; pull_result is a no-op for them
-            // or the result is consumed elsewhere.
+            // xyt_visualizer is driven through its own SpaceTimeDisplay window
+            // (design §5.6.1); pull_result is a no-op for it.
+        }
+    }
+
+    // Draw the ROI rectangle of any enabled self-developed algorithm so the
+    // user can see which region is being processed (design §5.6.6: all
+    // self-developed algos support ROI, defaulting to center 128×128).
+    draw_roi_overlays(frame);
+}
+
+void MainWindow::draw_roi_overlays(QImage& frame) {
+    // All self-developed algorithms support ROI (design §5.6.6). Iterate the
+    // live instances and draw a rectangle for each enabled one with
+    // roi_enabled=true. The overlay coordinates are at sensor scale.
+    int sensor_w = 1280, sensor_h = 720;
+    if (camera_.is_connected()) {
+        const auto& info = camera_.sensor_info();
+        sensor_w = info.width;
+        sensor_h = info.height;
+    }
+    auto parse = [](const std::string& s, int def) -> int {
+        try { return s.empty() ? def : std::stoi(s); }
+        catch (...) { return def; }
+    };
+    std::vector<QRect> boxes;
+    std::vector<std::pair<QString, QPoint>> labels;  // (text, pos)
+    auto instances = algo_bridge_.list_live();
+    for (auto& inst : instances) {
+        if (!inst->is_enabled()) continue;
+        // Only self-developed algorithms carry the roi_* params (design §5.6.6).
+        const AlgoInfo& info = inst->info();
+        if (info.source != "self") continue;
+        const std::string en = inst->get_param("roi_enabled");
+        if (en != "true" && en != "1") continue;
+        const int rx = parse(inst->get_param("roi_x"), -1);
+        const int ry = parse(inst->get_param("roi_y"), -1);
+        const int rw = parse(inst->get_param("roi_w"), 128);
+        const int rh = parse(inst->get_param("roi_h"), 128);
+        // Compute bounds (mirrors ProcessRegion::compute).
+        const int aw = (rw <= 0) ? sensor_w : std::min(rw, sensor_w);
+        const int ah = (rh <= 0) ? sensor_h : std::min(rh, sensor_h);
+        const int ax = (rx < 0) ? (sensor_w - aw) / 2
+                                 : std::min(std::max(0, rx), sensor_w - aw);
+        const int ay = (ry < 0) ? (sensor_h - ah) / 2
+                                 : std::min(std::max(0, ry), sensor_h - ah);
+        boxes.emplace_back(ax, ay, aw, ah);
+        labels.emplace_back(QString::fromStdString(info.name) + " ROI " +
+                            QString::number(aw) + "x" + QString::number(ah),
+                            QPoint(ax + 4, ay + 14));
+    }
+    if (!boxes.empty()) {
+        annotator_.draw_bboxes(frame, boxes, QColor(255, 255, 0));
+        for (const auto& [text, pos] : labels) {
+            annotator_.draw_text(frame, text, pos, QColor(255, 255, 0));
         }
     }
 }
@@ -1144,33 +1249,83 @@ void MainWindow::on_about() {
 // Standalone algorithm windows (design §5.6.1)
 // ---------------------------------------------------------------------------
 
-void MainWindow::on_open_time_surface() {
-    if (!time_surface_window_) {
-        time_surface_window_ = new QWidget(this, Qt::Window);
-        time_surface_window_->setWindowTitle(tr("Time Surface"));
-        time_surface_window_->setAttribute(Qt::WA_DeleteOnClose);
-        // Host an EventDisplayWidget so the Standalone Time Surface result
-        // (a cv::Mat from TimeSurfaceBackend) can be shown as a real frame
-        // rather than a blank placeholder QLabel. The result is pushed via
-        // process_algo_results() each time frame_ready fires.
-        time_surface_display_ = new EventDisplayWidget(time_surface_window_);
-        auto* layout = new QVBoxLayout(time_surface_window_);
-        layout->setContentsMargins(0, 0, 0, 0);
-        layout->addWidget(time_surface_display_);
-        time_surface_algo_ = algo_bridge_.find_live("time_surface");
-        if (!time_surface_algo_) time_surface_algo_ = algo_bridge_.create("time_surface");
-        if (time_surface_algo_) time_surface_algo_->set_enabled(true);
-        // Null out QPointer members when the window is closed so the
-        // process_algo_results() guard `if (time_surface_display_)` works.
-        connect(time_surface_window_, &QObject::destroyed, this, [this]() {
-            time_surface_display_ = nullptr;
-            time_surface_algo_.reset();
-        });
-        time_surface_window_->resize(640, 480);
+void MainWindow::on_open_algo_window(const std::string& algo_name) {
+    // Reuse an existing window if one is already open for this algorithm.
+    auto it = algo_windows_.find(algo_name);
+    if (it != algo_windows_.end() && it.value()) {
+        it.value()->show();
+        it.value()->raise();
+        return;
     }
-    time_surface_window_->show();
-    time_surface_window_->raise();
-    statusBar()->showMessage(tr("Time Surface window opened"), 2000);
+
+    // Create the AlgoWindow. The constructor finds/creates the live
+    // AlgoInstance and enables it.
+    auto* w = new AlgoWindow(&algo_bridge_, algo_name, this);
+    if (!w->instance()) {
+        // Unknown algorithm — clean up and bail out.
+        delete w;
+        statusBar()->showMessage(tr("Unknown algorithm: %1")
+                                     .arg(QString::fromStdString(algo_name)), 3000);
+        return;
+    }
+    algo_windows_[algo_name] = w;
+
+    // For Standalone frame-producing algorithms, install an EventDisplayWidget
+    // so process_algo_results() can push frames to it. The frame size may be
+    // the ROI dimensions (e.g. event_to_video at 128×128) and the widget
+    // scales it to fit.
+    const auto* info = algo_bridge_.find(algo_name);
+    if (info && info->display_mode == AlgoDisplayMode::Standalone) {
+        if (algo_name == "time_surface" || algo_name == "event_to_video" ||
+            algo_name == "isi_analyzer" || algo_name == "background_mask") {
+            auto* disp = new EventDisplayWidget(w);
+            w->set_display_widget(disp);
+        }
+    }
+
+    // For xyt_visualizer, also open the dedicated SpaceTimeDisplay window
+    // (the AlgoWindow provides parameter control only — the 3D rendering is
+    // handled by SpaceTimeDisplay's own QOpenGLWidget).
+    if (algo_name == "xyt_visualizer") {
+        on_open_xyt_view();
+    }
+
+    // Sync the Algorithm menu "Enable" checkbox so the user has consistent
+    // feedback regardless of which entry point they used.
+    if (auto* a = algo_actions_.value(algo_name)) a->setChecked(true);
+
+    // On close: disable the algo instance, uncheck the menu item, and remove
+    // the window from the map. The AlgoWindow emits `closing` from its
+    // closeEvent, which fires before Qt::WA_DeleteOnClose destroys it.
+    connect(w, &AlgoWindow::closing, this, [this, algo_name](const std::string&) {
+        algo_windows_.remove(algo_name);
+        auto inst = algo_bridge_.find_live(algo_name);
+        if (inst) inst->set_enabled(false);
+        if (auto* a = algo_actions_.value(algo_name)) a->setChecked(false);
+        // xyt_visualizer: also close the SpaceTimeDisplay.
+        if (algo_name == "xyt_visualizer" && xyt_display_) xyt_display_->close();
+    });
+
+    w->show();
+    w->raise();
+    if (info) {
+        statusBar()->showMessage(
+            tr("%1 window opened").arg(QString::fromStdString(info->display_name)), 2000);
+    }
+}
+
+// Legacy entry points kept for the Tools menu. They now delegate to the
+// generic AlgoWindow so the parameter panel is always available.
+void MainWindow::on_open_time_surface() {
+    on_open_algo_window("time_surface");
+}
+
+void MainWindow::on_open_event_to_video() {
+    on_open_algo_window("event_to_video");
+}
+
+void MainWindow::on_open_freq_detector() {
+    on_open_algo_window("freq_detector");
 }
 
 void MainWindow::on_open_xyt_view() {
@@ -1186,12 +1341,19 @@ void MainWindow::on_open_xyt_view() {
         xyt_algo_ = algo_bridge_.find_live("xyt_visualizer");
         if (!xyt_algo_) xyt_algo_ = algo_bridge_.create("xyt_visualizer");
         if (xyt_algo_) xyt_algo_->set_enabled(true);
+        if (auto* a = algo_actions_.value("xyt_visualizer")) a->setChecked(true);
         // The QOpenGLWidget is itself the window; on close we must null
-        // xyt_display_ (QPointer does this) and clear xyt_algo_ so the
-        // throttled push in install_algo_callback()'s `if (xyt_display_)`
-        // guard stops dispatching.
+        // xyt_display_ (QPointer does this), disable the algo instance so it
+        // stops processing events, and uncheck the menu item.
         connect(xyt_display_, &QObject::destroyed, this, [this]() {
-            xyt_algo_.reset();
+            if (xyt_algo_) {
+                xyt_algo_->set_enabled(false);
+                xyt_algo_.reset();
+            }
+            if (auto* a = algo_actions_.value("xyt_visualizer")) a->setChecked(false);
+            // Also close the AlgoWindow if open.
+            auto it = algo_windows_.find("xyt_visualizer");
+            if (it != algo_windows_.end() && it.value()) it.value()->close();
         });
         xyt_display_->resize(800, 600);
         // Install the algo callback if a camera is already connected so the
@@ -1201,64 +1363,6 @@ void MainWindow::on_open_xyt_view() {
     xyt_display_->show();
     xyt_display_->raise();
     statusBar()->showMessage(tr("XYT 3D window opened"), 2000);
-}
-
-void MainWindow::on_open_event_to_video() {
-    if (!event_to_video_window_) {
-        event_to_video_window_ = new QWidget(this, Qt::Window);
-        event_to_video_window_->setWindowTitle(tr("Event -> Video"));
-        event_to_video_window_->setAttribute(Qt::WA_DeleteOnClose);
-        // Host an EventDisplayWidget so the Standalone E2VID result (cv::Mat
-        // from EventToVideoBackend) can be shown as a real reconstructed
-        // intensity frame.
-        event_to_video_display_ = new EventDisplayWidget(event_to_video_window_);
-        auto* layout = new QVBoxLayout(event_to_video_window_);
-        layout->setContentsMargins(0, 0, 0, 0);
-        layout->addWidget(event_to_video_display_);
-        e2v_algo_ = algo_bridge_.find_live("event_to_video");
-        if (!e2v_algo_) e2v_algo_ = algo_bridge_.create("event_to_video");
-        if (e2v_algo_) e2v_algo_->set_enabled(true);
-        connect(event_to_video_window_, &QObject::destroyed, this, [this]() {
-            event_to_video_display_ = nullptr;
-            e2v_algo_.reset();
-        });
-        event_to_video_window_->resize(640, 480);
-    }
-    event_to_video_window_->show();
-    event_to_video_window_->raise();
-    statusBar()->showMessage(tr("Event -> Video window opened"), 2000);
-}
-
-void MainWindow::on_open_freq_detector() {
-    if (!freq_detector_window_) {
-        freq_detector_window_ = new QWidget(this, Qt::Window);
-        freq_detector_window_->setWindowTitle(tr("Frequency Detector"));
-        freq_detector_window_->setAttribute(Qt::WA_DeleteOnClose);
-        // FreqDetectorBackend emits a textual status string (peak frequency,
-        // confidence, etc.); use a monospace QLabel so the result, posted
-        // via process_algo_results(), renders as readable text.
-        freq_detector_label_ = new QLabel(freq_detector_window_);
-        QFont f(QStringLiteral("Monospace"));
-        f.setStyleHint(QFont::TypeWriter);
-        f.setPointSize(10);
-        freq_detector_label_->setFont(f);
-        freq_detector_label_->setAlignment(Qt::AlignTop | Qt::AlignLeft);
-        freq_detector_label_->setText(tr("Waiting for events..."));
-        auto* layout = new QVBoxLayout(freq_detector_window_);
-        layout->setContentsMargins(4, 4, 4, 4);
-        layout->addWidget(freq_detector_label_);
-        freq_algo_ = algo_bridge_.find_live("freq_detector");
-        if (!freq_algo_) freq_algo_ = algo_bridge_.create("freq_detector");
-        if (freq_algo_) freq_algo_->set_enabled(true);
-        connect(freq_detector_window_, &QObject::destroyed, this, [this]() {
-            freq_detector_label_ = nullptr;
-            freq_algo_.reset();
-        });
-        freq_detector_window_->resize(640, 480);
-    }
-    freq_detector_window_->show();
-    freq_detector_window_->raise();
-    statusBar()->showMessage(tr("Frequency Detector window opened"), 2000);
 }
 
 } // namespace gui

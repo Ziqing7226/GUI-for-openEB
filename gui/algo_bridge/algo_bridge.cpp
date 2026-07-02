@@ -112,6 +112,20 @@ AlgoParamSpec pbool(const std::string& k, const std::string& disp,
     return {k, disp, "bool", def, "", "", {}};
 }
 
+/// Returns the 5 ROI parameters (design §5.6.6) shared by all self-developed
+/// algorithms. Defaults: enabled, center 128×128 (x/y=-1 = auto-center,
+/// w/h=128). When enabled the algorithm only processes events inside the
+/// ROI region; the main display frame draws a yellow ROI rectangle.
+std::vector<AlgoParamSpec> roi_params() {
+    return {
+        pbool("roi_enabled", "ROI enable", "true"),
+        pint("roi_x", "ROI x (-1=center)", "-1", "-1", ""),
+        pint("roi_y", "ROI y (-1=center)", "-1", "-1", ""),
+        pint("roi_w", "ROI w (0=full)", "128", "0", ""),
+        pint("roi_h", "ROI h (0=full)", "128", "0", ""),
+    };
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -373,6 +387,8 @@ void AlgoBridge::register_self_cv() {
     auto add = [&](AlgoInfo a) {
         a.source = "self";
         a.category = "cv";
+        // All self-developed CV algorithms support ROI (design §5.6.6).
+        for (auto& p : roi_params()) a.params.push_back(std::move(p));
         registry_[a.name] = std::move(a);
     };
 
@@ -530,6 +546,8 @@ void AlgoBridge::register_self_analytics() {
     auto add = [&](AlgoInfo a) {
         a.source = "self";
         a.category = "analytics";
+        // All self-developed analytics algorithms support ROI (design §5.6.6).
+        for (auto& p : roi_params()) a.params.push_back(std::move(p));
         registry_[a.name] = std::move(a);
     };
 
@@ -539,10 +557,15 @@ void AlgoBridge::register_self_analytics() {
          {pint("window_us", "Window (us)", "10000", "1000", "100000"),
           pint("min_events", "Min events", "20", "5", "500")}});
 
-    // §4.4.2 Event To Video (3 modes)
+    // §4.4.2 Event To Video (3 modes) — complex: ROI + fps + window params.
     add({"event_to_video", "Event -> Video (E2VID)", "analytics", "self",
          AlgoDisplayMode::Standalone,
-         {penum("mode", "Mode", "0", {"0=BardowVariational", "1=InteractingMaps", "2=E2VID"})}});
+         {penum("mode", "Mode", "0", {"0=BardowVariational", "1=InteractingMaps", "2=E2VID"}),
+          pint("output_fps", "Output fps", "30", "1", "120"),
+          pfloat("window_ms", "Window (ms)", "15", "10", "500"),
+          pfloat("delta_t_ms", "Delta t (ms)", "15", "1", "50"),
+          pfloat("theta", "Theta", "0.22", "0.05", "0.5"),
+          pint("num_iterations", "Iterations", "30", "10", "500")}});
 
     // §4.4.3 Flow Statistics (requires ground-truth; Passive in real-time)
     add({"flow_statistics", "Flow Statistics", "analytics", "self",
