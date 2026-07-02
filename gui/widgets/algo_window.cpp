@@ -26,12 +26,18 @@ namespace gui {
 
 AlgoWindow::AlgoWindow(AlgoBridge* bridge, const std::string& algo_name,
                        QWidget* parent)
-    : QWidget(parent, Qt::Window),
+    : QDockWidget(parent),
       bridge_(bridge),
       algo_name_(algo_name) {
     setWindowTitle(QString::fromStdString(algo_name));
+    setObjectName(QString("AlgoDock_%1").arg(QString::fromStdString(algo_name)));
     setAttribute(Qt::WA_DeleteOnClose);
-    resize(560, 640);
+    setAllowedAreas(Qt::AllDockWidgetAreas);
+    setFeatures(QDockWidget::DockWidgetMovable |
+                QDockWidget::DockWidgetClosable |
+                QDockWidget::DockWidgetFloatable);
+    setMinimumWidth(360);
+    setMinimumHeight(300);
 
     // Look up the algo info and find/create the live instance.
     const AlgoInfo* info = bridge_ ? bridge_->find(algo_name_) : nullptr;
@@ -43,7 +49,9 @@ AlgoWindow::AlgoWindow(AlgoBridge* bridge, const std::string& algo_name,
         if (instance_) instance_->set_enabled(true);
     }
 
-    auto* outer = new QVBoxLayout(this);
+    // QDockWidget requires an inner content widget set via setWidget().
+    content_ = new QWidget(this);
+    auto* outer = new QVBoxLayout(content_);
     outer->setContentsMargins(4, 4, 4, 4);
     outer->setSpacing(4);
 
@@ -54,7 +62,7 @@ AlgoWindow::AlgoWindow(AlgoBridge* bridge, const std::string& algo_name,
     // install an EventDisplayWidget via set_display_widget() after construction.
     display_layout_ = new QVBoxLayout();
     display_layout_->setContentsMargins(0, 0, 0, 0);
-    status_label_ = new QLabel(tr("Waiting for events..."), this);
+    status_label_ = new QLabel(tr("Waiting for events..."), content_);
     status_label_->setAlignment(Qt::AlignTop | Qt::AlignLeft);
     QFont f(QStringLiteral("Monospace"));
     f.setStyleHint(QFont::TypeWriter);
@@ -64,6 +72,8 @@ AlgoWindow::AlgoWindow(AlgoBridge* bridge, const std::string& algo_name,
     display_widget_ = status_label_;
     display_layout_->addWidget(display_widget_);
     outer->addLayout(display_layout_, 1);
+
+    setWidget(content_);
 }
 
 void AlgoWindow::build_param_panel(QVBoxLayout* outer) {
@@ -75,7 +85,7 @@ void AlgoWindow::build_param_panel(QVBoxLayout* outer) {
         else algo_params.push_back(p);
     }
 
-    param_scroll_ = new QScrollArea(this);
+    param_scroll_ = new QScrollArea(content_);
     param_scroll_->setWidgetResizable(true);
     param_scroll_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     // Cap the parameter panel height so the display area stays visible.
@@ -221,7 +231,10 @@ void AlgoWindow::set_status_text(const QString& text) {
 
 void AlgoWindow::closeEvent(QCloseEvent* event) {
     emit closing(algo_name_);
-    QWidget::closeEvent(event);
+    // Explicitly accept so QDockWidget::close() / WA_DeleteOnClose proceed
+    // correctly. The default QWidget::closeEvent calls event->ignore(),
+    // which would prevent the dock from closing.
+    event->accept();
 }
 
 } // namespace gui

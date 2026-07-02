@@ -49,6 +49,8 @@
 class QLabel;
 class QAction;
 class QMenu;
+class QToolBar;
+class QDockWidget;
 
 namespace gui {
 
@@ -107,10 +109,15 @@ private slots:
 
 private:
     void build_menus();
+    void build_toolbar();
     void build_status_bar();
     void wire_signals();
     void update_palettes(int index);
     void forward_panel_message(const QString& msg, bool isError);
+
+    /// Shows/hides the right-edge sidebar tab based on dock visibility.
+    /// Called whenever the settings dock is toggled.
+    void update_sidebar_tab_visibility();
 
     void on_file_opened_for_playback(const QString& path);
 
@@ -191,6 +198,16 @@ private:
 
     /// View menu action to toggle the sidebar (settings dock) visibility.
     QAction* a_toggle_sidebar_{nullptr};
+
+    /// Main toolbar (top) with prominent toggle buttons for sidebar,
+    /// playback panel, and layout actions.
+    QToolBar* main_toolbar_{nullptr};
+
+    /// Thin vertical toolbar on the right edge — visible only when the
+    /// sidebar is hidden, so the user always has a way to bring it back.
+    /// Acts as the "collapsed marker" requested in the UX pass.
+    QToolBar* sidebar_tab_{nullptr};
+    QAction* a_show_sidebar_{nullptr};  ///< Action inside sidebar_tab_.
 
     /// Draws the ROI rectangle of any enabled self-developed algorithm
     /// (design §5.6.6: all self-developed algos support ROI) on the main

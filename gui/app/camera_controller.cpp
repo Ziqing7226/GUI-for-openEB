@@ -216,7 +216,8 @@ void CameraController::setup_camera(Metavision::Camera&& cam, bool is_file) {
             // (the SDK dispatches this on the same thread that stop() would
             // join). Defer to the GUI thread.
             QMetaObject::invokeMethod(this, [this]() {
-                if (camera_ && camera_->is_running()) {
+                if (!camera_) return;  // already disconnected via teardown()
+                if (camera_->is_running()) {
                     try { camera_->stop(); } catch (...) {}
                 }
                 emit stopped();

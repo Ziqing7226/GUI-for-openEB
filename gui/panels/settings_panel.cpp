@@ -96,9 +96,9 @@ SettingsPanel::SettingsPanel(AlgoBridge* bridge, FileConverter* converter, QWidg
     file_tools_ = new FileToolsPanel(converter, basic_host);
     add_group(tr("File Tools"), file_tools_, converter != nullptr);
 
-    // Phase 9: calibration — placeholder until CalibrationWizard is installed.
+    // Calibration — placeholder until CalibrationWizard is installed.
     calibration_group_ = add_placeholder(tr("Calibration"),
-                                         tr("Intrinsic calibration wizard — Phase 9."));
+                                         tr("Open via menu: Calibration → Intrinsic Wizard..."));
 
     basic_layout->addStretch(1);
     basic_scroll->setWidget(basic_host);

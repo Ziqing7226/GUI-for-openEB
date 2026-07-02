@@ -62,10 +62,10 @@ void AlgorithmsPanel::build_ui() {
         by_cat[QString::fromStdString(a.category)].push_back(&a);
     }
 
-    static const QMap<QString, QString> cat_titles = {
-        {"cv",              tr("CV Algorithms (Phase 6-7)")},
-        {"analytics",       tr("Analytics (Phase 8)")},
-        {"calibration",     tr("Calibration (Phase 9)")},
+    const QMap<QString, QString> cat_titles = {
+        {"cv",              tr("Computer Vision")},
+        {"analytics",       tr("Analytics")},
+        {"calibration",     tr("Calibration")},
     };
 
     for (auto it = by_cat.constBegin(); it != by_cat.constEnd(); ++it) {
@@ -277,7 +277,12 @@ void AlgorithmsPanel::apply_param(const std::string& algo_name,
     if (it == live_instances_.end() || !it->second) {
         auto inst = bridge_ ? bridge_->find_or_create(algo_name) : nullptr;
         if (!inst) return;
-        it = live_instances_.emplace(algo_name, inst).first;
+        // Use operator[] (not emplace) so a pre-existing null entry is
+        // replaced. std::unordered_map::emplace is a no-op if the key
+        // already exists, which would leave a null shared_ptr and crash
+        // on the following dereference.
+        live_instances_[algo_name] = inst;
+        it = live_instances_.find(algo_name);
     }
     it->second->set_param(param_key, value);
 }

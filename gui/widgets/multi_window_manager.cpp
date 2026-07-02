@@ -3,7 +3,6 @@
 #include "multi_window_manager.h"
 
 #include <QMdiSubWindow>
-#include <QTimer>
 
 #include "display/event_display_widget.h"
 
@@ -15,7 +14,10 @@ MultiWindowManager::MultiWindowManager(QMainWindow* parent)
     // spawned sub-windows are actually visible. Parenting the area to the
     // main window without placing it in a layout would leave it invisible
     // and "Add Display Window" would be a no-op.
+    // setWindowFlag(Qt::Window) is required so the QMainWindow becomes a
+    // real top-level window instead of an embedded child widget.
     host_window_ = new QMainWindow(parent ? parent->window() : nullptr);
+    host_window_->setWindowFlag(Qt::Window, true);
     host_window_->setAttribute(Qt::WA_DeleteOnClose, false);
     host_window_->setWindowTitle(tr("Display Windows"));
     mdi_area_ = new QMdiArea(host_window_);
@@ -48,6 +50,10 @@ EventDisplayWidget* MultiWindowManager::add_display(const QString& title) {
         sub_windows_.erase(
             std::remove(sub_windows_.begin(), sub_windows_.end(), sub),
             sub_windows_.end());
+        // Auto-hide the host window when the last sub-window is closed.
+        if (sub_windows_.empty() && host_window_) {
+            host_window_->hide();
+        }
     });
     emit window_added(display);
 
@@ -72,13 +78,13 @@ void MultiWindowManager::cascade() {
 void MultiWindowManager::close_all() {
     if (mdi_area_) mdi_area_->closeAllSubWindows();
     // closeAllSubWindows() posts close events that are processed in the next
-    // event-loop iteration; clearing sub_windows_ now would leave dangling
-    // pointers briefly. Defer the clear so the destroyed() lambdas handle
-    // removal as each sub-window is actually destroyed.
-    QTimer::singleShot(0, this, [this]() {
-        sub_windows_.clear();
+    // event-loop iteration. The destroyed() lambdas (connected in
+    // add_display) remove each entry from sub_windows_ as it is destroyed.
+    // We only need to hide the host window; if no sub-windows were open,
+    // hide immediately.
+    if (sub_windows_.empty()) {
         if (host_window_) host_window_->hide();
-    });
+    }
 }
 
 } // namespace gui

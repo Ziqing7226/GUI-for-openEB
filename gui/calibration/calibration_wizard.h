@@ -9,6 +9,7 @@
 #define GUI_CALIBRATION_CALIBRATION_WIZARD_H
 
 #include <QDialog>
+#include <QPointer>
 #include <memory>
 
 #include "algo/calibration/intrinsic.h"
@@ -80,7 +81,7 @@ private:
     QImage in_last_preview_;
 
     CameraController* camera_{nullptr};
-    EventDisplayWidget* display_{nullptr};
+    QPointer<EventDisplayWidget> display_{nullptr};
 };
 
 } // namespace gui

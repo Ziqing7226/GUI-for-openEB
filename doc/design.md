@@ -1388,13 +1388,13 @@ openEB 未提供光流算法，需自研。结果以箭头/颜色图叠加到主
 | 菜单 | 选项 |
 |------|------|
 | **File** | Open Camera, Open File (RAW/HDF5/DAT), Save/Load Settings, Export→AVI, Export→HDF5, File Tools→Convert to HDF5, File Tools→Convert to CSV, File Tools→Convert to DAT, File Tools→Cutter, File Tools→Info, Exit |
-| **View** | Show/Hide Panels (Information/Statistics/Display/Biases/ROI/ESP/Trigger/Preprocessing/Algorithms), Fullscreen, Reset Layout |
+| **View** | Toggle Sidebar (Ctrl+Shift+S), Toggle Playback Panel (Ctrl+Shift+P), Reset Layout, Save/Load Layout, Fullscreen (F11) |
 | **Camera** | Connect/Disconnect, Device List, Platform Info, Monitor (Temperature/Power), Sync Multi-Camera, HAL Showcase |
 | **Preprocess** | ROI Filter, Polarity Filter, Polarity Invert, Flip X/Y, Rotate (0°/90°/180°/270°), Transpose, Rescale, Adaptive Rate Split |
-| **Frame Mode** | Integration, Diff, Histogram, Time Decay, Contrast Map, Periodic, On-Demand |
+| **Frame Mode** | Integration, Diff, Time Decay |
 | **Algorithm** | Noise Filter, Hot Pixel Filter, Orientation Filter, Direction Selective Filter, Optical Flow (Sparse), Blob Detect, Object Tracker, Corner Detect, Line Segment (ELiSeD), Hough Line, Hough Circle, Orientation Cluster, LIF Cluster, Background Mask, Perspective Undistort, Trigger Synced, Bandpass Filter, EIS (Optical Gyro), Ultra Slow Motion, XYT 3D, Time Surface, Active Marker, Event→Video, Flow Statistics, ISI Analyzer, Particle Counter, Auto Bias, Freq Detector, Overlay（其中 XYT 3D / Time Surface / Event→Video / Freq Detector / ISI Analyzer 为可勾选项，详见 §5.6.6） |
 | **Calibration** | Intrinsic Wizard |
-| **Tools** | Frame Composer, Data Synchronizer, Timing Profiler |
+| **Tools** | Add Display Window, Tile Windows, Cascade Windows, Close All Windows |
 | **Help** | About, Documentation, Software Info |
 
 ### 5.5 快捷键建议
@@ -1482,7 +1482,7 @@ openEB 未提供光流算法，需自研。结果以箭头/颜色图叠加到主
 
 #### 5.6.5 实现技术
 
-基于 Qt 6 的 `QDockWidget` 或 `QMdiArea`（多文档接口）实现可停靠/浮动子窗口；主窗口采用 `QMainWindow`，中央区域为主显示，子窗口作为 dock widget 可拖拽至四周或浮动。布局自动重排通过 `QMainWindow.resizeDocks` / `QMdiArea.tileSubWindows` 实现。
+基于 Qt 6 的 `QDockWidget` 实现可停靠/浮动子窗口；主窗口采用 `QMainWindow`，中央区域为主显示（EventDisplayWidget），设置面板停靠在右侧，算法窗口（AlgoWindow）默认停靠在左侧并可标签页叠加。顶部工具栏提供侧边栏切换、窗口排列、全屏等快捷操作。侧边栏收起时右侧边缘显示竖条标记按钮用于恢复。布局自动重排通过 `QMainWindow.resizeDocks` / `tabifyDockWidget` 实现。
 
 #### 5.6.6 🆕 算法 ROI 处理区（全算法支持，128×128 中心默认）
 
@@ -1518,18 +1518,19 @@ openEB 未提供光流算法，需自研。结果以箭头/颜色图叠加到主
    - **"算法ROI"**（`checkable QAction`，默认勾选）：勾选时设置 `roi_enabled=true`，算法仅处理 ROI 内事件；取消勾选时设置 `roi_enabled=false`，算法处理全幅事件
    - **"Configure..."**（普通 `QAction`）：打开该算法的 AlgoWindow 独立窗口
 2. **使用 `triggered(bool)` 信号**（非 `toggled`）避免程序化 `setChecked` 触发重入
-3. **AlgoWindow**（`gui/widgets/algo_window.h`）：
-   - 顶部为滚动参数面板，自动从 `AlgoParamSpec` 生成控件（QSpinBox/QDoubleSpinBox/QComboBox/QLineEdit），ROI 参数分组置顶
+3. **AlgoWindow**（`gui/widgets/algo_window.h`，继承 `QDockWidget`）：
+   - 停靠在主窗口左侧，多个算法窗口标签页叠加；用户可拖拽至任意边缘、浮出或重新排列
+   - 内部 content widget 顶部为滚动参数面板，自动从 `AlgoParamSpec` 生成控件（QSpinBox/QDoubleSpinBox/QComboBox/QLineEdit），ROI 参数分组置顶
    - 底部为显示区域：Standalone 帧类算法（`time_surface`/`event_to_video`/`isi_analyzer`/`background_mask`）安装 `EventDisplayWidget` 显示算法输出帧；**自研 Overlay 算法也安装 `EventDisplayWidget`，作为 ROI 放大视图**（见下文）；其余算法使用 `QLabel` 显示状态文本
    - `xyt_visualizer` 额外维护独立的 `SpaceTimeDisplay`（QOpenGLWidget 3D 渲染），AlgoWindow 仅提供参数控制
-   - 关闭 AlgoWindow → 触发 `closing` 信号 → `set_enabled(false)` + 菜单 "Enable" 取消勾选
+   - 关闭 AlgoWindow → `closeEvent` 显式 accept → 触发 `closing` 信号 → `set_enabled(false)` + 侧边栏算法面板取消勾选 + `WA_DeleteOnClose` 自动回收
 4. **主显示帧 ROI 叠加**：`process_algo_results()` 中调用 `draw_roi_overlays()`，遍历所有启用的自研算法（`source == "self"`），对每个 `roi_enabled=true` 的算法在主显示帧上绘制黄色矩形框 + 算法名标注
 5. **ROI 放大视图**（Overlay 算法）：`process_algo_results()` 的 Overlay 分支在主帧上绘制完算法图元（boxes/lines/points/circles/texts）后，若该算法 `roi_enabled=true` 且其 AlgoWindow 已开，则从已标注的主帧裁剪 ROI 区域（`QImage::copy(QRect)`）并推送到 AlgoWindow 的 `EventDisplayWidget`。该窗口以 ROI 尺寸独立显示"放大后的算法结果"，便于用户在小 ROI 区域内观察细节；ROI 未启用时不推送（保持 `QLabel` 等待状态）。
 6. **参数面板**：AlgoWindow 与 Algorithms 面板均可调节参数，参数变更即时同步到 AlgoInstance
 
 **手动停用方式**：
-- Algorithm 菜单 → 算法子菜单 → 取消勾选 "Enable"
-- 关闭对应 AlgoWindow
+- 侧边栏"算法模块"面板 → 取消勾选算法的 "Enable" 复选框
+- 关闭对应 AlgoWindow（dock 标签页 X 按钮）
 - 取消勾选 "算法ROI"（保留全幅处理）或在 AlgoWindow 中调整 ROI 尺寸为 `0`（全幅）
 
 ---
@@ -1543,11 +1544,11 @@ openEB 未提供光流算法，需自研。结果以箭头/颜色图叠加到主
 1. **批次硬上限**：`push_events()` 收到一批事件时，若数量 `n > kMaxBatchEvents`（默认 `50000`），仅保留**最近的** `kMaxBatchEvents` 个事件（丢弃旧事件），并递增 `flood_strikes_` 计数。
 2. **连续超限判定**：若某批次 `n ≤ kMaxBatchEvents`，重置 `flood_strikes_ = 0`（偶发尖峰不触发停用）。
 3. **自动停用阈值**：当 `flood_strikes_ ≥ kFloodStrikes`（默认 `4`，即连续 4 批均超限）时，设置 `overloaded_ = true` 并将 `enabled_ = false`，算法实例从此停止处理事件。
-4. **用户重新启用**：用户在 Algorithm 菜单重新勾选 "Enable" 时，`set_enabled(true)` 同时清零 `overloaded_` 与 `flood_strikes_`，算法从干净状态重启。
+4. **用户重新启用**：用户在侧边栏"算法模块"面板重新勾选 "Enable" 时，`set_enabled(true)` 同时清零 `overloaded_` 与 `flood_strikes_`，算法从干净状态重启。
 
 **GUI 反馈**：
-- `is_overloaded()` 暴露停用原因，`process_algo_results()` 在遍历 live 实例时检测到该状态，于状态栏显示 "auto-disabled: event rate too high (re-enable to retry)"，并在对应 AlgoWindow 的状态标签显示 "AUTO-DISABLED: event flooding detected. Re-enable from the Algorithm menu."
-- 菜单 "Enable" 复选框因 `enabled_=false` 自动取消勾选，与用户手动停用行为一致。
+- `is_overloaded()` 暴露停用原因，`process_algo_results()` 在遍历 live 实例时检测到该状态，于状态栏显示 "auto-disabled: event rate too high (re-enable to retry)"，并在对应 AlgoWindow 的状态标签显示 "AUTO-DISABLED: event flooding detected. Re-enable from the sidebar."
+- 侧边栏 "Enable" 复选框因 `enabled_=false` 自动取消勾选，与用户手动停用行为一致。
 
 **XYT 缓冲区硬上限**：`XYTVisualizer`（`algo/cv/xyt_visualizer.h`）额外维护 `kMaxBuffer = 200000` 的环形缓冲区硬上限，即使 flood guard 仍允许事件通过，缓冲区超出上限时也会丢弃最旧事件（`pop_front`），防止 3D 点云内存无界增长。
 

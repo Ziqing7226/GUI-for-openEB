@@ -166,7 +166,7 @@ void CalibrationWizard::on_intrinsic_capture() {
         static_cast<gui_algo::CalibrationPattern>(in_pattern_->currentData().toInt()),
         in_cols_->value(), in_rows_->value(),
         static_cast<float>(in_square_->value()));
-    auto* display = display_;
+    auto* display = display_.data();
     if (!display) {
         QMessageBox::warning(this, tr("Calibration"), tr("Cannot access the event display."));
         return;

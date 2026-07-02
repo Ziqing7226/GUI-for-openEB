@@ -86,16 +86,17 @@ void RecorderController::stop() {
     // cleanly. The SDK does NOT do this implicitly on stream teardown.
     if (controller_) {
         if (auto* cam = controller_->camera_handle()) {
-            try {
-                if (auto* stream = cam->get_device().get_facility<Metavision::I_EventsStream>()) {
-                    // Drain the final hardware buffer before closing the log.
-                    // stop_log_raw_data only flushes already-pulled data to
-                    // disk; events that arrived between the last flush_timer
-                    // tick (20 ms) and now would otherwise be lost.
-                    stream->get_latest_raw_data();
-                    stream->stop_log_raw_data();
-                }
-            } catch (...) {}
+            if (auto* stream = cam->get_device().get_facility<Metavision::I_EventsStream>()) {
+                // Drain the final hardware buffer before closing the log.
+                // stop_log_raw_data only flushes already-pulled data to
+                // disk; events that arrived between the last flush_timer
+                // tick (20 ms) and now would otherwise be lost.
+                try { stream->get_latest_raw_data(); } catch (...) {}
+                // stop_log_raw_data must run even if get_latest_raw_data
+                // threw, otherwise the RAW file is left without a clean
+                // footer and the most recent events are lost.
+                try { stream->stop_log_raw_data(); } catch (...) {}
+            }
         }
     }
     QString p = path_;

@@ -1,4 +1,4 @@
-// gui/widgets/algo_window.h — generic algorithm parameter + display window.
+// gui/widgets/algo_window.h — generic algorithm parameter + display dock.
 //
 // Design §5.6.6: every self-developed algorithm exposes an AlgoWindow after
 // being enabled. The window auto-generates a parameter panel from the
@@ -9,13 +9,19 @@
 // algorithms the display area shows the algorithm's status string and the
 // visual output remains on the main display frame.
 //
-// The window is opened by MainWindow when the algorithm's "Enable" menu item
-// is checked, and is closed automatically when the algorithm is disabled.
-// Closing the window disables the algorithm and unchecks the menu item.
+// AlgoWindow is a QDockWidget so it docks into the MainWindow (default:
+// left edge), can be dragged to any edge, floated, or tabbed with other
+// algo windows. This keeps all algorithm outputs within the main window
+// frame instead of spawning separate floating windows.
+//
+// The window is opened by MainWindow when the algorithm is enabled, and is
+// closed automatically when the algorithm is disabled. Closing the window
+// disables the algorithm and unchecks the sidebar checkbox.
 
 #ifndef GUI_WIDGETS_ALGO_WINDOW_H
 #define GUI_WIDGETS_ALGO_WINDOW_H
 
+#include <QDockWidget>
 #include <QLabel>
 #include <QString>
 #include <QWidget>
@@ -31,7 +37,7 @@ namespace gui {
 
 class EventDisplayWidget;
 
-class AlgoWindow : public QWidget {
+class AlgoWindow : public QDockWidget {
     Q_OBJECT
 public:
     /// @brief Constructs an AlgoWindow for the named algorithm.
@@ -66,7 +72,7 @@ public:
 signals:
     /// @brief Emitted when the window is about to close (closeEvent).
     /// MainWindow connects this to disable the algo instance and uncheck
-    /// the menu item.
+    /// the sidebar checkbox.
     void closing(const std::string& algo_name);
 
 protected:
@@ -86,6 +92,7 @@ private:
     AlgoInfo info_;
     std::shared_ptr<AlgoInstance> instance_;
 
+    QWidget* content_{nullptr};  ///< Inner widget set via QDockWidget::setWidget.
     QScrollArea* param_scroll_{nullptr};
     QLabel* status_label_{nullptr};
     QWidget* display_widget_{nullptr};

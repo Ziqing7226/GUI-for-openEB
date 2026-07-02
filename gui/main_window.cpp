@@ -14,6 +14,9 @@
 #include <QMessageBox>
 #include <QSet>
 #include <QStatusBar>
+#include <QStyle>
+#include <QToolBar>
+#include <QToolButton>
 #include <QVBoxLayout>
 
 #include <vector>
@@ -101,6 +104,7 @@ MainWindow::MainWindow(QWidget* parent)
     layout_manager_ = std::make_unique<LayoutManager>(this, this);
 
     build_menus();
+    build_toolbar();
     build_status_bar();
     wire_signals();
 
@@ -112,6 +116,17 @@ MainWindow::MainWindow(QWidget* parent)
     // Try restoring the previous layout (silent on failure).
     layout_manager_->load_default();
 
+    // Force the sidebar visible on startup regardless of the restored
+    // layout state — the user explicitly requested it be shown by default.
+    // Sync the toggle action to match.
+    if (settings_dock_) {
+        settings_dock_->setVisible(true);
+    }
+    if (a_toggle_sidebar_) {
+        a_toggle_sidebar_->setChecked(true);
+    }
+    update_sidebar_tab_visibility();
+
     // Populate the device list on startup.
     on_refresh_devices();
 }
@@ -120,7 +135,17 @@ MainWindow::~MainWindow() = default;
 
 void MainWindow::closeEvent(QCloseEvent* event) {
     if (layout_manager_) layout_manager_->save_default();
-    // Delete lazily-created child windows before our members are destroyed.
+
+    // ---- Phase 1: stop all data sources BEFORE deleting child widgets. ----
+    // The CD callback and frame pipeline run on the camera's data thread.
+    // If we delete child widgets (AlgoWindow displays, xyt_display_, etc.)
+    // while the pipeline is still active, queued invokeMethod lambdas may
+    // dereference already-deleted widgets.
+    remove_algo_callback();   // explicitly remove the CD callback
+    recorder_.stop();
+    camera_.disconnect();     // stops the data thread + frame pipeline
+
+    // ---- Phase 2: delete lazily-created child windows. ----
     // Their destroyed() handlers access MainWindow members (e.g. camera_,
     // algo_cd_cb_id_) that would already be gone by the time ~QWidget
     // runs its automatic child cleanup.
@@ -128,20 +153,28 @@ void MainWindow::closeEvent(QCloseEvent* event) {
         delete calibration_wizard_;
         // calibration_wizard_ is nulled by the destroyed signal handler.
     }
-    // Standalone algorithm windows — same reason as above: their
-    // destroyed() handlers reset AlgoInstance shared_ptrs and QPointer
-    // members that reference MainWindow state.
+    // Standalone algorithm windows — use close() (not delete) so that
+    // closeEvent fires, the `closing` signal is emitted, and the cleanup
+    // handler disables the AlgoInstance. WA_DeleteOnClose schedules
+    // deleteLater() for actual destruction; any remaining docks are also
+    // deleted by Qt's parent-child cleanup when MainWindow is destroyed.
+    // Collect pointers first and clear the hash: the `closing` handler
+    // calls algo_windows_.remove(name), which would invalidate iterators
+    // if we were still iterating.
+    std::vector<QPointer<AlgoWindow>> algo_ptrs;
+    algo_ptrs.reserve(algo_windows_.size());
     for (auto it = algo_windows_.begin(); it != algo_windows_.end(); ++it) {
-        if (it.value()) { delete it.value().data(); }
+        if (it.value()) algo_ptrs.push_back(it.value());
     }
     algo_windows_.clear();
+    for (auto& ptr : algo_ptrs) {
+        if (ptr) ptr->close();
+    }
     if (xyt_display_) { delete xyt_display_.data(); }
     // Pre-delete child widgets that hold raw pointers to MainWindow members.
     // Without this, ~QObject child cleanup runs after member destructors,
     // causing use-after-free in widget destructors.
     if (export_dialog_) { delete export_dialog_; export_dialog_ = nullptr; }
-    recorder_.stop();
-    camera_.disconnect();
     event->accept();
 }
 
@@ -213,12 +246,12 @@ void MainWindow::build_menus() {
     a_toggle_sidebar_->setCheckable(true);
     a_toggle_sidebar_->setChecked(true);
     a_toggle_sidebar_->setShortcut(QKeySequence("Ctrl+Shift+S"));
-    connect(a_toggle_sidebar_, &QAction::toggled, this, [this](bool on) {
-        if (settings_dock_) settings_dock_->setVisible(on);
-    });
+    // The toggled -> setVisible connection is wired in wire_signals() after
+    // the sidebar tab is created, so the tab visibility stays in sync.
     auto* pb_toggle = m_view->addAction(tr("Toggle Playback Panel"));
     pb_toggle->setCheckable(true);
     pb_toggle->setChecked(false);
+    pb_toggle->setShortcut(QKeySequence("Ctrl+Shift+P"));
     connect(pb_toggle, &QAction::toggled, this, [this](bool on) {
         auto* dock = findChild<QDockWidget*>("PlaybackDock");
         if (dock) dock->setVisible(on);
@@ -228,7 +261,10 @@ void MainWindow::build_menus() {
     m_view->addAction(tr("Load Layout..."), this, &MainWindow::on_load_layout);
     m_view->addSeparator();
     m_view->addAction(tr("&Fullscreen"), this,
-                      [this]() { showFullScreen(); }, QKeySequence("F11"));
+                      [this]() {
+                          if (isFullScreen()) showNormal();
+                          else showFullScreen();
+                      }, QKeySequence("F11"));
 
     // Camera — only display-interaction controls and presets that are NOT
     // in the sidebar's Devices panel. Connect/Disconnect/Refresh live in
@@ -273,21 +309,91 @@ void MainWindow::build_menus() {
         if (multi_window_) multi_window_->close_all();
         else statusBar()->showMessage(tr("No display windows open."), 3000);
     });
-    m_tools_->addSeparator();
-    auto* a_fc = m_tools_->addAction(tr("&Frame Composer..."));
-    a_fc->setEnabled(false);
-    a_fc->setToolTip(tr("Not yet implemented (planned for a future phase)."));
-    auto* a_ds = m_tools_->addAction(tr("&Data Synchronizer..."));
-    a_ds->setEnabled(false);
-    a_ds->setToolTip(tr("Not yet implemented (planned for a future phase)."));
-    auto* a_tp = m_tools_->addAction(tr("&Timing Profiler..."));
-    a_tp->setEnabled(false);
-    a_tp->setToolTip(tr("Not yet implemented (planned for a future phase)."));
 
     // Help
     auto* m_help = mb->addMenu(tr("&Help"));
     m_help->addAction(tr("&About"), this, &MainWindow::on_about);
     m_help->addAction(tr("About &Qt"), this, &QApplication::aboutQt);
+}
+
+void MainWindow::build_toolbar() {
+    // Main toolbar — prominent, always-visible toggles for the most-used
+    // view controls. The sidebar toggle here is the "醒目位置按钮" requested
+    // by the user: it's at the top of the window, checkable, and uses a
+    // standard icon so it stands out from the menu items.
+    main_toolbar_ = addToolBar(tr("Main"));
+    main_toolbar_->setObjectName("MainToolbar");
+    main_toolbar_->setMovable(false);
+    main_toolbar_->setIconSize({20, 20});
+    main_toolbar_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+
+    // Sidebar toggle — the primary action on the toolbar.
+    if (a_toggle_sidebar_) {
+        // Make the toolbar button show the checked state visually.
+        auto* btn = qobject_cast<QToolButton*>(main_toolbar_->widgetForAction(a_toggle_sidebar_));
+        if (btn) btn->setCheckable(true);
+        main_toolbar_->addAction(a_toggle_sidebar_);
+    }
+
+    main_toolbar_->addSeparator();
+
+    // Tile / reset layout — quick access for multi-window arrangement.
+    auto* a_tile = main_toolbar_->addAction(style()->standardIcon(QStyle::SP_TitleBarNormalButton),
+                                            tr("Tile"));
+    connect(a_tile, &QAction::triggered, this, &MainWindow::on_tile_windows);
+
+    auto* a_reset = main_toolbar_->addAction(style()->standardIcon(QStyle::SP_BrowserReload),
+                                             tr("Reset Layout"));
+    connect(a_reset, &QAction::triggered, this, &MainWindow::on_reset_layout);
+
+    main_toolbar_->addSeparator();
+
+    // Fullscreen toggle on the toolbar for discoverability.
+    auto* a_fs = main_toolbar_->addAction(style()->standardIcon(QStyle::SP_TitleBarMaxButton),
+                                          tr("Fullscreen"));
+    connect(a_fs, &QAction::triggered, this, [this]() {
+        if (isFullScreen()) showNormal();
+        else showFullScreen();
+    });
+
+    // --- Right-edge sidebar tab (collapsed marker) ---
+    // A thin vertical toolbar docked to the right edge. It's visible ONLY
+    // when the sidebar is hidden, giving the user a clear way to bring it
+    // back without hunting through the View menu. The arrow icon makes it
+    // obvious that clicking it expands something to the right.
+    sidebar_tab_ = new QToolBar(tr("Sidebar Tab"), this);
+    sidebar_tab_->setObjectName("SidebarTab");
+    sidebar_tab_->setMovable(false);
+    sidebar_tab_->setFloatable(false);
+    sidebar_tab_->setIconSize({22, 22});
+    sidebar_tab_->setToolButtonStyle(Qt::ToolButtonIconOnly);
+    addToolBar(Qt::RightToolBarArea, sidebar_tab_);
+    a_show_sidebar_ = sidebar_tab_->addAction(
+        style()->standardIcon(QStyle::SP_ArrowLeft), tr("Show Sidebar"));
+    a_show_sidebar_->setToolTip(tr("Show Sidebar (Ctrl+Shift+S)"));
+    auto* sb_btn = qobject_cast<QToolButton*>(sidebar_tab_->widgetForAction(a_show_sidebar_));
+    if (sb_btn) {
+        sb_btn->setAutoRaise(true);
+        sb_btn->setFixedWidth(28);
+    }
+    connect(a_show_sidebar_, &QAction::triggered, this, [this]() {
+        if (settings_dock_) {
+            settings_dock_->setVisible(true);
+            if (a_toggle_sidebar_) {
+                QSignalBlocker b(a_toggle_sidebar_);
+                a_toggle_sidebar_->setChecked(true);
+            }
+        }
+        update_sidebar_tab_visibility();
+    });
+    sidebar_tab_->setVisible(false);  // hidden until sidebar is closed
+}
+
+void MainWindow::update_sidebar_tab_visibility() {
+    const bool dock_visible = settings_dock_ && settings_dock_->isVisible();
+    if (sidebar_tab_) {
+        sidebar_tab_->setVisible(!dock_visible);
+    }
 }
 
 void MainWindow::build_status_bar() {
@@ -303,6 +409,24 @@ void MainWindow::build_status_bar() {
 }
 
 void MainWindow::wire_signals() {
+    // Sidebar toggle (menu action + toolbar button) <-> settings dock.
+    // The dock's visibilityChanged signal keeps the toggle action checked
+    // state and the collapsed-side-tab visibility in sync no matter how the
+    // dock is shown/hidden (menu, toolbar, dock X button, or layout restore).
+    if (a_toggle_sidebar_ && settings_dock_) {
+        connect(a_toggle_sidebar_, &QAction::toggled, this, [this](bool on) {
+            if (settings_dock_) settings_dock_->setVisible(on);
+        });
+        connect(settings_dock_, &QDockWidget::visibilityChanged, this,
+                [this](bool visible) {
+                    if (a_toggle_sidebar_) {
+                        QSignalBlocker b(a_toggle_sidebar_);
+                        a_toggle_sidebar_->setChecked(visible);
+                    }
+                    update_sidebar_tab_visibility();
+                });
+    }
+
     // Devices panel <-> controller
     auto* dp = settings_->devices_panel();
     connect(dp, &DevicesPanel::refresh_requested, this, &MainWindow::on_refresh_devices);
@@ -354,10 +478,10 @@ void MainWindow::wire_signals() {
         camera_.start();
     });
     connect(&camera_, &CameraController::disconnected, this, [this]() {
-        // Phase 10: the camera was torn down in teardown(); the CD callback
-        // was removed by the SDK. Just clear our ID so a fresh one can be
-        // registered on the next connect.
-        algo_cd_cb_id_.reset();
+        // Explicitly remove the CD callback before clearing the ID, so the
+        // SDK data thread stops calling our lambda before any MainWindow
+        // members are destroyed.
+        remove_algo_callback();
         prev_frame_ts_ = 0;
         settings_->information_panel()->clear();
         settings_->statistics_panel()->clear();
@@ -443,10 +567,9 @@ void MainWindow::wire_signals() {
             [this](int idx) {
                 // Frame modes map to accumulation-time presets (the underlying
                 // CDFrameGenerator only supports accumulation rendering).
-                // Only feasible modes (Diff/Integration/Time Decay) are
-                // selectable; the others are disabled.
-                const int us[] = {10000, 50000, 30000, 30000, 10000, 10000, 10000};
-                const int accumulation = (idx >= 0 && idx < 7) ? us[idx] : 10000;
+                // 0: Diff Frame (10 ms), 1: Integration (50 ms), 2: Time Decay (30 ms).
+                const int us[] = {10000, 50000, 30000};
+                const int accumulation = (idx >= 0 && idx < 3) ? us[idx] : 10000;
                 camera_.frame_pipeline()->set_accumulation_time_us(accumulation);
                 // Sync the accumulation slider/spin so the two controls don't
                 // show stale values (D4 fix).
@@ -810,9 +933,9 @@ void MainWindow::process_algo_results(QImage& frame) {
                     text += QStringLiteral("\n  ");
                     text += QString::fromStdString(t.text);
                 }
-                AlgoWindow* w = wit.value();
+                QPointer<AlgoWindow> w = wit.value();
                 QMetaObject::invokeMethod(this, [w, text]() {
-                    w->set_status_text(text);
+                    if (w) w->set_status_text(text);
                 }, Qt::QueuedConnection);
             }
             continue;
@@ -941,7 +1064,7 @@ void MainWindow::process_algo_results(QImage& frame) {
             // xyt_visualizer is handled separately via SpaceTimeDisplay.
             auto wit = algo_windows_.find(name);
             if (wit != algo_windows_.end() && wit.value()) {
-                AlgoWindow* w = wit.value();
+                QPointer<AlgoWindow> w = wit.value();
                 if (r.has_frame && !r.frame.empty()) {
                     if (auto* disp = w->frame_display()) {
                         QImage q = mat_to_qimage(r.frame);
@@ -956,7 +1079,7 @@ void MainWindow::process_algo_results(QImage& frame) {
                         text += QString::fromStdString(t.text);
                     }
                     QMetaObject::invokeMethod(this, [w, text]() {
-                        w->set_status_text(text);
+                        if (w) w->set_status_text(text);
                     }, Qt::QueuedConnection);
                 }
             }
@@ -1071,6 +1194,7 @@ void MainWindow::on_load_layout() {
         this, tr("Load Layout"), {}, tr("Layout JSON (*.json);;All Files (*)"));
     if (!path.isEmpty()) {
         if (layout_manager_->load(path)) {
+            update_sidebar_tab_visibility();
             statusBar()->showMessage(tr("Layout loaded from %1").arg(path), 3000);
         } else {
             QMessageBox::warning(this, tr("Load Layout"), tr("Could not load layout."));
@@ -1080,6 +1204,7 @@ void MainWindow::on_load_layout() {
 
 void MainWindow::on_reset_layout() {
     if (layout_manager_) layout_manager_->reset_layout();
+    update_sidebar_tab_visibility();
     statusBar()->showMessage(tr("Layout reset to default."), 3000);
 }
 
@@ -1104,14 +1229,13 @@ void MainWindow::on_refresh_devices() {
 void MainWindow::on_about() {
     QMessageBox::about(this, tr("About GUI for openEB"),
         tr("<h3>GUI for openEB</h3>"
-           "<p>Phases 1-12 — Qt 6 + OpenEB 5.2.0.</p>"
+           "<p>Qt 6 + OpenEB 5.2.0.</p>"
            "<p>Camera discovery, real-time OpenGL event display, statistics, "
            "Bias / ROI / ESP / Trigger panels, recording & playback, HDF5 / AVI "
            "export, JSON config with presets, OpenEB filter-chain preprocessing, "
            "file conversion tools, calibration wizard, "
            "30 self-developed CV/analytics algorithms with overlay/replace/"
-           "standalone display modes, XYT 3D point cloud, and more.</p>"
-           "<p>See doc/design.md for the full roadmap.</p>"));
+           "standalone display modes, XYT 3D point cloud, and more.</p>"));
 }
 
 // ---------------------------------------------------------------------------
@@ -1124,11 +1248,12 @@ void MainWindow::on_open_algo_window(const std::string& algo_name) {
     if (it != algo_windows_.end() && it.value()) {
         it.value()->show();
         it.value()->raise();
+        it.value()->activateWindow();
         return;
     }
 
-    // Create the AlgoWindow. The constructor finds/creates the live
-    // AlgoInstance and enables it.
+    // Create the AlgoWindow (a QDockWidget). The constructor finds/creates
+    // the live AlgoInstance and enables it.
     auto* w = new AlgoWindow(&algo_bridge_, algo_name, this);
     if (!w->instance()) {
         // Unknown algorithm — clean up and bail out.
@@ -1153,13 +1278,13 @@ void MainWindow::on_open_algo_window(const std::string& algo_name) {
     if (info && info->display_mode == AlgoDisplayMode::Standalone) {
         if (algo_name == "time_surface" || algo_name == "event_to_video" ||
             algo_name == "isi_analyzer" || algo_name == "background_mask") {
-            auto* disp = new EventDisplayWidget(w);
+            auto* disp = new EventDisplayWidget(nullptr);
             w->set_display_widget(disp);
         }
     } else if (info && info->display_mode == AlgoDisplayMode::Overlay &&
                info->source == "self") {
         // ROI zoom view for overlay algorithms (design §5.6.6).
-        auto* disp = new EventDisplayWidget(w);
+        auto* disp = new EventDisplayWidget(nullptr);
         w->set_display_widget(disp);
     }
 
@@ -1173,6 +1298,21 @@ void MainWindow::on_open_algo_window(const std::string& algo_name) {
     // Sync the AlgorithmsPanel checkbox (blocked, no re-entry).
     if (auto* ap = settings_->algorithms_panel()) {
         ap->set_algo_enabled(algo_name, true);
+    }
+
+    // Dock the AlgoWindow into the main window. Default to the left edge so
+    // it doesn't conflict with the settings sidebar (right) or playback bar
+    // (bottom). If another algo dock is already there, tab this one with it
+    // so multiple algo windows share a single dock slot (the user can switch
+    // between them via the tab bar).
+    addDockWidget(Qt::LeftDockWidgetArea, w);
+    // Find any other already-docked algo window to tabify with.
+    for (auto tit = algo_windows_.constBegin(); tit != algo_windows_.constEnd(); ++tit) {
+        AlgoWindow* other = tit.value().data();
+        if (other && other != w && !other->isFloating()) {
+            tabifyDockWidget(other, w);
+            break;
+        }
     }
 
     // On close: disable the algo instance and remove the window from the map.
