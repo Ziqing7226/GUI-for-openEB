@@ -7,17 +7,22 @@
 #include <QApplication>
 #include <QCloseEvent>
 #include <QDockWidget>
+#include <QEvent>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QHBoxLayout>
 #include <QLabel>
 #include <QMenuBar>
 #include <QMessageBox>
+#include <QMouseEvent>
+#include <QPushButton>
 #include <QSet>
 #include <QStatusBar>
 #include <QStyle>
 #include <QToolBar>
 #include <QToolButton>
 #include <QVBoxLayout>
+#include <QWindow>
 
 #include <vector>
 
@@ -69,6 +74,13 @@ MainWindow::MainWindow(QWidget* parent)
       playback_(nullptr),
       exporter_(nullptr),
       file_converter_(nullptr) {
+    // Remove the native WM title bar and replace it with a custom title bar
+    // widget (CustomTitleBar) whose background color follows the application
+    // theme.  This is the same approach VSCode uses (frameless BrowserWindow
+    // + custom titlebar part drawn in HTML/CSS).  The native title bar color
+    // is controlled by the window manager and cannot be changed reliably
+    // from Qt, so we draw our own.
+    setWindowFlags(Qt::Window | Qt::FramelessWindowHint);
     setWindowTitle(QStringLiteral("EB plus"));
     resize(1280, 720);
 
@@ -113,6 +125,25 @@ MainWindow::MainWindow(QWidget* parent)
     build_toolbar();
     build_status_bar();
     wire_signals();
+
+    // --- Frameless-window title bar built on the native QMenuBar ---
+    // With Qt::FramelessWindowHint the QMenuBar sits at the very top of
+    // the window.  We add the window title (left corner) and min/max/close
+    // buttons (right corner) directly to the menu bar, and install an
+    // event filter so dragging the menu bar moves the window
+    // (QWindow::startSystemMove).  This is simpler and more reliable than
+    // setMenuWidget().
+    build_title_bar_controls();
+
+    // Edge/corner resize handles — since the window is frameless, the WM
+    // no longer provides resize borders.  These 8 invisible grips call
+    // QWindow::startSystemResize() so the WM handles the actual resize.
+    using P = ResizeGrip::Position;
+    for (auto p : {P::Left, P::Right, P::Top, P::Bottom,
+                   P::TopLeft, P::TopRight, P::BottomLeft, P::BottomRight}) {
+        auto* grip = new ResizeGrip(p, this);
+        resize_grips_.push_back(grip);
+    }
 
     // Capture the factory layout (all docks in their default positions) so
     // reset_layout() can restore it. Must be called before load_default()
@@ -182,6 +213,95 @@ void MainWindow::closeEvent(QCloseEvent* event) {
     // causing use-after-free in widget destructors.
     if (export_dialog_) { delete export_dialog_; export_dialog_ = nullptr; }
     event->accept();
+}
+
+void MainWindow::resizeEvent(QResizeEvent* event) {
+    QMainWindow::resizeEvent(event);
+    // Reposition the frameless-window resize grips to the new edges.
+    const QRect r = rect();
+    for (auto* grip : resize_grips_) {
+        if (grip) grip->reposition(r);
+    }
+}
+
+bool MainWindow::eventFilter(QObject* obj, QEvent* event) {
+    // Drag the window by dragging the menu bar (title bar).
+    if (obj == menuBar()) {
+        if (event->type() == QEvent::MouseButtonPress) {
+            auto* me = static_cast<QMouseEvent*>(event);
+            if (me->button() == Qt::LeftButton) {
+                if (auto* handle = windowHandle()) {
+                    handle->startSystemMove();
+                }
+            }
+        } else if (event->type() == QEvent::MouseButtonDblClick) {
+            auto* me = static_cast<QMouseEvent*>(event);
+            if (me->button() == Qt::LeftButton) {
+                if (isMaximized()) showNormal();
+                else showMaximized();
+            }
+        }
+    }
+    return QMainWindow::eventFilter(obj, event);
+}
+
+/// @brief Adds the window title (left) and min/max/close buttons (right) to
+/// the menu bar, turning it into a frameless-window title bar.
+void MainWindow::build_title_bar_controls() {
+    auto* mb = menuBar();
+
+    // Left corner: window title.
+    auto* title_label = new QLabel(QStringLiteral("EB plus"), mb);
+    title_label->setStyleSheet(QStringLiteral(
+        "background: transparent; border: none; padding: 0 8px;"
+    ));
+    mb->setCornerWidget(title_label, Qt::TopLeftCorner);
+
+    // Right corner: window control buttons.
+    auto* controls = new QWidget(mb);
+    controls->setStyleSheet(QStringLiteral(
+        "QWidget { background: transparent; }"
+        "QPushButton { background: transparent; border: none; "
+        "  min-width: 40px; max-width: 40px; }"
+        "QPushButton:hover { background: rgba(128,128,128,60); }"
+        "QPushButton:pressed { background: rgba(128,128,128,100); }"
+    ));
+    auto* layout = new QHBoxLayout(controls);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(0);
+
+    auto make_btn = [this](QStyle::StandardPixmap pix, const QString& tip) {
+        auto* btn = new QPushButton;
+        btn->setIcon(style()->standardIcon(pix));
+        btn->setIconSize(QSize(16, 16));
+        btn->setToolTip(tip);
+        btn->setFocusPolicy(Qt::NoFocus);
+        btn->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Expanding);
+        return btn;
+    };
+
+    auto* btn_min   = make_btn(QStyle::SP_TitleBarMinButton,  tr("Minimize"));
+    auto* btn_max   = make_btn(QStyle::SP_TitleBarMaxButton,  tr("Maximize"));
+    auto* btn_close = make_btn(QStyle::SP_TitleBarCloseButton, tr("Close"));
+
+    connect(btn_min, &QPushButton::clicked, this, [this]() {
+        showMinimized();
+    });
+    connect(btn_max, &QPushButton::clicked, this, [this]() {
+        if (isMaximized()) showNormal();
+        else showMaximized();
+    });
+    connect(btn_close, &QPushButton::clicked, this, [this]() {
+        close();
+    });
+
+    layout->addWidget(btn_min);
+    layout->addWidget(btn_max);
+    layout->addWidget(btn_close);
+    mb->setCornerWidget(controls, Qt::TopRightCorner);
+
+    // Let the menu bar act as a drag region for the frameless window.
+    mb->installEventFilter(this);
 }
 
 // ---------------------------------------------------------------------------

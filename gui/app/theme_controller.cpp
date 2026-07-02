@@ -189,10 +189,11 @@ void ThemeController::sync_menu_actions() {
 
 void ThemeController::load_settings() {
     QSettings s;
-    color_ = static_cast<Color>(s.value("theme/color", static_cast<int>(Color::LightGray)).toInt());
+    // Default color: Blue. Default mode: Follow System.
+    color_ = static_cast<Color>(s.value("theme/color", static_cast<int>(Color::LightBlue)).toInt());
     mode_  = static_cast<Mode>(s.value("theme/mode",  static_cast<int>(Mode::FollowSystem)).toInt());
     // Clamp to valid enum ranges to guard against corrupted settings.
-    if (color_ < Color::LightGray || color_ > Color::LightBlue) color_ = Color::LightGray;
+    if (color_ < Color::LightGray || color_ > Color::LightBlue) color_ = Color::LightBlue;
     if (mode_  < Mode::FollowSystem || mode_  > Mode::AlwaysDark)  mode_  = Mode::FollowSystem;
 }
 
@@ -213,8 +214,16 @@ void ThemeController::apply_stylesheet() {
     if (input_bg == base) input_bg = base.darker(112);
     QColor alt_bg = base.darker(108);
     if (alt_bg == base) alt_bg = base.lighter(108);
+    // Title bar (QMenuBar) shade — slightly darker than the main background
+    // in light mode, slightly lighter in dark mode, so the title bar reads
+    // as a distinct visual band (VSCode pattern).
+    const int lum = (0.299 * base.red() + 0.587 * base.green() + 0.114 * base.blue());
+    QColor title_bg = (lum < 128) ? base.lighter(125) : base.darker(115);
+    if (title_bg == base) title_bg = (lum < 128) ? base.lighter(115) : base.darker(120);
+
     const QString input_hex = input_bg.isValid() ? input_bg.name() : bg;
     const QString alt_hex = alt_bg.isValid() ? alt_bg.name() : bg;
+    const QString title_hex = title_bg.isValid() ? title_bg.name() : alt_hex;
 
     const QString qss = QStringLiteral(
         "QMainWindow, QWidget { background-color: %1; color: %2; }"
@@ -228,17 +237,17 @@ void ThemeController::apply_stylesheet() {
         "QCheckBox, QRadioButton, QLabel { color: %2; }"
         "QToolBar { background-color: %4; border: none; spacing: 2px; padding: 2px; }"
         "QStatusBar { background-color: %4; color: %2; }"
-        "QMenuBar { background-color: %4; color: %2; }"
+        "QMenuBar { background-color: %5; color: %2; }"
         "QMenuBar::item:selected { background-color: %3; }"
         "QMenu { background-color: %4; color: %2; border: 1px solid #888; }"
         "QMenu::item:selected { background-color: %3; }"
         "QListWidget, QTreeWidget, QTableWidget { background-color: %3; color: %2; }"
         "QHeaderView::section { background-color: %4; color: %2; padding: 2px; border: 1px solid #888; }"
-    ).arg(bg, fg, input_hex, alt_hex);
+    ).arg(bg, fg, input_hex, alt_hex, title_hex);
     window_->setStyleSheet(qss);
 
-    // Also set the application palette so that native window decorations
-    // (title bar on some WMs) and palette-derived widgets pick up the theme.
+    // Also set the application palette so that palette-derived widgets pick
+    // up the theme.
     QPalette pal;
     pal.setColor(QPalette::Window, base);
     pal.setColor(QPalette::WindowText, QColor(fg));

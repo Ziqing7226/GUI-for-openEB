@@ -42,6 +42,7 @@ endif()
 # Phase 10 — multi-window / layout manager.
 list(APPEND GUI_SOURCES
     widgets/multi_window_manager.cpp
+    widgets/custom_title_bar.cpp
     config/layout_manager.cpp
 )
 

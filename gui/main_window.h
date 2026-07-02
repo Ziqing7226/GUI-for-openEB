@@ -45,6 +45,7 @@
 #include "recorder/recorder_controller.h"
 #include "display/space_time_display.h"
 #include "widgets/algo_window.h"
+#include "widgets/custom_title_bar.h"
 #include "widgets/multi_window_manager.h"
 
 class QLabel;
@@ -67,6 +68,8 @@ public:
 
 protected:
     void closeEvent(QCloseEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
+    bool eventFilter(QObject* obj, QEvent* event) override;
 
 signals:
     /// Emitted from the frame_ready handler after process_algo_results() has
@@ -112,6 +115,7 @@ private:
     void build_menus();
     void build_toolbar();
     void build_status_bar();
+    void build_title_bar_controls();
     void wire_signals();
     void update_palettes(int index);
     void forward_panel_message(const QString& msg, bool isError);
@@ -219,6 +223,9 @@ private:
     /// Application theme controller (background color + light/dark mode).
     /// Owned by MainWindow; the SettingsPanel sidebar exposes its UI.
     ThemeController theme_;
+
+    /// Edge/corner resize handles for the frameless window.
+    std::vector<ResizeGrip*> resize_grips_;
 };
 
 } // namespace gui

@@ -98,7 +98,7 @@ private:
     void sync_menu_actions();
 
     QMainWindow* window_{nullptr};
-    Color color_{Color::LightGray};
+    Color color_{Color::LightBlue};
     Mode mode_{Mode::FollowSystem};
 
     /// Cached system color scheme, refreshed from
