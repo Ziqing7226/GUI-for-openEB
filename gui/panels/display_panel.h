@@ -27,6 +27,11 @@ public:
     /// @brief Sets the active frame mode (0..6). See design §3.2.2.
     void set_frame_mode(int index);
 
+    /// @brief Sets the accumulation time (ms) and updates the slider/spin
+    /// without emitting signals. Used to sync the UI when a frame-mode preset
+    /// is selected so the two controls don't show stale values.
+    void set_accumulation_time_ms(double ms);
+
 signals:
     void accumulation_time_changed_us(int us);
     void color_palette_changed(int index); // 0=Dark,1=Light,2=CoolWarm,3=Gray

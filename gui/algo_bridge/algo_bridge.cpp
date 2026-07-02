@@ -169,6 +169,13 @@ std::shared_ptr<AlgoInstance> AlgoBridge::create(const std::string& name) {
     return inst;
 }
 
+std::shared_ptr<AlgoInstance> AlgoBridge::find_or_create(const std::string& name) {
+    if (auto existing = find_live(name)) {
+        return existing;
+    }
+    return create(name);
+}
+
 void AlgoBridge::set_sensor_dimensions(int width, int height) {
     sensor_w_ = (width > 0) ? width : 1280;
     sensor_h_ = (height > 0) ? height : 720;

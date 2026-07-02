@@ -85,7 +85,7 @@ private:
     mutable std::mutex mutex_;
     std::unordered_map<std::string, std::string> param_values_;
     std::unique_ptr<AlgoBackend> backend_;
-    bool enabled_{true};
+    bool enabled_{false};
 };
 
 /// @brief Unified algorithm-call bridge (design §3.8).
@@ -101,7 +101,14 @@ public:
 
     /// @brief Creates an algorithm instance by name.
     /// @return Shared pointer to the instance, or nullptr if unknown.
+    /// @note Always constructs a NEW instance and overwrites any existing live
+    /// entry. Prefer find_or_create() to preserve already-set parameters.
     std::shared_ptr<AlgoInstance> create(const std::string& name);
+
+    /// @brief Returns the live instance for @p name if one exists, otherwise
+    /// creates one. Use this instead of create() to avoid discarding
+    /// parameters that were set before the instance was enabled.
+    std::shared_ptr<AlgoInstance> find_or_create(const std::string& name);
 
     /// @brief Sets the actual sensor dimensions so new instances are created
     /// with the correct width/height instead of the 1280x720 default.

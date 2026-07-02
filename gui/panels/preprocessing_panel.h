@@ -37,6 +37,9 @@ public slots:
 signals:
     void info_message(const QString& msg);
     void error_message(const QString& msg);
+    /// @brief Emitted when a stage's enabled state changes (user or program).
+    /// MainWindow uses this to sync the Preprocess menu actions.
+    void stage_toggled(const QString& stage, bool on);
 
 private:
     void build_ui();

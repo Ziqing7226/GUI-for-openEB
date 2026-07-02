@@ -47,9 +47,8 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/temporal/temporal_plot_window.cpp")
     )
 endif()
 
-# Phase 11 — jAER-inspired display / widgets / bias-tweaks (design §1.6).
-# Header-only utilities (multiline_text.h, adaptive_renderer.h,
-# contrast_controller.h) need no source entries.
+# Phase 11 — jAER-inspired display / widgets (design §1.6).
+# Header-only utility multiline_text.h needs no source entry.
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/display/space_time_display.cpp")
     list(APPEND GUI_SOURCES
         widgets/target_labeler.cpp
@@ -58,7 +57,6 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/display/space_time_display.cpp")
         widgets/algo_window.cpp
         display/frame_annotator.cpp
         display/space_time_display.cpp
-        panels/bias_tweaks_panel.cpp
     )
 endif()
 

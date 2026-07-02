@@ -206,6 +206,9 @@ void RoiPanel::toggle_enable(bool on) {
             emit error_message(QString::fromUtf8(e.what()));
             QSignalBlocker b(enable_check_);
             enable_check_->setChecked(false);
+            // Clear any overlay rectangle drawn by a prior roi_applied(true):
+            // enabling failed so the facility is effectively off.
+            emit roi_applied(0, 0, 0, 0, false);
         }
     } else {
         try {

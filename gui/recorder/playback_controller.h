@@ -42,6 +42,9 @@ public:
     bool is_playing() const { return playing_; }
     bool loop() const { return loop_; }
     double speed() const { return speed_; }
+    /// @brief Returns the path of the file currently open for playback, or
+    /// an empty string if none. Used to pre-fill the Export dialog.
+    const QString& current_file() const { return path_; }
     Metavision::timestamp duration_us() const;
     Metavision::timestamp position_us() const;
 

@@ -98,4 +98,11 @@ void DisplayPanel::set_frame_mode(int index) {
     }
 }
 
+void DisplayPanel::set_accumulation_time_ms(double ms) {
+    QSignalBlocker bs(accum_slider_);
+    QSignalBlocker bp(accum_spin_);
+    accum_spin_->setValue(ms);
+    accum_slider_->setValue(static_cast<int>(ms * 10));
+}
+
 } // namespace gui

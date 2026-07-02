@@ -70,9 +70,24 @@ QJsonObject ConfigManager::capture_roi(CameraController* c) const {
     QJsonObject o;
     auto* r = c->roi_facility();
     if (!r) return o;
-    o["enabled"] = r->is_enabled();
-    // I_ROI rows/cols aren't directly queryable in a portable way; persist
-    // the enable flag and rely on the panel for the rectangle geometry.
+    try {
+        o["enabled"] = r->is_enabled();
+        o["mode"] = static_cast<int>(r->get_mode());
+        const auto wins = r->get_windows();
+        if (!wins.empty()) {
+            // Persist the first window's geometry so the rectangle is
+            // restored on apply. Multi-window configs are not common in this
+            // GUI (the RoiPanel exposes a single window) so we keep the
+            // first one only.
+            const auto& w0 = wins.front();
+            QJsonObject geom;
+            geom["x"] = w0.x;
+            geom["y"] = w0.y;
+            geom["width"] = w0.width;
+            geom["height"] = w0.height;
+            o["window"] = geom;
+        }
+    } catch (...) {}
     return o;
 }
 
@@ -89,7 +104,11 @@ QJsonObject ConfigManager::capture_esp(CameraController* c) const {
     }
     if (auto* tf = c->trail_filter_facility()) {
         QJsonObject t;
-        try { t["enabled"] = tf->is_enabled(); } catch (...) {}
+        try {
+            t["enabled"] = tf->is_enabled();
+            t["type"] = static_cast<int>(tf->get_type());
+            t["threshold"] = static_cast<qint64>(tf->get_threshold());
+        } catch (...) {}
         o["trail_filter"] = t;
     }
     if (auto* erc = c->erc_facility()) {
@@ -181,10 +200,27 @@ bool ConfigManager::apply_biases(CameraController* c, const QJsonObject& o, QStr
 bool ConfigManager::apply_roi(CameraController* c, const QJsonObject& o, QString& /*err*/) const {
     auto* r = c->roi_facility();
     if (!r) return false;
-    if (o.contains("enabled")) {
-        // "enabled" toggles ROI on/off. Mode (ROI vs RONI) is left to the ROI panel.
-        try { r->enable(o.value("enabled").toBool()); } catch (...) { return false; }
-    }
+    // Order matters per the I_ROI contract: a window must be set before
+    // enable(true) is called. So configure mode + window first, then enable.
+    try {
+        if (o.contains("mode")) {
+            r->set_mode(static_cast<Metavision::I_ROI::Mode>(o.value("mode").toInt()));
+        }
+        if (o.contains("window")) {
+            const auto geom = o.value("window").toObject();
+            const int x = geom.value("x").toInt();
+            const int y = geom.value("y").toInt();
+            const int w = geom.value("width").toInt();
+            const int h = geom.value("height").toInt();
+            if (w > 0 && h > 0) {
+                Metavision::I_ROI::Window win(x, y, w, h);
+                r->set_windows({win});
+            }
+        }
+        if (o.contains("enabled")) {
+            r->enable(o.value("enabled").toBool());
+        }
+    } catch (...) { return false; }
     return true;
 }
 
@@ -206,7 +242,20 @@ bool ConfigManager::apply_esp(CameraController* c, const QJsonObject& o, QString
     if (o.contains("trail_filter")) {
         auto* tf = c->trail_filter_facility();
         const auto t = o.value("trail_filter").toObject();
-        if (tf && t.contains("enabled")) tf->enable(t.value("enabled").toBool());
+        if (tf) {
+            // Apply type/threshold before enabling so the filter is configured
+            // with the persisted parameters when it starts processing.
+            if (t.contains("type")) {
+                try { tf->set_type(static_cast<Metavision::I_EventTrailFilterModule::Type>(
+                                       t.value("type").toInt())); }
+                catch (...) { ok = false; }
+            }
+            if (t.contains("threshold")) {
+                try { tf->set_threshold(static_cast<uint32_t>(t.value("threshold").toVariant().toLongLong())); }
+                catch (...) { ok = false; }
+            }
+            if (t.contains("enabled")) tf->enable(t.value("enabled").toBool());
+        }
     }
     if (o.contains("erc")) {
         auto* erc = c->erc_facility();

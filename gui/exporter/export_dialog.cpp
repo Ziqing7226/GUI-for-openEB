@@ -61,7 +61,15 @@ ExportDialog::ExportDialog(ExporterController* controller, QWidget* parent)
     spn_quality_ = new QSpinBox(this);
     spn_quality_->setRange(1, 100);
     spn_quality_->setValue(90);
-    form->addRow(tr("Quality (AVI):"), spn_quality_);
+    // quality only selects the codec (>=50 -> H.264, <50 -> MJPG); it is not
+    // forwarded to the encoder as a quantization parameter. The label and
+    // tooltip make this explicit so users don't expect fine-grained quality
+    // control that the CvVideoRecorder backend doesn't provide.
+    spn_quality_->setToolTip(tr("Selects the AVI codec: values >= 50 use H.264, "
+                                "values < 50 use MJPG. Does not control encoder "
+                                "quantization — CvVideoRecorder exposes no "
+                                "quality parameter."));
+    form->addRow(tr("Codec select (AVI, ≥50=H.264):"), spn_quality_);
 
     chk_color_ = new QCheckBox(tr("Color"), this);
     chk_color_->setChecked(true);

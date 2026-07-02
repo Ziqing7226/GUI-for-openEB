@@ -155,11 +155,34 @@ void FileConverter::run_convert(const QString& src, const QString& dst, Format f
                 callback_error.store(true, std::memory_order_release);
             } catch (...) {}
         });
+    // Query total duration so the polling loop can report progress. Files
+    // without OfflineStreamingControl (e.g. live streams — though convert is
+    // offline-only) simply leave duration at 0 and no progress is emitted.
+    Metavision::timestamp duration_us = 0;
+    try {
+        auto& osc = cam.offline_streaming_control();
+        if (osc.is_ready()) duration_us = osc.get_duration();
+    } catch (...) {}
+
     cam.start();
     while (!cancel_) {
         if (callback_error.load(std::memory_order_acquire)) break;
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
         if (!cam.is_running()) break;
+        // Report progress based on the last decoded timestamp. Emitting from
+        // a std::thread is safe: AutoConnection queues the call to the
+        // FileConverter's thread (the main thread).
+        if (duration_us > 0) {
+            try {
+                const auto last = cam.get_last_timestamp();
+                if (last > 0) {
+                    double r = static_cast<double>(last)
+                               / static_cast<double>(duration_us);
+                    if (r < 0) r = 0; else if (r > 1.0) r = 1.0;
+                    emit progress(r);
+                }
+            } catch (...) {}
+        }
     }
     try { cam.stop(); } catch (...) {}
     cam.cd().remove_callback(id);
@@ -251,6 +274,10 @@ void FileConverter::run_cut(const QString& src, const QString& dst,
                 callback_error.store(true, std::memory_order_release);
             } catch (...) {}
         });
+    // Progress denominator: the time span we're actually keeping.
+    const Metavision::timestamp span_us =
+        (end_us > start_us) ? (end_us - start_us) : 0;
+
     cam.start();
     while (!cancel_) {
         if (callback_error.load(std::memory_order_acquire)) {
@@ -263,6 +290,18 @@ void FileConverter::run_cut(const QString& src, const QString& dst,
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
         if (!cam.is_running()) break;
+        // Report progress relative to the [start_us, end_us] window.
+        if (span_us > 0) {
+            try {
+                const auto last = cam.get_last_timestamp();
+                if (last > start_us) {
+                    double r = static_cast<double>(last - start_us)
+                               / static_cast<double>(span_us);
+                    if (r < 0) r = 0; else if (r > 1.0) r = 1.0;
+                    emit progress(r);
+                }
+            } catch (...) {}
+        }
     }
     try { cam.stop(); } catch (...) {}
     cam.cd().remove_callback(id);

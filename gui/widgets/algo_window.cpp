@@ -39,7 +39,7 @@ AlgoWindow::AlgoWindow(AlgoBridge* bridge, const std::string& algo_name,
         info_ = *info;
         setWindowTitle(QString::fromStdString(info_.display_name));
         instance_ = bridge_->find_live(algo_name_);
-        if (!instance_) instance_ = bridge_->create(algo_name_);
+        if (!instance_) instance_ = bridge_->find_or_create(algo_name_);
         if (instance_) instance_->set_enabled(true);
     }
 
@@ -100,6 +100,21 @@ void AlgoWindow::build_param_panel(QVBoxLayout* outer) {
             if (p.type == "enum") {
                 auto* cmb = new QComboBox(gb);
                 for (const auto& v : p.enum_values) cmb->addItem(QString::fromStdString(v));
+                // Sync initial value from the live instance (if any), falling
+                // back to the default. Entries may be "N=Label" — match on
+                // the "N" prefix.
+                std::string cur = p.default_value;
+                if (instance_) {
+                    const std::string v = instance_->get_param(param_key);
+                    if (!v.empty()) cur = v;
+                }
+                for (size_t i = 0; i < p.enum_values.size(); ++i) {
+                    const auto& ev = p.enum_values[i];
+                    const auto eq = ev.find('=');
+                    const std::string token = (eq == std::string::npos)
+                        ? ev : ev.substr(0, eq);
+                    if (token == cur) { cmb->setCurrentIndex(static_cast<int>(i)); break; }
+                }
                 w = cmb;
                 connect(cmb, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
                         [this, param_key, cmb](int) {

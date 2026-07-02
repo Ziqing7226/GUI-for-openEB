@@ -46,20 +46,17 @@ void AlgorithmsPanel::build_ui() {
         return;
     }
 
-    // Group algorithms by category.  list_algos() returns by value, so we
-    // must keep a long-lived copy (algos_) and point into that — pointing
-    // into the temporary would dangle after the loop.
+    // Group algorithms by category. Only self-developed algorithms are shown
+    // here: OpenEB-wrapped filters have no real backend in AlgoBridge and are
+    // controlled via the Preprocess menu / PreprocessingPanel instead.
     algos_ = bridge_->list_algos();
     QMap<QString, std::vector<const AlgoInfo*>> by_cat;
     for (const auto& a : algos_) {
+        if (a.source != "self") continue;
         by_cat[QString::fromStdString(a.category)].push_back(&a);
     }
 
     static const QMap<QString, QString> cat_titles = {
-        {"openeb_filter",   tr("OpenEB Filters")},
-        {"openeb_frame",    tr("Frame Generators")},
-        {"openeb_preproc",  tr("Preprocessors")},
-        {"openeb_util",     tr("Utilities")},
         {"cv",              tr("CV Algorithms (Phase 6-7)")},
         {"analytics",       tr("Analytics (Phase 8)")},
         {"calibration",     tr("Calibration (Phase 9)")},
@@ -72,7 +69,14 @@ void AlgorithmsPanel::build_ui() {
         form->setContentsMargins(6, 6, 6, 6);
 
         for (const auto* a : it.value()) {
+            // OpenEB-wrapped algorithms (source != "self") have no real
+            // backend in AlgoBridge — their parameters don't take effect here.
+            // They are controlled via the Preprocess menu / PreprocessingPanel
+            // FilterChain. Skip them to avoid presenting dead controls.
+            if (a->source != "self") continue;
+
             auto* cb = new QCheckBox(QString::fromStdString(a->display_name), gb);
+            checkboxes_[a->name] = cb;
             form->addRow(cb);
 
             // Parameter editor (shown only when enabled).
@@ -82,6 +86,19 @@ void AlgorithmsPanel::build_ui() {
             params_host->setVisible(false);
 
             const std::string algo_name = a->name;
+            // Match a default value to an enum_values entry. Entries may be
+            // "N=Label" (match on the "N" prefix) or plain values.
+            auto match_enum_index = [](const std::vector<std::string>& vals,
+                                       const std::string& def) -> int {
+                for (size_t i = 0; i < vals.size(); ++i) {
+                    const auto& v = vals[i];
+                    const auto eq = v.find('=');
+                    const std::string token = (eq == std::string::npos)
+                        ? v : v.substr(0, eq);
+                    if (token == def) return static_cast<int>(i);
+                }
+                return -1;
+            };
             for (const auto& p : a->params) {
                 const QString disp = QString::fromStdString(p.display_name);
                 const std::string param_key = p.key;
@@ -89,6 +106,8 @@ void AlgorithmsPanel::build_ui() {
                 if (p.type == "enum") {
                     auto* cmb = new QComboBox(params_host);
                     for (const auto& v : p.enum_values) cmb->addItem(QString::fromStdString(v));
+                    const int idx = match_enum_index(p.enum_values, p.default_value);
+                    if (idx >= 0) cmb->setCurrentIndex(idx);
                     w = cmb;
                     connect(cmb, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
                             [this, algo_name, param_key, cmb](int) {
@@ -97,6 +116,7 @@ void AlgorithmsPanel::build_ui() {
                 } else if (p.type == "bool") {
                     auto* cmb = new QComboBox(params_host);
                     cmb->addItem("false"); cmb->addItem("true");
+                    cmb->setCurrentIndex(p.default_value == "true" || p.default_value == "1" ? 1 : 0);
                     w = cmb;
                     connect(cmb, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
                             [this, algo_name, param_key, cmb](int) {
@@ -139,11 +159,10 @@ void AlgorithmsPanel::build_ui() {
             connect(cb, &QCheckBox::toggled, this, [this, params_host, cb, a, algo_name](bool on) {
                 params_host->setVisible(on);
                 if (on) {
-                    // Create (or reuse) a live instance and apply the current
-                    // parameter widget values so the instance starts in sync
-                    // with the UI. Without this, parameter persistence
-                    // (save/load algo params) would see no live instances.
-                    auto inst = bridge_->create(algo_name);
+                    // Reuse the live instance if one already exists (e.g. the
+                    // user edited a parameter before enabling). create() would
+                    // discard those parameters by building a fresh instance.
+                    auto inst = bridge_->find_or_create(algo_name);
                     if (inst) {
                         inst->set_enabled(true);
                         live_instances_[algo_name] = inst;
@@ -170,15 +189,25 @@ void AlgorithmsPanel::apply_param(const std::string& algo_name,
                                   const std::string& param_key,
                                   const std::string& value) {
     // Lazily create the instance so parameter edits are recorded even before
-    // the enable checkbox is toggled. This makes ConfigManager save/load
-    // capture the latest UI values regardless of enable state.
+    // the enable checkbox is toggled. find_or_create preserves any previously
+    // set parameters instead of overwriting them with defaults.
     auto it = live_instances_.find(algo_name);
     if (it == live_instances_.end() || !it->second) {
-        auto inst = bridge_ ? bridge_->create(algo_name) : nullptr;
+        auto inst = bridge_ ? bridge_->find_or_create(algo_name) : nullptr;
         if (!inst) return;
         it = live_instances_.emplace(algo_name, inst).first;
     }
     it->second->set_param(param_key, value);
+}
+
+void AlgorithmsPanel::set_algo_enabled(const std::string& name, bool on) {
+    auto it = checkboxes_.find(name);
+    if (it == checkboxes_.end() || !it->second) return;
+    // Block signals so this programmatic change does not re-enter the toggled
+    // handler (which would create/enable instances and emit algorithm_toggled,
+    // causing sync loops with the Algorithm menu / AlgoWindow).
+    QSignalBlocker b(it->second);
+    it->second->setChecked(on);
 }
 
 } // namespace gui

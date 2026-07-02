@@ -27,6 +27,9 @@ void PreprocessingPanel::build_ui() {
     outer->setContentsMargins(0, 0, 0, 0);
     group_ = new QGroupBox(tr("Preprocessing"), this);
     auto* form = new QFormLayout(group_);
+    auto* hint = new QLabel(tr("Note: Noise/Hot-pixel filters are under the Algorithm menu."), group_);
+    hint->setWordWrap(true);
+    form->addRow(hint);
 
     auto make_row = [&](const QString& stage, const QString& label) {
         auto* cb = new QCheckBox(label, group_);
@@ -173,11 +176,20 @@ void PreprocessingPanel::apply_stage(const QString& stage) {
     if (cb->isChecked()) {
         emit info_message(tr("Preprocess: %1 on").arg(stage));
     }
+    emit stage_toggled(stage, cb->isChecked());
 }
 
 void PreprocessingPanel::on_camera_connected(CameraController* controller) {
     controller_ = controller;
     setEnabled(true);
+    // Re-apply any stages that were enabled before the camera connected
+    // (e.g. via the Preprocess menu while disconnected). Without this the
+    // checkbox would show checked but the FilterChain stage stays disabled.
+    for (auto it = enables_.constBegin(); it != enables_.constEnd(); ++it) {
+        if (it.value() && it.value()->isChecked()) {
+            apply_stage(it.key());
+        }
+    }
 }
 
 void PreprocessingPanel::on_camera_disconnected() {
@@ -204,7 +216,14 @@ void PreprocessingPanel::on_camera_disconnected() {
 
 void PreprocessingPanel::set_stage_enabled(const QString& stage, bool on) {
     auto* cb = enables_.value(stage);
-    if (cb) cb->setChecked(on);
+    if (!cb) return;
+    // Block the toggled signal so we don't re-enter apply_stage from the
+    // checkbox; apply manually so the FilterChain is still updated. The
+    // stage_toggled signal emitted by apply_stage syncs the menu (whose
+    // actions use 'triggered', so setChecked won't re-enter this path).
+    QSignalBlocker b(cb);
+    cb->setChecked(on);
+    apply_stage(stage);
 }
 
 bool PreprocessingPanel::is_stage_enabled(const QString& stage) const {

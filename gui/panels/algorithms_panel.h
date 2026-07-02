@@ -13,6 +13,7 @@
 #ifndef GUI_PANELS_ALGORITHMS_PANEL_H
 #define GUI_PANELS_ALGORITHMS_PANEL_H
 
+#include <QCheckBox>
 #include <QWidget>
 #include <memory>
 #include <string>
@@ -29,6 +30,11 @@ class AlgorithmsPanel : public QWidget {
     Q_OBJECT
 public:
     explicit AlgorithmsPanel(AlgoBridge* bridge, QWidget* parent = nullptr);
+
+    /// @brief Programmatically sets the enable-checkbox state for @p name
+    /// without emitting toggled signals. Used by MainWindow to keep the
+    /// panel in sync with the Algorithm menu and AlgoWindow.
+    void set_algo_enabled(const std::string& name, bool on);
 
 signals:
     void info_message(const QString& msg);
@@ -56,6 +62,8 @@ private:
     /// set_param(), and so ConfigManager can query runtime values via
     /// AlgoBridge::find_live().
     std::unordered_map<std::string, std::shared_ptr<AlgoInstance>> live_instances_;
+    /// Enable checkboxes keyed by algo name, for programmatic sync.
+    std::unordered_map<std::string, QCheckBox*> checkboxes_;
 };
 
 } // namespace gui

@@ -213,8 +213,16 @@ void BiasesPanel::populate() {
                 [this, bias_name, spin = row.spin](int v) {
                     QSignalBlocker b(spin);
                     spin->setValue(v);
+                    // Don't apply during drag — valueChanged fires per tick
+                    // and would flood USB writes. Apply on sliderReleased.
+                });
+        connect(row.slider, &QSlider::sliderReleased, this,
+                [this, bias_name]() {
                     for (auto& r : rows_) {
-                        if (r.name == bias_name) { apply_value(r, v); break; }
+                        if (r.name == bias_name) {
+                            apply_value(r, r.slider->value());
+                            break;
+                        }
                     }
                 });
         connect(row.spin, QOverload<int>::of(&QSpinBox::valueChanged), this,
@@ -254,6 +262,9 @@ void BiasesPanel::apply_value(BiasRow& row, int value) {
         emit error_message(tr("Failed to set %1: %2")
                                .arg(QString::fromStdString(row.name))
                                .arg(QString::fromUtf8(e.what())));
+        // Roll the slider/spin back to the hardware's actual value so the
+        // UI doesn't show a value that never took effect.
+        refresh_row_values();
     }
 }
 

@@ -63,6 +63,13 @@ public:
 protected:
     void closeEvent(QCloseEvent* event) override;
 
+signals:
+    /// Emitted from the frame_ready handler after process_algo_results() has
+    /// applied overlays/replacements. Multi-window child displays connect to
+    /// this instead of the raw FramePipeline signal so they see the same
+    /// annotated frame as the main display.
+    void annotated_frame_ready(QImage frame);
+
 private slots:
     void on_open_file();
     void on_connect_first();
@@ -146,6 +153,8 @@ private:
 
     // Preprocess menu actions.
     QMenu* m_preprocess_{nullptr};
+    /// Preprocess menu actions keyed by stage id, for sync with the panel.
+    QHash<QString, QAction*> preprocess_actions_;
 
     // Calibration menu actions.
     QMenu* m_calibration_{nullptr};

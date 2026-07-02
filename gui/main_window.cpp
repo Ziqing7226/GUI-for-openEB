@@ -277,7 +277,10 @@ void MainWindow::build_menus() {
             auto* a = m_preprocess_->addAction(s.label);
             a->setCheckable(true);
             a->setChecked(false);
-            connect(a, &QAction::toggled, this, [this, id = s.id](bool on) {
+            preprocess_actions_[s.id] = a;
+            // Use 'triggered' (not 'toggled') so programmatic setChecked()
+            // from the panel sync doesn't re-enter this slot.
+            connect(a, &QAction::triggered, this, [this, id = s.id](bool on) {
                 settings_->preprocessing_panel()->set_stage_enabled(id, on);
             });
         }
@@ -384,12 +387,15 @@ void MainWindow::build_menus() {
             // from window close handlers doesn't re-enter this slot.
             connect(a_enable, &QAction::triggered, this, [this, name, label](bool on) {
                 const auto key = name.toStdString();
-                auto inst = algo_bridge_.find_live(key);
-                if (!inst) inst = algo_bridge_.create(key);
+                auto inst = algo_bridge_.find_or_create(key);
                 if (inst) {
                     inst->set_enabled(on);
                     statusBar()->showMessage(
                         tr("%1: %2").arg(label).arg(on ? "ON" : "OFF"), 3000);
+                }
+                // Sync the AlgorithmsPanel checkbox (blocked, no re-entry).
+                if (auto* ap = settings_->algorithms_panel()) {
+                    ap->set_algo_enabled(key, on);
                 }
                 if (on) {
                     // Auto-open the AlgoWindow so the user can tune params.
@@ -408,8 +414,7 @@ void MainWindow::build_menus() {
             // ROI toggle — forward to the live instance's roi_enabled param.
             connect(a_roi, &QAction::triggered, this, [this, name](bool on) {
                 const auto key = name.toStdString();
-                auto inst = algo_bridge_.find_live(key);
-                if (!inst) inst = algo_bridge_.create(key);
+                auto inst = algo_bridge_.find_or_create(key);
                 if (inst) {
                     inst->set_param("roi_enabled", on ? "true" : "false");
                     statusBar()->showMessage(
@@ -541,6 +546,10 @@ void MainWindow::wire_signals() {
         settings_->esp_panel()->on_camera_disconnected();
         settings_->trigger_panel()->on_camera_disconnected();
         settings_->preprocessing_panel()->on_camera_disconnected();
+        // Uncheck all Preprocess menu actions (the panel already cleared its
+        // checkboxes in on_camera_disconnected). Menu actions use 'triggered',
+        // so setChecked(false) does not re-enter the slot.
+        for (auto* a : preprocess_actions_) a->setChecked(false);
         status_conn_->setText(tr("Disconnected"));
         status_rate_->setText(tr("— ev/s"));
         status_ts_->setText(tr("t: —"));
@@ -581,6 +590,9 @@ void MainWindow::wire_signals() {
             [this](QImage frame, Metavision::timestamp ts) {
                 process_algo_results(frame);
                 display_->set_frame(frame);
+                // Forward the annotated frame to any multi-window child displays
+                // so they see the same overlays/replacements as the main view.
+                emit annotated_frame_ready(frame);
                 settings_->statistics_panel()->set_timestamp(ts);
                 status_ts_->setText(QStringLiteral("t: %1 s").arg(ts / 1.0e6, 0, 'f', 3));
                 if (prev_frame_ts_ > 0 && ts > prev_frame_ts_) {
@@ -612,12 +624,16 @@ void MainWindow::wire_signals() {
             &MainWindow::update_palettes);
     connect(settings_->display_panel(), &DisplayPanel::frame_mode_changed, this,
             [this](int idx) {
-                // Map frame mode to accumulation time. Only feasible modes
-                // (Diff/Integration/Time Decay) are enabled in the menu; the
-                // others are disabled and won't reach here.
+                // Frame modes map to accumulation-time presets (the underlying
+                // CDFrameGenerator only supports accumulation rendering).
+                // Only feasible modes (Diff/Integration/Time Decay) are
+                // selectable; the others are disabled.
                 const int us[] = {10000, 50000, 30000, 30000, 10000, 10000, 10000};
                 const int accumulation = (idx >= 0 && idx < 7) ? us[idx] : 10000;
                 camera_.frame_pipeline()->set_accumulation_time_us(accumulation);
+                // Sync the accumulation slider/spin so the two controls don't
+                // show stale values (D4 fix).
+                settings_->display_panel()->set_accumulation_time_ms(accumulation / 1000.0);
                 statusBar()->showMessage(
                     tr("Frame mode %1 (accumulation %2 us)").arg(idx).arg(accumulation), 3000);
             });
@@ -687,6 +703,12 @@ void MainWindow::wire_signals() {
                 [forward](const QString& m) { forward(m, false); });
         connect(pp, &PreprocessingPanel::error_message, this,
                 [forward](const QString& m) { forward(m, true); });
+        // Sync the Preprocess menu actions with the panel. Menu actions use
+        // 'triggered', so setChecked() here does not re-enter the menu slot.
+        connect(pp, &PreprocessingPanel::stage_toggled, this,
+                [this](const QString& stage, bool on) {
+                    if (auto* a = preprocess_actions_.value(stage)) a->setChecked(on);
+                });
     }
     if (auto* ap = settings_->algorithms_panel()) {
         connect(ap, &AlgorithmsPanel::info_message, this,
@@ -695,6 +717,18 @@ void MainWindow::wire_signals() {
                 [this](const QString& name, bool on) {
                     statusBar()->showMessage(
                         tr("%1: %2").arg(name).arg(on ? tr("enabled") : tr("disabled")), 3000);
+                    const auto key = name.toStdString();
+                    // Sync the Algorithm menu "Enable" action. setChecked does
+                    // not trigger 'triggered', so no re-entry into the menu slot.
+                    if (auto* a = algo_actions_.value(key)) a->setChecked(on);
+                    if (!on) {
+                        // Close the AlgoWindow if open (its closing handler will
+                        // disable the instance and uncheck the menu — both are
+                        // idempotent given the blocker in set_algo_enabled).
+                        auto it = algo_windows_.find(key);
+                        if (it != algo_windows_.end() && it.value()) it.value()->close();
+                        if (key == "xyt_visualizer" && xyt_display_) xyt_display_->close();
+                    }
                 });
     }
 }
@@ -828,6 +862,9 @@ void MainWindow::on_record_elapsed(std::chrono::seconds s) {
 
 void MainWindow::on_export_dialog() {
     if (export_dialog_) {
+        // Pre-fill the source path with the file currently open for playback
+        // (if any) so the user doesn't have to re-browse to it.
+        export_dialog_->set_source(playback_.current_file());
         export_dialog_->show();
         export_dialog_->raise();
         export_dialog_->activateWindow();
@@ -1168,10 +1205,9 @@ void MainWindow::on_add_display_window() {
     }
     auto* w = multi_window_->add_display(tr("Display %1").arg(multi_window_->window_count() + 1));
     if (w) {
-        // Feed the new display from the same frame pipeline as the main
-        // display. The connection is auto-disconnected when w is destroyed
-        // (Qt destroys receivers on deletion).
-        connect(camera_.frame_pipeline(), &FramePipeline::frame_ready,
+        // Feed the new display the annotated frame (after process_algo_results)
+        // so child windows see the same overlays/replacements as the main view.
+        connect(this, &MainWindow::annotated_frame_ready,
                 w, &EventDisplayWidget::set_frame);
         statusBar()->showMessage(tr("Added display window (%1 total).")
             .arg(multi_window_->window_count()), 3000);
@@ -1293,6 +1329,10 @@ void MainWindow::on_open_algo_window(const std::string& algo_name) {
     // Sync the Algorithm menu "Enable" checkbox so the user has consistent
     // feedback regardless of which entry point they used.
     if (auto* a = algo_actions_.value(algo_name)) a->setChecked(true);
+    // Sync the AlgorithmsPanel checkbox as well (blocked, no re-entry).
+    if (auto* ap = settings_->algorithms_panel()) {
+        ap->set_algo_enabled(algo_name, true);
+    }
 
     // On close: disable the algo instance, uncheck the menu item, and remove
     // the window from the map. The AlgoWindow emits `closing` from its
@@ -1302,6 +1342,10 @@ void MainWindow::on_open_algo_window(const std::string& algo_name) {
         auto inst = algo_bridge_.find_live(algo_name);
         if (inst) inst->set_enabled(false);
         if (auto* a = algo_actions_.value(algo_name)) a->setChecked(false);
+        // Sync the AlgorithmsPanel checkbox (blocked, no re-entry).
+        if (auto* ap = settings_->algorithms_panel()) {
+            ap->set_algo_enabled(algo_name, false);
+        }
         // xyt_visualizer: also close the SpaceTimeDisplay.
         if (algo_name == "xyt_visualizer" && xyt_display_) xyt_display_->close();
     });
@@ -1339,7 +1383,7 @@ void MainWindow::on_open_xyt_view() {
             xyt_display_->set_sensor_geometry(info.width, info.height);
         }
         xyt_algo_ = algo_bridge_.find_live("xyt_visualizer");
-        if (!xyt_algo_) xyt_algo_ = algo_bridge_.create("xyt_visualizer");
+        if (!xyt_algo_) xyt_algo_ = algo_bridge_.find_or_create("xyt_visualizer");
         if (xyt_algo_) xyt_algo_->set_enabled(true);
         if (auto* a = algo_actions_.value("xyt_visualizer")) a->setChecked(true);
         // The QOpenGLWidget is itself the window; on close we must null
