@@ -33,7 +33,7 @@ Thumbs.db
 qt_stderr*.log
 
 # ---- User-private launcher (local env customisation) ----
-scripts/run_gui.local.sh
+run.local.sh
 
 # ---- Python (for future tooling) ----
 __pycache__/

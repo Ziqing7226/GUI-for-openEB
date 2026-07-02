@@ -37,7 +37,7 @@ static void ensure_openeb_env_defaults() {
     // Note: LD_LIBRARY_PATH cannot be set here (the dynamic linker has
     // already resolved shared libraries at process start).  If the SDK
     // libraries are in a non-standard path, set it in the shell or use
-    // the scripts/run_gui.sh launcher.
+    // the run.sh launcher.
 }
 
 int main(int argc, char* argv[]) {

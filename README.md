@@ -1,6 +1,6 @@
 <div align="center">
 
-# EB plus
+# EBplus
 
 A polished Qt 6 desktop app for event cameras — built on [openEB](https://github.com/prophesee-ai/openeb) v5.2.0.
 
@@ -9,9 +9,9 @@ Real-time visualization · camera control · recording · playback · calibratio
 ![License](https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-blue)
 ![Language](https://img.shields.io/badge/C%2B%2B17-Qt%206-orange)
 ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey)
-![Tests](https://img.shields.io/badge/tests-265%20passed-brightgreen)
+![Version](https://img.shields.io/badge/version-0.9.7-blue)
 
-![Main Window](pic/main_window.png)
+![Main Window](pic/0.9.7.png)
 
 </div>
 
@@ -19,7 +19,7 @@ Real-time visualization · camera control · recording · playback · calibratio
 
 ## What is this?
 
-**EB plus** is a GUI for event cameras (Prophesee / CenturyArks). Event cameras don't capture frames — they report per-pixel brightness changes at microsecond resolution. EB plus lets you:
+**EBplus** is a GUI for event cameras (Prophesee / CenturyArks). Event cameras don't capture frames — they report per-pixel brightness changes at microsecond resolution. EBplus lets you:
 
 - **See** the event stream in real time (OpenGL, 60+ FPS)
 - **Control** the camera (biases, ROI, anti-flicker, triggers)
@@ -38,7 +38,7 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -- -j$(nproc)
 
 # Run (the launcher sets all required env vars)
-./scripts/run_gui.sh
+./run.sh
 ```
 
 That's it. The launcher handles Wayland compatibility, HAL plugin paths, and OpenGL backend selection automatically.
@@ -84,7 +84,7 @@ That's it. The launcher handles Wayland compatibility, HAL plugin paths, and Ope
 Algorithms are **mutually exclusive** — enabling one disables the previous. Each algorithm supports a **global ROI** (default: center 256×256) to bound computational cost.
 
 ### Theming
-- **5 background colors**: Gray (default), Green, Yellow, Pink, Blue
+- **5 background colors**: Gray, Green, Yellow, Pink, Blue (default)
 - **3 modes**: Follow System (default), Always Light, Always Dark
 - Dark mode uses a **dark variant of the chosen color** — not just black
 - Text color auto-adjusts (black on light, white on dark)
@@ -114,7 +114,7 @@ GUI-for-openEB/
 │   └── widgets/          # AlgoWindow, multi-window manager
 ├── algo/              # Self-developed algorithm library
 ├── openeb/            # openEB SDK (Apache 2.0, v5.2.0)
-├── scripts/run_gui.sh # Launcher
+├── run.sh             # Launcher (sets env vars)
 ├── doc/               # Design spec + build guide
 └── pic/               # Screenshots
 ```
@@ -126,7 +126,7 @@ GUI-for-openEB/
 ### Option 1: Launcher (Recommended)
 
 ```bash
-./scripts/run_gui.sh
+./run.sh
 ```
 
 The launcher auto-detects Wayland, forces XCB + OpenGL (avoids black screen), and sets HAL/HDF5 plugin paths.
@@ -159,9 +159,15 @@ export QSG_RHI_BACKEND=opengl    # Qt 6 may default to Vulkan
 
 **Camera not detected** — Verify `MV_HAL_PLUGIN_PATH` matches your vendor. Run `metavision_hal_ls` to check.
 
-**"NonMonotonicTimeHigh" error** — This is a transient Evt3 protocol warning that occurs ~50% of the time on some Gen3.x cameras at startup. EB plus treats it as non-fatal and keeps the stream running. No action needed.
+**"NonMonotonicTimeHigh" error** — This is a transient Evt3 protocol warning that occurs ~50% of the time on some Gen3.x cameras at startup. EBplus treats it as non-fatal and keeps the stream running. No action needed.
 
 **Dark mode not following system** — Requires Qt 6.5+. On older Qt, use Theme → Mode → Dark.
+
+---
+
+## Known Issues & Feedback
+
+EBplus is under active development and may still contain bugs. If you encounter any issue — crashes, rendering glitches, broken controls, or unexpected behavior — please [open an issue](../../issues). The project is continuously being improved, and bug reports from real users are the most direct help.
 
 ---
 

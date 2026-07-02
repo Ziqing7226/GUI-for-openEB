@@ -1,10 +1,10 @@
-# GUI for openEB
+# EBplus
 
 基于 [openEB](https://github.com/prophesee-ai/openeb) 事件相机的专业 Qt 6 桌面应用 —— 实时可视化、相机控制、录制回放、标定与数据导出，构建于开源 OpenEB SDK v5.2.0 之上。
 
 > **什么是事件相机？** 与传统帧相机不同，事件相机（如 Prophesee/CenturyArks 的产品）输出异步的逐像素亮度变化——"事件"——具有微秒级时间分辨率、高动态范围和低功耗。本应用提供完整的事件流可视化、录制与处理桌面工作流。
 
-![主界面](pic/main_window.png)
+![主界面](pic/0.9.7.png)
 
 ---
 
@@ -18,6 +18,8 @@
 - [编译](#编译)
 - [运行](#运行)
 - [相机厂商配置](#相机厂商配置)
+- [常见问题](#常见问题)
+- [已知问题与反馈](#已知问题与反馈)
 - [快捷键](#快捷键)
 - [开发路线图](#开发路线图)
 - [许可证](#许可证)
@@ -85,7 +87,7 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -- -j$(nproc)
 
 # 3. 运行（启动脚本会自动设置所有必需的环境变量）
-./scripts/run_gui.sh
+./run.sh
 ```
 
 就这么简单。启动脚本会自动检测 Wayland 会话，设置正确的 Qt 平台插件，并配置 HAL 插件路径。
@@ -96,7 +98,7 @@ cmake --build build -- -j$(nproc)
 
 ### 主界面
 
-![主界面](pic/main_window.png)
+![主界面](pic/0.9.7.png)
 
 ### Camera 菜单
 
@@ -151,8 +153,7 @@ GUI-for-openEB/
 │   ├── common/                   # 事件缓冲、帧生成器、数据加载器
 │   ├── calibration/              # 内参 & 外参算法
 │   └── CMakeLists.txt
-├── scripts/
-│   └── run_gui.sh                # 启动脚本（环境变量设置）
+├── run.sh                        # 启动脚本（环境变量设置）
 ├── pic/                          # README 截图
 ├── doc/
 │   ├── design.md                 # 完整设计规格（10 阶段路线图）
@@ -200,7 +201,7 @@ cmake --build build -- -j$(nproc)
 ### 方式一：启动脚本（推荐）
 
 ```bash
-./scripts/run_gui.sh
+./run.sh
 ```
 
 脚本自动完成以下设置：
@@ -213,9 +214,9 @@ cmake --build build -- -j$(nproc)
 如需为你的相机自定义，复制脚本并修改环境变量：
 
 ```bash
-cp scripts/run_gui.sh scripts/run_gui.local.sh
-# 编辑 scripts/run_gui.local.sh — 修改 MV_HAL_PLUGIN_PATH 等
-./scripts/run_gui.local.sh
+cp run.sh run.local.sh
+# 编辑 run.local.sh — 修改 MV_HAL_PLUGIN_PATH 等
+./run.local.sh
 ```
 
 ### 方式二：手动启动
@@ -273,7 +274,7 @@ metavision_hal_ls
 
 ### 启动后黑屏 / 视口空白
 
-这是 Wayland + Qt 6 渲染问题。启动脚本（`scripts/run_gui.sh`）会自动处理，但如果直接运行二进制文件：
+这是 Wayland + Qt 6 渲染问题。启动脚本（`run.sh`）会自动处理，但如果直接运行二进制文件：
 
 ```bash
 export QT_QPA_PLATFORM=xcb        # 通过 XWayland 强制 XCB
@@ -293,7 +294,7 @@ GUI 启动时会自动检测插件路径。如果你的厂商路径与 Prophesee
 
 ```bash
 export MV_HAL_PLUGIN_PATH=/usr/lib/CenturyArks/hal/plugins
-./scripts/run_gui.sh
+./run.sh
 ```
 
 ### 编译报错缺少 `<cstdint>`（GCC 15）
@@ -303,6 +304,12 @@ GCC 15 更改了默认标准。请按照 [doc/compile.md](doc/compile.md) 中的
 ### HDF5 文件打开失败
 
 设置 `HDF5_PLUGIN_PATH` 为 HDF5 插件目录（通常为 `/usr/local/lib/hdf5/plugin`）。
+
+---
+
+## 已知问题与反馈
+
+EBplus 正在持续开发中，可能仍存在 BUG。如果你在使用过程中遇到任何问题——崩溃、渲染异常、控件失灵或非预期行为——欢迎[提交 issue](../../issues)。本项目会持续优化，来自真实用户的反馈是最直接的帮助。
 
 ---
 

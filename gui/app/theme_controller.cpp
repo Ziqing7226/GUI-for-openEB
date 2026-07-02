@@ -224,6 +224,9 @@ void ThemeController::apply_stylesheet() {
     const QString input_hex = input_bg.isValid() ? input_bg.name() : bg;
     const QString alt_hex = alt_bg.isValid() ? alt_bg.name() : bg;
     const QString title_hex = title_bg.isValid() ? title_bg.name() : alt_hex;
+    // "EB plus" label: bold, RGB-inverse of the title bar background.
+    const QColor title_inv(255 - title_bg.red(), 255 - title_bg.green(), 255 - title_bg.blue());
+    const QString title_inv_hex = title_inv.name();
 
     const QString qss = QStringLiteral(
         "QMainWindow, QWidget { background-color: %1; color: %2; }"
@@ -243,7 +246,8 @@ void ThemeController::apply_stylesheet() {
         "QMenu::item:selected { background-color: %3; }"
         "QListWidget, QTreeWidget, QTableWidget { background-color: %3; color: %2; }"
         "QHeaderView::section { background-color: %4; color: %2; padding: 2px; border: 1px solid #888; }"
-    ).arg(bg, fg, input_hex, alt_hex, title_hex);
+        "QLabel#WindowTitleLabel { color: %6; font-weight: bold; }"
+    ).arg(bg, fg, input_hex, alt_hex, title_hex, title_inv_hex);
     window_->setStyleSheet(qss);
 
     // Also set the application palette so that palette-derived widgets pick

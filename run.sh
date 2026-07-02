@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# scripts/run_gui.sh — launcher for GUI-for-openEB.
+# run.sh — launcher for EBplus.
 #
-# Copy this script to scripts/run_gui.local.sh and customise the env vars
-# for your camera hardware.  The .local.sh copy is git-ignored so you can
+# Copy this script to run.local.sh and customise the env vars
+# for your camera hardware.  The run.local.sh copy is git-ignored so you can
 # keep your private HAL plugin path there.
 #
 # Common HAL plugin paths:
@@ -12,12 +12,12 @@ set -euo pipefail
 
 # ---- resolve repo root + binary ----
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+REPO_ROOT="$SCRIPT_DIR"
 BIN="$REPO_ROOT/build/gui/gui_for_openeb"
 
 if [[ ! -x "$BIN" ]]; then
-    echo "[run_gui.sh] Binary not found at: $BIN" >&2
-    echo "[run_gui.sh] Run 'cmake -B build && cmake --build build' first." >&2
+    echo "[run.sh] Binary not found at: $BIN" >&2
+    echo "[run.sh] Run 'cmake -B build && cmake --build build' first." >&2
     exit 1
 fi
 

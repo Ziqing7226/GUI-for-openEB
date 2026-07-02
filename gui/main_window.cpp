@@ -250,10 +250,12 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event) {
 void MainWindow::build_title_bar_controls() {
     auto* mb = menuBar();
 
-    // Left corner: window title.
+    // Left corner: window title (bold, inverse color of the title bar bg).
     auto* title_label = new QLabel(QStringLiteral("EB plus"), mb);
+    title_label->setObjectName("WindowTitleLabel");
     title_label->setStyleSheet(QStringLiteral(
         "background: transparent; border: none; padding: 0 8px;"
+        "font-weight: bold;"
     ));
     mb->setCornerWidget(title_label, Qt::TopLeftCorner);
 
