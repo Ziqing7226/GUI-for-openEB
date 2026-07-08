@@ -114,6 +114,13 @@ public:
 
     /// @brief Loads an ONNX model from file.
     /// @return true if the model was loaded successfully.
+    ///
+    /// On success the number of input bins (num_bins_) is synchronised to the
+    /// model's first-input channel dimension. This mirrors rpg_e2vid, where
+    /// num_bins is a property of the model (config['num_bins'] / model.num_bins)
+    /// rather than a free user parameter — see run_reconstruction.py:55 and
+    /// model/model.py:14. Letting the user freely change num_bins after a model
+    /// is loaded would mismatch the model's input channels and break inference.
 #if defined(GUI_ALGO_HAS_ONNXRUNTIME)
     bool load_model(const std::string& model_path) {
         try {
@@ -127,6 +134,7 @@ public:
                 *env_, model_path.c_str(), session_opts);
             model_path_ = model_path;
             model_loaded_ = true;
+            sync_num_bins_from_model();
             return true;
         } catch (const Ort::Exception&) {
             model_loaded_ = false;
@@ -194,10 +202,17 @@ public:
     }
 
     void set_num_bins(int b) {
-        const int clamped = clamp_bins(b);
-        num_bins_ = clamped;
+        int target = clamp_bins(b);
+        // When a model is loaded, num_bins is dictated by the model's input
+        // channels (rpg_e2vid: model.num_bins). Ignore the caller's value so
+        // the voxel grid always matches the model — otherwise the ONNX input
+        // shape would mismatch and inference would fail.
+        if (model_loaded_ && model_num_bins_ > 0) {
+            target = model_num_bins_;
+        }
+        num_bins_ = target;
         // Reconstruct voxel grid but preserve the hot-pixel mask.
-        voxel_grid_ = EventVoxelGrid(width_, height_, clamped);
+        voxel_grid_ = EventVoxelGrid(width_, height_, target);
         if (!hot_pixel_mask_.empty()) {
             voxel_grid_.set_hot_pixel_mask(hot_pixel_mask_);
         }
@@ -226,6 +241,34 @@ private:
     }
 
 #if defined(GUI_ALGO_HAS_ONNXRUNTIME)
+    /// @brief Reads num_bins from the loaded model's first-input channel dim.
+    /// rpg_e2vid determines num_bins from the model config (model.num_bins);
+    /// the ONNX equivalent is the 2nd dimension of the first input tensor
+    /// (shape = [N, C, H, W]). Updates model_num_bins_ and re-syncs the voxel
+    /// grid. Best-effort: on any failure keeps the existing num_bins_.
+    void sync_num_bins_from_model() {
+        if (!session_) return;
+        try {
+            Ort::AllocatorWithDefaultOptions allocator;
+            auto info = session_->GetInputTypeInfoAllocated(0, allocator);
+            auto shape = info->GetTensorTypeAndShapeInfo().GetShape();
+            // shape = [N, C, H, W]; C is the num_bins channel dimension.
+            if (shape.size() >= 2 && shape[1] > 0) {
+                model_num_bins_ = static_cast<int>(shape[1]);
+                // Re-sync the voxel grid to the model's channel count.
+                if (model_num_bins_ != num_bins_) {
+                    num_bins_ = model_num_bins_;
+                    voxel_grid_ = EventVoxelGrid(width_, height_, num_bins_);
+                    if (!hot_pixel_mask_.empty()) {
+                        voxel_grid_.set_hot_pixel_mask(hot_pixel_mask_);
+                    }
+                }
+            }
+        } catch (const Ort::Exception&) {
+            // Keep existing num_bins_ (best-effort).
+        }
+    }
+
     /// @brief ONNX Runtime inference path.
     /// Returns the padded CV_32FC1 image in [0,1] (crop_h x crop_w).
     /// The caller crops it back to sensor size after postprocessing.
@@ -377,6 +420,7 @@ private:
     int width_;
     int height_;
     int num_bins_;
+    int model_num_bins_{0};  ///< Channel count read from the loaded ONNX model.
     int num_encoders_;
     E2VIDCropParams crop_;
     EventVoxelGrid voxel_grid_;

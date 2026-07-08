@@ -1182,12 +1182,12 @@ openEB 未提供光流算法，需自研。结果以箭头/颜色图叠加到主
 - `bardow_variational`（非 DL，默认）：滑动窗口 → 事件时空体素 → TV-L1 变分求解（Chambolle-Pock）→ 对数亮度 → 灰度帧 + 密集光流
 - `e2vid/`（DL，可选）：子目录，包含 `e2vid_inference.h`（ONNX Runtime 推理 + 启发式回退 + UNetRecurrent 状态管理）、`event_voxel_grid.h`（事件→体素网格，双线性时间插值）、`intensity_rescaler.h`（auto-HDR 强度重缩放）、`unsharp_mask.h`（Unsharp Mask + 双边滤波）
 
-**参数与合法范围**：
-- `mode`：枚举（BardowVariational / InteractingMaps / E2VID），默认 `BardowVariational`
-- `output_fps`：int，`[1, 120]`，默认 `30`
-- BardowVariational 模式：`window_ms`：float，`[10, 500]`，默认 `15`；`delta_t_ms`：float，`[1, 50]`，默认 `15`（快运动时减小）；`theta`：float，`[0.05, 0.5]`，默认 `0.22`（事件触发阈值）；`lambda1`-`lambda6`：float（正则化权重，默认 `0.02/0.05/0.02/0.2/0.1/1.0`）；`num_iterations`：int，`[10, 500]`，默认 `100`
-- InteractingMaps 模式：`relaxation_step`：float，`(0, 1)`，默认 `0.1`（松弛步长）；`num_iterations`：int，`[10, 1000]`，默认 `50`
-- E2VID 模式：`model_path`：string（ONNX 模型路径，加载失败自动回退到启发式）；`num_bins`：int，`[1, 20]`，默认 `5`（时间体素分箱数）；`auto_hdr`：bool，默认 `false`（自动 HDR 强度重缩放）；`unsharp_amount`：float，默认 `0.3`（锐化强度）；`unsharp_sigma`：float，默认 `1.0`（高斯模糊 σ）；`bilateral_sigma`：float，默认 `0.0`（双边滤波 σ，0 = 禁用）；`hot_pixel_mask`：uint8 向量（热像素掩码，长度 = width × height）
+**参数与合法范围**（GUI 按当前 `mode` 仅显示对应模式的可调参数，由 `AlgoParamSpec::mode_filter` 控制行可见性）：
+- `mode`：枚举（BardowVariational / InteractingMaps / E2VID），默认 `BardowVariational`（通用参数，始终可见）
+- `output_fps`：int，`[1, 120]`，默认 `30`（通用参数，始终可见）
+- BardowVariational 模式（mode=0）：`window_ms`：float，`[10, 500]`，默认 `15`；`delta_t_ms`：float，`[1, 50]`，默认 `15`（快运动时减小）；`theta`：float，`[0.05, 0.5]`，默认 `0.22`（事件触发阈值）；`num_iterations`：int，`[10, 500]`，默认 `100`；`lambda1`-`lambda6`：float（正则化权重，默认 `0.02/0.05/0.02/0.2/0.1/1.0`）
+- InteractingMaps 模式（mode=1）：`relaxation_step`：float，`(0, 1)`，默认 `0.1`（松弛步长）；`im_iterations`：int，`[10, 1000]`，默认 `50`（迭代次数，键名与 Bardow 的 `num_iterations` 区分以避免冲突）
+- E2VID 模式（mode=2）：`model_path`：string（ONNX 模型路径，加载失败自动回退到启发式）；`num_bins`：int，`[1, 20]`，默认 `5`（时间体素分箱数；**加载 ONNX 模型后自动同步为模型的输入通道数**，对齐 rpg_e2vid 的 `model.num_bins` 行为——见 [run_reconstruction.py:55](file:///home/justin/GUI-for-openEB/ref/rpg_e2vid/run_reconstruction.py#L55)、[model/model.py:14](file:///home/justin/GUI-for-openEB/ref/rpg_e2vid/model/model.py#L14)，此时用户修改 num_bins 不再生效）；`auto_hdr`：bool，默认 `false`（自动 HDR 强度重缩放，对齐 README `--auto_hdr`）；`unsharp_amount`：float，`[0, 2]`，默认 `0.3`（锐化强度，对齐 `--unsharp_mask_amount`）；`unsharp_sigma`：float，`[0.1, 5]`，默认 `1.0`（高斯模糊 σ，对齐 `--unsharp_mask_sigma`）；`bilateral_sigma`：float，`[0, 10]`，默认 `0.0`（双边滤波 σ，0 = 禁用，对齐 `--bilateral_filter_sigma`）。`hot_pixel_mask`（uint8 向量，长度 = width × height）为程序内部接口，不在 GUI 暴露。rpg_e2vid 的 `--no-normalize`/`--no-recurrent`/`--color`/`--flip` 等高级选项未暴露（默认值与 rpg_e2vid 一致：归一化开启、循环连接开启、灰度、不翻转）
 
 **ROI 处理区**（默认启用，详见 §5.6.6）：`roi_enabled`：bool，默认 `true`；`roi_x`/`roi_y`：int，`-1` 表示自动居中，默认 `-1`；`roi_w`/`roi_h`：int，`0` 表示全幅，默认 `128`（即默认 128×128 中心区域）。启用时仅向重建算法推送 ROI 内事件并按 ROI 尺寸重建算法实例（避免全幅高延迟），主显示帧同步绘制黄色 ROI 边框。重建窗口以 ROI 大小独立显示灰度帧。
 

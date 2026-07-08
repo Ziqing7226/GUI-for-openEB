@@ -41,6 +41,12 @@ struct AlgoParamSpec {
     std::string min_value;
     std::string max_value;
     std::vector<std::string> enum_values;
+    /// Mode-applicability filter. Empty = always visible (common param).
+    /// Otherwise a comma-separated list of 0-based indices into the algo's
+    /// "mode" enum param (e.g. "0" or "1,2"); the UI hides this param when the
+    /// currently selected mode index is not in the list. Lets a single algo
+    /// expose mode-specific parameter sets (see event_to_video, design §4.4.2).
+    std::string mode_filter;
 };
 
 /// Static description of an algorithm.

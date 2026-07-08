@@ -130,24 +130,30 @@ namespace {
 
 AlgoParamSpec pint(const std::string& k, const std::string& disp,
                    const std::string& def, const std::string& lo,
-                   const std::string& hi) {
-    return {k, disp, "int", def, lo, hi, {}};
+                   const std::string& hi, const std::string& mf = "") {
+    return {k, disp, "int", def, lo, hi, {}, mf};
 }
 
 AlgoParamSpec pfloat(const std::string& k, const std::string& disp,
                      const std::string& def, const std::string& lo,
-                     const std::string& hi) {
-    return {k, disp, "float", def, lo, hi, {}};
+                     const std::string& hi, const std::string& mf = "") {
+    return {k, disp, "float", def, lo, hi, {}, mf};
 }
 
 AlgoParamSpec penum(const std::string& k, const std::string& disp,
-                    const std::string& def, std::vector<std::string> vals) {
-    return {k, disp, "enum", def, "", "", std::move(vals)};
+                    const std::string& def, std::vector<std::string> vals,
+                    const std::string& mf = "") {
+    return {k, disp, "enum", def, "", "", std::move(vals), mf};
 }
 
 AlgoParamSpec pbool(const std::string& k, const std::string& disp,
-                    const std::string& def) {
-    return {k, disp, "bool", def, "", "", {}};
+                    const std::string& def, const std::string& mf = "") {
+    return {k, disp, "bool", def, "", "", {}, mf};
+}
+
+AlgoParamSpec pstring(const std::string& k, const std::string& disp,
+                      const std::string& def, const std::string& mf = "") {
+    return {k, disp, "string", def, "", "", {}, mf};
 }
 
 /// Returns the 5 ROI parameters (design §5.6.6) shared by all self-developed
@@ -619,15 +625,35 @@ void AlgoBridge::register_self_analytics() {
          {pint("window_us", "Window (us)", "10000", "1000", "100000"),
           pint("min_events", "Min events", "20", "5", "500")}});
 
-    // §4.4.2 Event To Video (3 modes) — complex: ROI + fps + window params.
+    // §4.4.2 Event To Video (3 modes). Parameters are mode-scoped via
+    // mode_filter: the UI shows only the params that apply to the currently
+    // selected mode (BardowVariational=0, InteractingMaps=1, E2VID=2).
+    // Common params (mode, output_fps) have an empty mode_filter.
     add({"event_to_video", "Event -> Video (E2VID)", "analytics", "self",
          AlgoDisplayMode::Standalone,
          {penum("mode", "Mode", "0", {"0=BardowVariational", "1=InteractingMaps", "2=E2VID"}),
           pint("output_fps", "Output fps", "30", "1", "120"),
-          pfloat("window_ms", "Window (ms)", "15", "10", "500"),
-          pfloat("delta_t_ms", "Delta t (ms)", "15", "1", "50"),
-          pfloat("theta", "Theta", "0.22", "0.05", "0.5"),
-          pint("num_iterations", "Iterations", "30", "10", "500")}});
+          // --- BardowVariational (mode 0) ---
+          pfloat("window_ms", "Window (ms)", "15", "10", "500", "0"),
+          pfloat("delta_t_ms", "Delta t (ms)", "15", "1", "50", "0"),
+          pfloat("theta", "Theta", "0.22", "0.05", "0.5", "0"),
+          pint("num_iterations", "Iterations", "100", "10", "500", "0"),
+          pfloat("lambda1", "Lambda1 (TV weight)", "0.02", "0.0", "1.0", "0"),
+          pfloat("lambda2", "Lambda2", "0.05", "0.0", "1.0", "0"),
+          pfloat("lambda3", "Lambda3", "0.02", "0.0", "1.0", "0"),
+          pfloat("lambda4", "Lambda4", "0.2", "0.0", "2.0", "0"),
+          pfloat("lambda5", "Lambda5", "0.1", "0.0", "1.0", "0"),
+          pfloat("lambda6", "Lambda6", "1.0", "0.0", "2.0", "0"),
+          // --- InteractingMaps (mode 1) ---
+          pfloat("relaxation_step", "Relaxation step", "0.1", "0.001", "0.5", "1"),
+          pint("im_iterations", "Iterations", "50", "10", "1000", "1"),
+          // --- E2VID (mode 2) ---
+          pstring("model_path", "Model path (ONNX)", "", "2"),
+          pint("num_bins", "Num bins", "5", "1", "20", "2"),
+          pbool("auto_hdr", "Auto HDR", "false", "2"),
+          pfloat("unsharp_amount", "Unsharp amount", "0.3", "0.0", "2.0", "2"),
+          pfloat("unsharp_sigma", "Unsharp sigma", "1.0", "0.1", "5.0", "2"),
+          pfloat("bilateral_sigma", "Bilateral sigma", "0.0", "0.0", "10.0", "2")}});
 
     // §4.4.3 Flow Statistics (requires ground-truth; Passive in real-time)
     add({"flow_statistics", "Flow Statistics", "analytics", "self",

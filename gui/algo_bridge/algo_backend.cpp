@@ -1073,13 +1073,29 @@ public:
 class EventToVideoBackend final : public AlgoBackend {
     int sensor_w_{0}, sensor_h_{0};
     ProcessRegion roi_;
-    // Current param values (re-applied after ROI rebuild).
+    // Current param values (re-applied after ROI rebuild so the fresh
+    // EventToVideo instance inherits every setting, including E2VID model
+    // path and post-processing params — otherwise ROI changes would silently
+    // drop the E2VID configuration and fall back to the heuristic path).
     gui_algo::EventToVideo::Mode mode_{gui_algo::EventToVideo::Mode::BardowVariational};
     int output_fps_{30};
+    // BardowVariational params.
     float window_ms_{15.0F};
     float delta_t_ms_{15.0F};
     float theta_{0.22F};
-    int num_iterations_{30};
+    int num_iterations_{100};
+    float lambda1_{0.02F}, lambda2_{0.05F}, lambda3_{0.02F};
+    float lambda4_{0.2F}, lambda5_{0.1F}, lambda6_{1.0F};
+    // InteractingMaps params.
+    float relaxation_step_{0.1F};
+    int im_iterations_{50};
+    // E2VID params.
+    std::string model_path_;
+    int e2vid_num_bins_{5};
+    bool e2vid_auto_hdr_{false};
+    float unsharp_amount_{0.3F};
+    float unsharp_sigma_{1.0F};
+    float bilateral_sigma_{0.0F};
     std::unique_ptr<gui_algo::EventToVideo> algo_;
     std::vector<Metavision::EventCD> passthrough_;
     std::vector<gui_algo::Event> roi_events_;
@@ -1092,10 +1108,29 @@ public:
         const int aw = roi_.enabled ? roi_.rw : sensor_w_;
         const int ah = roi_.enabled ? roi_.rh : sensor_h_;
         algo_ = std::make_unique<gui_algo::EventToVideo>(aw, ah, mode_, output_fps_);
+        // BardowVariational
         algo_->set_window_ms(window_ms_);
         algo_->set_delta_t_ms(delta_t_ms_);
         algo_->set_theta(theta_);
         algo_->set_num_iterations(num_iterations_);
+        algo_->set_lambda1(lambda1_);
+        algo_->set_lambda2(lambda2_);
+        algo_->set_lambda3(lambda3_);
+        algo_->set_lambda4(lambda4_);
+        algo_->set_lambda5(lambda5_);
+        algo_->set_lambda6(lambda6_);
+        // InteractingMaps
+        algo_->set_relaxation_step(relaxation_step_);
+        algo_->set_im_iterations(im_iterations_);
+        // E2VID (model reload is intentionally deferred to set_model_path so
+        // an empty path keeps the heuristic fallback; non-empty path triggers
+        // load_model which may fail silently and also fall back).
+        if (!model_path_.empty()) algo_->set_model_path(model_path_);
+        algo_->set_e2vid_num_bins(e2vid_num_bins_);
+        algo_->set_e2vid_auto_hdr(e2vid_auto_hdr_);
+        algo_->set_unsharp_amount(unsharp_amount_);
+        algo_->set_unsharp_sigma(unsharp_sigma_);
+        algo_->set_bilateral_sigma(bilateral_sigma_);
     }
     void set_param(const std::string& k, const std::string& v) override {
         bool need_rebuild = false;
@@ -1120,6 +1155,48 @@ public:
         } else if (k == "num_iterations") {
             num_iterations_ = to_i(v);
             if (algo_) algo_->set_num_iterations(num_iterations_);
+        } else if (k == "lambda1") {
+            lambda1_ = static_cast<float>(to_d(v)); if (algo_) algo_->set_lambda1(lambda1_);
+        } else if (k == "lambda2") {
+            lambda2_ = static_cast<float>(to_d(v)); if (algo_) algo_->set_lambda2(lambda2_);
+        } else if (k == "lambda3") {
+            lambda3_ = static_cast<float>(to_d(v)); if (algo_) algo_->set_lambda3(lambda3_);
+        } else if (k == "lambda4") {
+            lambda4_ = static_cast<float>(to_d(v)); if (algo_) algo_->set_lambda4(lambda4_);
+        } else if (k == "lambda5") {
+            lambda5_ = static_cast<float>(to_d(v)); if (algo_) algo_->set_lambda5(lambda5_);
+        } else if (k == "lambda6") {
+            lambda6_ = static_cast<float>(to_d(v)); if (algo_) algo_->set_lambda6(lambda6_);
+        } else if (k == "relaxation_step") {
+            relaxation_step_ = static_cast<float>(to_d(v));
+            if (algo_) algo_->set_relaxation_step(relaxation_step_);
+        } else if (k == "im_iterations") {
+            im_iterations_ = to_i(v);
+            if (algo_) algo_->set_im_iterations(im_iterations_);
+        } else if (k == "model_path") {
+            model_path_ = v;
+            if (algo_) {
+                algo_->set_model_path(model_path_);
+                // num_bins is dictated by the loaded model (rpg_e2vid:
+                // model.num_bins). Sync the persisted value so subsequent
+                // ROI rebuilds keep the model's channel count.
+                e2vid_num_bins_ = algo_->e2vid_num_bins();
+            }
+        } else if (k == "num_bins") {
+            e2vid_num_bins_ = to_i(v);
+            if (algo_) algo_->set_e2vid_num_bins(e2vid_num_bins_);
+        } else if (k == "auto_hdr") {
+            e2vid_auto_hdr_ = to_b(v);
+            if (algo_) algo_->set_e2vid_auto_hdr(e2vid_auto_hdr_);
+        } else if (k == "unsharp_amount") {
+            unsharp_amount_ = static_cast<float>(to_d(v));
+            if (algo_) algo_->set_unsharp_amount(unsharp_amount_);
+        } else if (k == "unsharp_sigma") {
+            unsharp_sigma_ = static_cast<float>(to_d(v));
+            if (algo_) algo_->set_unsharp_sigma(unsharp_sigma_);
+        } else if (k == "bilateral_sigma") {
+            bilateral_sigma_ = static_cast<float>(to_d(v));
+            if (algo_) algo_->set_bilateral_sigma(bilateral_sigma_);
         } else if (k == "roi_enabled") { roi_.enabled = to_b(v); need_rebuild = true; }
         else if (k == "roi_x") { roi_.x = to_i(v); need_rebuild = true; }
         else if (k == "roi_y") { roi_.y = to_i(v); need_rebuild = true; }

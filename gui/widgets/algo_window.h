@@ -30,6 +30,7 @@
 
 #include "algo_bridge/algo_bridge.h"
 
+class QComboBox;
 class QScrollArea;
 class QVBoxLayout;
 
@@ -87,6 +88,21 @@ private:
     /// Forwards a parameter edit to the live AlgoInstance.
     void apply_param(const std::string& key, const std::string& value);
 
+    /// Shows/hides mode-scoped parameter rows based on the currently selected
+    /// index of the "mode" enum combobox (mirrors AlgorithmsPanel). Params
+    /// whose AlgoParamSpec::mode_filter does not contain the current mode
+    /// index are hidden; common params (empty mode_filter) stay visible.
+    void refresh_mode_visibility();
+
+    /// One label + field widget pair for a parameter row, plus the
+    /// mode_filter that decides whether the row is visible for the current
+    /// mode (empty = always visible).
+    struct ParamRow {
+        QLabel* label{nullptr};
+        QWidget* field{nullptr};
+        std::string mode_filter;
+    };
+
     AlgoBridge* bridge_;
     std::string algo_name_;
     AlgoInfo info_;
@@ -97,6 +113,11 @@ private:
     QLabel* status_label_{nullptr};
     QWidget* display_widget_{nullptr};
     QVBoxLayout* display_layout_{nullptr};
+
+    /// Mode-scoped parameter visibility state (only used by algos that expose
+    /// a "mode" enum, e.g. event_to_video — design §4.4.2).
+    QComboBox* mode_combo_{nullptr};
+    std::vector<ParamRow> param_rows_;
 };
 
 } // namespace gui

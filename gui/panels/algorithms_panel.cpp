@@ -112,7 +112,8 @@ void AlgorithmsPanel::build_ui() {
                     p.key == "roi_y" || p.key == "roi_w" ||
                     p.key == "roi_h") continue;
 
-                const QString disp = QString::fromStdString(p.display_name);
+                auto* lbl = new QLabel(QString::fromStdString(p.display_name),
+                                       params_host);
                 const std::string param_key = p.key;
                 QWidget* w = nullptr;
                 if (p.type == "enum") {
@@ -121,10 +122,21 @@ void AlgorithmsPanel::build_ui() {
                     const int idx = match_enum_index(p.enum_values, p.default_value);
                     if (idx >= 0) cmb->setCurrentIndex(idx);
                     w = cmb;
-                    connect(cmb, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
-                            [this, algo_name, param_key, cmb](int) {
-                                apply_param(algo_name, param_key, cmb->currentText().toStdString());
-                            });
+                    // The "mode" enum drives per-mode parameter visibility.
+                    // On change, apply the param and refresh which rows show.
+                    if (p.key == "mode") {
+                        algo_panel_state_[algo_name].mode_combo = cmb;
+                        connect(cmb, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+                                [this, algo_name, cmb](int) {
+                                    apply_param(algo_name, "mode", cmb->currentText().toStdString());
+                                    refresh_mode_visibility(algo_name);
+                                });
+                    } else {
+                        connect(cmb, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+                                [this, algo_name, param_key, cmb](int) {
+                                    apply_param(algo_name, param_key, cmb->currentText().toStdString());
+                                });
+                    }
                 } else if (p.type == "bool") {
                     auto* cmb = new QComboBox(params_host);
                     cmb->addItem("false"); cmb->addItem("true");
@@ -164,8 +176,12 @@ void AlgorithmsPanel::build_ui() {
                                 apply_param(algo_name, param_key, v.toStdString());
                             });
                 }
-                pform->addRow(disp, w);
+                pform->addRow(lbl, w);
+                algo_panel_state_[algo_name].rows.push_back({lbl, w, p.mode_filter});
             }
+            // Apply initial per-mode visibility (hides params that don't apply
+            // to the default mode, e.g. E2VID params when mode=BardowVariational).
+            refresh_mode_visibility(algo_name);
             form->addRow(QString(), params_host);
 
             connect(cb, &QCheckBox::toggled, this, [this, params_host, cb, a, algo_name](bool on) {
@@ -308,6 +324,32 @@ void AlgorithmsPanel::apply_param(const std::string& algo_name,
         it = live_instances_.find(algo_name);
     }
     it->second->set_param(param_key, value);
+}
+
+void AlgorithmsPanel::refresh_mode_visibility(const std::string& algo_name) {
+    auto it = algo_panel_state_.find(algo_name);
+    if (it == algo_panel_state_.end()) return;
+    auto& state = it->second;
+    if (!state.mode_combo) return;  // algo has no "mode" enum
+    const int idx = state.mode_combo->currentIndex();
+    const std::string idx_str = std::to_string(idx);
+    for (auto& row : state.rows) {
+        if (row.mode_filter.empty()) continue;  // common param: always visible
+        // mode_filter is a comma-separated list of mode indices ("0", "1,2").
+        bool visible = false;
+        std::size_t pos = 0;
+        while (pos < row.mode_filter.size()) {
+            const auto comma = row.mode_filter.find(',', pos);
+            const std::string token = (comma == std::string::npos)
+                ? row.mode_filter.substr(pos)
+                : row.mode_filter.substr(pos, comma - pos);
+            if (token == idx_str) { visible = true; break; }
+            if (comma == std::string::npos) break;
+            pos = comma + 1;
+        }
+        if (row.label) row.label->setVisible(visible);
+        if (row.field) row.field->setVisible(visible);
+    }
 }
 
 void AlgorithmsPanel::set_algo_enabled(const std::string& name, bool on) {

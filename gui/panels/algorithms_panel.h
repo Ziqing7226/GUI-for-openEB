@@ -24,6 +24,10 @@
 
 #include "algo_bridge/algo_bridge.h"  // for AlgoInfo + AlgoInstance
 
+// Forward declarations of Qt widgets (defined in the global namespace).
+class QLabel;
+class QComboBox;
+
 namespace gui {
 
 class AlgoBridge;
@@ -61,6 +65,25 @@ private:
     void apply_global_roi();
     /// Builds the global Algorithm ROI selector group at the top of the panel.
     void build_roi_selector(QVBoxLayout* parent_layout);
+    /// Shows/hides mode-scoped parameter rows for @p algo_name based on the
+    /// currently selected index of its "mode" enum combobox. Params whose
+    /// AlgoParamSpec::mode_filter does not contain the current mode index are
+    /// hidden (label + field); common params (empty mode_filter) stay visible.
+    void refresh_mode_visibility(const std::string& algo_name);
+
+    /// One label + field widget pair for a parameter row, plus the
+    /// mode_filter that decides whether the row is visible for the current
+    /// mode (empty = always visible).
+    struct ParamRow {
+        QLabel* label{nullptr};
+        QWidget* field{nullptr};
+        std::string mode_filter;
+    };
+    /// Per-algorithm UI state for mode-scoped parameter visibility.
+    struct AlgoPanelState {
+        QComboBox* mode_combo{nullptr};
+        std::vector<ParamRow> rows;
+    };
 
     AlgoBridge* bridge_;
     /// Owns a long-lived copy of the registry so pointers handed to lambdas
@@ -75,6 +98,9 @@ private:
     std::unordered_map<std::string, std::shared_ptr<AlgoInstance>> live_instances_;
     /// Enable checkboxes keyed by algo name, for programmatic sync.
     std::unordered_map<std::string, QCheckBox*> checkboxes_;
+    /// Per-algo parameter-row state, used to toggle mode-scoped params when
+    /// the "mode" enum combobox changes (see refresh_mode_visibility).
+    std::unordered_map<std::string, AlgoPanelState> algo_panel_state_;
 
     /// Global Algorithm ROI controls (design §5.6.6). All self-developed
     /// algorithms share this ROI; per-algorithm roi_* params are removed

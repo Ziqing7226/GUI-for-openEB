@@ -104,7 +104,7 @@ void AlgoWindow::build_param_panel(QVBoxLayout* outer) {
         form->setContentsMargins(6, 6, 6, 6);
 
         for (const auto& p : params) {
-            const QString disp = QString::fromStdString(p.display_name);
+            auto* lbl = new QLabel(QString::fromStdString(p.display_name), gb);
             const std::string param_key = p.key;
             QWidget* w = nullptr;
             if (p.type == "enum") {
@@ -126,10 +126,21 @@ void AlgoWindow::build_param_panel(QVBoxLayout* outer) {
                     if (token == cur) { cmb->setCurrentIndex(static_cast<int>(i)); break; }
                 }
                 w = cmb;
-                connect(cmb, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
-                        [this, param_key, cmb](int) {
-                            apply_param(param_key, cmb->currentText().toStdString());
-                        });
+                // The "mode" enum drives per-mode parameter visibility. On
+                // change, apply the param and refresh which rows show.
+                if (p.key == "mode") {
+                    mode_combo_ = cmb;
+                    connect(cmb, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+                            [this, cmb](int) {
+                                apply_param("mode", cmb->currentText().toStdString());
+                                refresh_mode_visibility();
+                            });
+                } else {
+                    connect(cmb, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+                            [this, param_key, cmb](int) {
+                                apply_param(param_key, cmb->currentText().toStdString());
+                            });
+                }
             } else if (p.type == "bool") {
                 auto* cmb = new QComboBox(gb);
                 cmb->addItem("false"); cmb->addItem("true");
@@ -187,13 +198,18 @@ void AlgoWindow::build_param_panel(QVBoxLayout* outer) {
                             apply_param(param_key, v.toStdString());
                         });
             }
-            form->addRow(disp, w);
+            form->addRow(lbl, w);
+            param_rows_.push_back({lbl, w, p.mode_filter});
         }
         host_layout->addWidget(gb);
     };
 
     build_group(tr("Algorithm ROI"), roi_params);
     build_group(tr("Parameters"), algo_params);
+
+    // Apply initial per-mode visibility (hides params that don't apply to the
+    // current mode, e.g. E2VID params when mode=BardowVariational).
+    refresh_mode_visibility();
 
     host_layout->addStretch(1);
     param_scroll_->setWidget(host);
@@ -203,6 +219,29 @@ void AlgoWindow::build_param_panel(QVBoxLayout* outer) {
 void AlgoWindow::apply_param(const std::string& key, const std::string& value) {
     if (!instance_) return;
     instance_->set_param(key, value);
+}
+
+void AlgoWindow::refresh_mode_visibility() {
+    if (!mode_combo_) return;  // algo has no "mode" enum
+    const int idx = mode_combo_->currentIndex();
+    const std::string idx_str = std::to_string(idx);
+    for (auto& row : param_rows_) {
+        if (row.mode_filter.empty()) continue;  // common param: always visible
+        // mode_filter is a comma-separated list of mode indices ("0", "1,2").
+        bool visible = false;
+        std::size_t pos = 0;
+        while (pos < row.mode_filter.size()) {
+            const auto comma = row.mode_filter.find(',', pos);
+            const std::string token = (comma == std::string::npos)
+                ? row.mode_filter.substr(pos)
+                : row.mode_filter.substr(pos, comma - pos);
+            if (token == idx_str) { visible = true; break; }
+            if (comma == std::string::npos) break;
+            pos = comma + 1;
+        }
+        if (row.label) row.label->setVisible(visible);
+        if (row.field) row.field->setVisible(visible);
+    }
 }
 
 EventDisplayWidget* AlgoWindow::frame_display() const {
