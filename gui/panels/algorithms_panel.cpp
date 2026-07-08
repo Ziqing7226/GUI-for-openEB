@@ -177,7 +177,7 @@ void AlgorithmsPanel::build_ui() {
                             });
                 }
                 pform->addRow(lbl, w);
-                algo_panel_state_[algo_name].rows.push_back({lbl, w, p.mode_filter});
+                algo_panel_state_[algo_name].rows.push_back({lbl, w, p.mode_filter, p.key});
             }
             // Apply initial per-mode visibility (hides params that don't apply
             // to the default mode, e.g. E2VID params when mode=BardowVariational).
@@ -349,6 +349,44 @@ void AlgorithmsPanel::refresh_mode_visibility(const std::string& algo_name) {
         }
         if (row.label) row.label->setVisible(visible);
         if (row.field) row.field->setVisible(visible);
+    }
+
+    // Auto-set mode-appropriate ROI and output_fps on every mode switch
+    // (design §4.4.2):
+    //   E2VID (idx==2):  128×128 center ROI, 24 fps. NN inference is
+    //                    computationally expensive, but multi-threaded ONNX
+    //                    Runtime + --no-normalize (see e2vid_inference.h)
+    //                    make 128×128 real-time feasible.
+    //   Other modes (0/1): restore defaults (256×256 center, 30 fps).
+    // Only event_to_video has a "mode" enum, so this code only runs for it.
+    const bool is_e2vid = (idx == 2);
+    const int target_w  = is_e2vid ? 128 : 256;
+    const int target_h  = is_e2vid ? 128 : 256;
+    const int target_fps = is_e2vid ? 24 : 30;
+
+    // ROI — global controls.
+    {
+        QSignalBlocker bx(roi_x_sp_);
+        QSignalBlocker by(roi_y_sp_);
+        QSignalBlocker bw(roi_w_sp_);
+        QSignalBlocker bh(roi_h_sp_);
+        QSignalBlocker be(roi_enabled_cb_);
+        roi_x_sp_->setValue(-1);   // auto-center
+        roi_y_sp_->setValue(-1);   // auto-center
+        roi_w_sp_->setValue(target_w);
+        roi_h_sp_->setValue(target_h);
+        roi_enabled_cb_->setChecked(true);
+        apply_global_roi();
+    }
+
+    // output_fps — find the per-algo param row by key.
+    for (auto& row : state.rows) {
+        if (row.key == "output_fps") {
+            auto* sp = qobject_cast<QSpinBox*>(row.field);
+            if (sp) { QSignalBlocker b(sp); sp->setValue(target_fps); }
+            apply_param(algo_name, "output_fps", std::to_string(target_fps));
+            break;
+        }
     }
 }
 

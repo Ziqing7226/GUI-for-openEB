@@ -648,7 +648,7 @@ void AlgoBridge::register_self_analytics() {
           pfloat("relaxation_step", "Relaxation step", "0.1", "0.001", "0.5", "1"),
           pint("im_iterations", "Iterations", "50", "10", "1000", "1"),
           // --- E2VID (mode 2) ---
-          pstring("model_path", "Model path (ONNX)", "", "2"),
+          pstring("model_path", "Model path (ONNX)", "models/e2vid_lightweight.onnx", "2"),
           pint("num_bins", "Num bins", "5", "1", "20", "2"),
           pbool("auto_hdr", "Auto HDR", "false", "2"),
           pfloat("unsharp_amount", "Unsharp amount", "0.3", "0.0", "2.0", "2"),

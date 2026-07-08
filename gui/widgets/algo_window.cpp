@@ -199,7 +199,7 @@ void AlgoWindow::build_param_panel(QVBoxLayout* outer) {
                         });
             }
             form->addRow(lbl, w);
-            param_rows_.push_back({lbl, w, p.mode_filter});
+            param_rows_.push_back({lbl, w, p.mode_filter, p.key});
         }
         host_layout->addWidget(gb);
     };
@@ -242,6 +242,43 @@ void AlgoWindow::refresh_mode_visibility() {
         if (row.label) row.label->setVisible(visible);
         if (row.field) row.field->setVisible(visible);
     }
+
+    // Auto-set mode-appropriate ROI and output_fps on every mode switch
+    // (design §4.4.2):
+    //   E2VID (idx==2):  128×128 center ROI, 24 fps. NN inference is
+    //                    computationally expensive, but multi-threaded ONNX
+    //                    Runtime + --no-normalize (see e2vid_inference.h)
+    //                    make 128×128 real-time feasible.
+    //   Other modes (0/1): restore defaults (256×256 center, 30 fps).
+    // Only event_to_video has a "mode" enum, so this code only runs for it.
+    const bool is_e2vid = (idx == 2);
+    const int target_w  = is_e2vid ? 128 : 256;
+    const int target_h  = is_e2vid ? 128 : 256;
+    const int target_fps = is_e2vid ? 24 : 30;
+
+    for (auto& row : param_rows_) {
+        if (row.key == "roi_enabled") {
+            auto* cmb = qobject_cast<QComboBox*>(row.field);
+            if (cmb) { QSignalBlocker b(cmb); cmb->setCurrentIndex(1); }
+        } else if (row.key == "roi_x" || row.key == "roi_y") {
+            auto* sp = qobject_cast<QSpinBox*>(row.field);
+            if (sp) { QSignalBlocker b(sp); sp->setValue(-1); }
+        } else if (row.key == "roi_w" || row.key == "roi_h") {
+            auto* sp = qobject_cast<QSpinBox*>(row.field);
+            if (sp) { QSignalBlocker b(sp); sp->setValue(is_e2vid ? 128 : 256); }
+        } else if (row.key == "output_fps") {
+            auto* sp = qobject_cast<QSpinBox*>(row.field);
+            if (sp) { QSignalBlocker b(sp); sp->setValue(target_fps); }
+        }
+    }
+    // Apply the new params to the live instance (signals were blocked above,
+    // so the per-widget connect lambdas did not fire).
+    apply_param("roi_enabled", "true");
+    apply_param("roi_x", "-1");
+    apply_param("roi_y", "-1");
+    apply_param("roi_w", std::to_string(target_w));
+    apply_param("roi_h", std::to_string(target_h));
+    apply_param("output_fps", std::to_string(target_fps));
 }
 
 EventDisplayWidget* AlgoWindow::frame_display() const {

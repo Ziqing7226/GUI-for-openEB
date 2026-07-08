@@ -28,6 +28,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <opencv2/core.hpp>
@@ -127,14 +128,49 @@ public:
             env_ = std::make_unique<Ort::Env>(
                 ORT_LOGGING_LEVEL_WARNING, "e2vid");
             Ort::SessionOptions session_opts;
-            session_opts.SetIntraOpNumThreads(1);
+            // Use all available CPU cores for ONNX inference (capped at 8 to
+            // avoid oversubscription on high-core machines). The E2VID
+            // UNetRecurrent model is compute-bound on Conv/MatMul ops, which
+            // ONNX Runtime parallelises across the intra-op thread pool.
+            // Single-thread (the previous setting) was the main bottleneck.
+            const unsigned hw_threads = std::thread::hardware_concurrency();
+            const int num_threads = static_cast<int>(
+                hw_threads > 0 ? (hw_threads <= 8 ? hw_threads : 8) : 4);
+            session_opts.SetIntraOpNumThreads(num_threads);
             session_opts.SetGraphOptimizationLevel(
-                GraphOptimizationLevel::ORT_ENABLE_EXTENDED);
+                GraphOptimizationLevel::ORT_ENABLE_ALL);
             session_ = std::make_unique<Ort::Session>(
                 *env_, model_path.c_str(), session_opts);
             model_path_ = model_path;
             model_loaded_ = true;
             sync_num_bins_from_model();
+            // Cache MemoryInfo (constant for the session lifetime).
+            mem_info_ = std::make_unique<Ort::MemoryInfo>(
+                Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault));
+            // Cache input/output names once (avoids 14 string allocations
+            // per frame in infer_onnx()).
+            Ort::AllocatorWithDefaultOptions allocator;
+            const std::size_t n_in = session_->GetInputCount();
+            const std::size_t n_out = session_->GetOutputCount();
+            input_name_owners_.clear();
+            output_name_owners_.clear();
+            cached_input_names_.clear();
+            cached_output_names_.clear();
+            input_name_owners_.reserve(n_in);
+            cached_input_names_.reserve(n_in);
+            for (std::size_t i = 0; i < n_in; ++i) {
+                input_name_owners_.push_back(
+                    session_->GetInputNameAllocated(i, allocator));
+                cached_input_names_.push_back(input_name_owners_.back().get());
+            }
+            output_name_owners_.reserve(n_out);
+            cached_output_names_.reserve(n_out);
+            for (std::size_t i = 0; i < n_out; ++i) {
+                output_name_owners_.push_back(
+                    session_->GetOutputNameAllocated(i, allocator));
+                cached_output_names_.push_back(
+                    output_name_owners_.back().get());
+            }
             return true;
         } catch (const Ort::Exception&) {
             model_loaded_ = false;
@@ -241,17 +277,22 @@ private:
     }
 
 #if defined(GUI_ALGO_HAS_ONNXRUNTIME)
-    /// @brief Reads num_bins from the loaded model's first-input channel dim.
+    /// @brief Reads num_bins and num_encoders from the loaded ONNX model.
     /// rpg_e2vid determines num_bins from the model config (model.num_bins);
     /// the ONNX equivalent is the 2nd dimension of the first input tensor
     /// (shape = [N, C, H, W]). Updates model_num_bins_ and re-syncs the voxel
     /// grid. Best-effort: on any failure keeps the existing num_bins_.
+    ///
+    /// Also infers num_encoders from the input count:
+    ///   E2VIDRecurrent: n_inputs = 1 + 2 * num_encoders (event + h/c per level)
+    ///   E2VID (non-recurrent): n_inputs = 1 (num_encoders stays at constructor default)
+    /// and recomputes CropParameters to match (rpg_e2vid: model.num_encoders).
     void sync_num_bins_from_model() {
         if (!session_) return;
         try {
             Ort::AllocatorWithDefaultOptions allocator;
-            auto info = session_->GetInputTypeInfoAllocated(0, allocator);
-            auto shape = info->GetTensorTypeAndShapeInfo().GetShape();
+            auto info = session_->GetInputTypeInfo(0);
+            auto shape = info.GetTensorTypeAndShapeInfo().GetShape();
             // shape = [N, C, H, W]; C is the num_bins channel dimension.
             if (shape.size() >= 2 && shape[1] > 0) {
                 model_num_bins_ = static_cast<int>(shape[1]);
@@ -262,6 +303,15 @@ private:
                     if (!hot_pixel_mask_.empty()) {
                         voxel_grid_.set_hot_pixel_mask(hot_pixel_mask_);
                     }
+                }
+            }
+            // Infer num_encoders from input count (E2VIDRecurrent only).
+            const std::size_t n_inputs = session_->GetInputCount();
+            if (n_inputs > 1) {
+                int inferred = static_cast<int>((n_inputs - 1) / 2);
+                if (inferred > 0 && inferred != num_encoders_) {
+                    num_encoders_ = inferred;
+                    crop_ = E2VIDCropParams::compute(width_, height_, num_encoders_);
                 }
             }
         } catch (const Ort::Exception&) {
@@ -281,9 +331,21 @@ private:
         const int cw = crop_.crop_width;
 
         try {
-            // Build input tensor: 1 x num_bins x crop_height x crop_width.
-            std::vector<float> input_tensor(
-                static_cast<std::size_t>(num_bins_) * ch * cw, 0.0f);
+            // --- Reuse input buffer across frames (resize only on dim change) ---
+            const std::size_t input_size =
+                static_cast<std::size_t>(num_bins_) * ch * cw;
+            if (cached_crop_w_ != cw || cached_crop_h_ != ch ||
+                cached_num_bins_ != num_bins_ ||
+                input_buffer_.size() != input_size) {
+                input_buffer_.assign(input_size, 0.0f);
+                cached_crop_w_ = cw;
+                cached_crop_h_ = ch;
+                cached_num_bins_ = num_bins_;
+                // State buffers must also be rebuilt when dims change.
+                state_buffers_.clear();
+            } else {
+                std::fill(input_buffer_.begin(), input_buffer_.end(), 0.0f);
+            }
 
             // Copy voxel grid into padded tensor (reflection padding).
             const float* grid = voxel_grid_.data();
@@ -293,63 +355,60 @@ private:
                             const_cast<float*>(grid + b * stride_hw));
                 cv::Mat padded = crop_.pad(bin);
                 std::copy(padded.begin<float>(), padded.end<float>(),
-                          input_tensor.begin() +
+                          input_buffer_.begin() +
                               static_cast<std::size_t>(b) * ch * cw);
             }
 
-            Ort::MemoryInfo mem_info = Ort::MemoryInfo::CreateCpu(
-                OrtArenaAllocator, OrtMemTypeDefault);
             std::array<std::int64_t, 4> input_shape = {1, num_bins_, ch, cw};
 
-            Ort::AllocatorWithDefaultOptions allocator;
             const std::size_t n_inputs = session_->GetInputCount();
-            const std::size_t n_outputs = session_->GetOutputCount();
-
-            // Collect input/output names (keep AllocatedStringPtr alive so the
-            // raw pointers remain valid for the Run() call).
-            std::vector<Ort::AllocatedStringPtr> in_name_owners;
-            std::vector<Ort::AllocatedStringPtr> out_name_owners;
-            in_name_owners.reserve(n_inputs);
-            out_name_owners.reserve(n_outputs);
-            std::vector<const char*> input_name_ptrs;
-            std::vector<const char*> output_name_ptrs;
-            input_name_ptrs.reserve(n_inputs);
-            output_name_ptrs.reserve(n_outputs);
-            for (std::size_t i = 0; i < n_inputs; ++i) {
-                in_name_owners.push_back(
-                    session_->GetInputNameAllocated(i, allocator));
-                input_name_ptrs.push_back(in_name_owners.back().get());
-            }
-            for (std::size_t i = 0; i < n_outputs; ++i) {
-                out_name_owners.push_back(
-                    session_->GetOutputNameAllocated(i, allocator));
-                output_name_ptrs.push_back(out_name_owners.back().get());
-            }
 
             // Build input Ort::Values. First input is always the event voxel
             // grid; subsequent inputs (if any) are recurrent state tensors.
             std::vector<Ort::Value> inputs;
             inputs.reserve(n_inputs);
             inputs.push_back(Ort::Value::CreateTensor<float>(
-                mem_info, input_tensor.data(), input_tensor.size(),
+                *mem_info_, input_buffer_.data(), input_buffer_.size(),
                 input_shape.data(), input_shape.size()));
 
-            // Allocate zero-initialized state buffers for any extra inputs.
-            state_buffers_.clear();
-            for (std::size_t i = 1; i < n_inputs; ++i) {
-                auto info = session_->GetInputTypeInfoAllocated(i, allocator);
-                auto tensor_info = info->GetTensorTypeAndShapeInfo();
-                auto shape = tensor_info.GetShape();
-                std::size_t total = 1;
-                for (auto d : shape) {
-                    if (d <= 0) d = 1;  // dynamic dim: assume 1
-                    total *= static_cast<std::size_t>(d);
+            // Allocate zero-initialized state buffers only once (or after a
+            // dimension change). On subsequent frames prev_states_ holds the
+            // recurrent state and state_buffers_ is skipped entirely.
+            const bool need_zero_states =
+                state_buffers_.empty() &&
+                (prev_states_.empty() || prev_states_.size() != n_inputs - 1);
+            if (need_zero_states) {
+                state_buffers_.clear();
+                for (std::size_t i = 1; i < n_inputs; ++i) {
+                    auto info = session_->GetInputTypeInfo(i);
+                    auto tensor_info = info.GetTensorTypeAndShapeInfo();
+                    auto shape = tensor_info.GetShape();
+                    if (shape.size() >= 4) {
+                        const int level = static_cast<int>((i - 1) / 2);
+                        const int divisor = (1 << (level + 1));
+                        shape[0] = 1;
+                        shape[2] = ch / divisor;
+                        shape[3] = cw / divisor;
+                    }
+                    std::size_t total = 1;
+                    for (auto d : shape) {
+                        if (d <= 0) d = 1;
+                        total *= static_cast<std::size_t>(d);
+                    }
+                    state_buffers_.emplace_back(total, 0.0f);
+                    inputs.push_back(Ort::Value::CreateTensor<float>(
+                        *mem_info_, state_buffers_.back().data(),
+                        state_buffers_.back().size(), shape.data(),
+                        shape.size()));
                 }
-                state_buffers_.emplace_back(total, 0.0f);
-                inputs.push_back(Ort::Value::CreateTensor<float>(
-                    mem_info, state_buffers_.back().data(),
-                    state_buffers_.back().size(), shape.data(), shape.size()));
+            } else {
+                // Pad inputs with placeholder tensors (will be replaced by
+                // prev_states_ below, or by existing state_buffers_).
+                for (std::size_t i = 1; i < n_inputs; ++i) {
+                    inputs.push_back(Ort::Value{nullptr});
+                }
             }
+
             // If we have prev_states_ from a previous call, replace the zero
             // state tensors with the persisted states.
             if (!prev_states_.empty() && prev_states_.size() == n_inputs - 1) {
@@ -357,13 +416,31 @@ private:
                     inputs[i] = std::move(prev_states_[i - 1]);
                 }
                 prev_states_.clear();
+            } else if (!state_buffers_.empty()) {
+                // Rebuild Ort::Value wrappers around existing state_buffers_.
+                for (std::size_t i = 1; i < n_inputs; ++i) {
+                    auto info = session_->GetInputTypeInfo(i);
+                    auto tensor_info = info.GetTensorTypeAndShapeInfo();
+                    auto shape = tensor_info.GetShape();
+                    if (shape.size() >= 4) {
+                        const int level = static_cast<int>((i - 1) / 2);
+                        const int divisor = (1 << (level + 1));
+                        shape[0] = 1;
+                        shape[2] = ch / divisor;
+                        shape[3] = cw / divisor;
+                    }
+                    inputs[i] = Ort::Value::CreateTensor<float>(
+                        *mem_info_, state_buffers_[i - 1].data(),
+                        state_buffers_[i - 1].size(), shape.data(),
+                        shape.size());
+                }
             }
 
-            // Run inference.
+            // Run inference (uses cached name pointers — no per-frame alloc).
             auto outputs = session_->Run(
                 Ort::RunOptions{nullptr},
-                input_name_ptrs.data(), inputs.data(), inputs.size(),
-                output_name_ptrs.data(), output_name_ptrs.size());
+                cached_input_names_.data(), inputs.data(), inputs.size(),
+                cached_output_names_.data(), cached_output_names_.size());
 
             // Persist recurrent states (outputs beyond the first image).
             prev_states_.clear();
@@ -380,10 +457,6 @@ private:
                            const_cast<float*>(output_data));
             return output.clone();  // deep copy (Ort owns the buffer)
         } catch (const Ort::Exception& e) {
-            // Inference failure (shape mismatch, recurrent state mismatch, etc.):
-            // fall back to heuristic so the pipeline does not crash. Keep
-            // model_loaded_ true so the next batch can retry; the user must
-            // explicitly call load_model("") to disable the ONNX path.
             fprintf(stderr, "[e2vid] ONNX inference failed: %s (falling back "
                     "to heuristic, will retry next batch)\n", e.what());
             prev_states_.clear();
@@ -425,7 +498,10 @@ private:
     E2VIDCropParams crop_;
     EventVoxelGrid voxel_grid_;
     std::vector<std::uint8_t> hot_pixel_mask_;  ///< Cached for num_bins rebuilds.
-    bool normalize_input_{true};
+    // Default false: rpg_e2vid README says --no-normalize "will improve speed
+    // a bit, but might degrade the image quality a bit". The speed gain
+    // matters more for real-time GUI usage than the minor quality drop.
+    bool normalize_input_{false};
     bool model_loaded_{false};
     std::string model_path_;
 
@@ -434,6 +510,22 @@ private:
     std::unique_ptr<Ort::Session> session_;
     std::vector<Ort::Value> prev_states_;  ///< Recurrent states (UNetRecurrent).
     std::vector<std::vector<float>> state_buffers_;  ///< Backing storage for zero-init states.
+
+    // --- Hot-path caches (avoid per-frame allocations) ---
+    // input_buffer_ is reused across frames; resized only when crop/bin dims
+    // change. Previously every infer_onnx() call did a 320 KB malloc+memset.
+    std::vector<float> input_buffer_;
+    // Input/output name strings are fetched once at load_model() time.
+    std::vector<Ort::AllocatedStringPtr> input_name_owners_;
+    std::vector<Ort::AllocatedStringPtr> output_name_owners_;
+    std::vector<const char*> cached_input_names_;
+    std::vector<const char*> cached_output_names_;
+    // MemoryInfo is constant for the lifetime of the session.
+    std::unique_ptr<Ort::MemoryInfo> mem_info_;
+    // Crop dims last used to size input_buffer_ (resize only on change).
+    int cached_crop_w_{0};
+    int cached_crop_h_{0};
+    int cached_num_bins_{0};
 #endif
 };
 

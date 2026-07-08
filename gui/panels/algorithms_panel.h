@@ -78,6 +78,9 @@ private:
         QLabel* label{nullptr};
         QWidget* field{nullptr};
         std::string mode_filter;
+        std::string key;  ///< Parameter key (e.g. "output_fps") — used to
+                          ///< locate rows programmatically (e.g. auto-params
+                          ///< on event_to_video mode switch).
     };
     /// Per-algorithm UI state for mode-scoped parameter visibility.
     struct AlgoPanelState {

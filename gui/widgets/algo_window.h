@@ -101,6 +101,9 @@ private:
         QLabel* label{nullptr};
         QWidget* field{nullptr};
         std::string mode_filter;
+        std::string key;  ///< Parameter key (e.g. "roi_w") — used to locate
+                          ///< specific rows programmatically (e.g. auto-ROI
+                          ///< when switching to E2VID mode).
     };
 
     AlgoBridge* bridge_;
