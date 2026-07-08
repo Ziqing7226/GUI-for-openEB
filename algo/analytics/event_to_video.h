@@ -161,6 +161,9 @@ public:
     void set_e2vid_auto_hdr(bool v) { intensity_rescaler_.set_auto_hdr(v); }
     bool e2vid_auto_hdr() const { return intensity_rescaler_.auto_hdr(); }
 
+    void set_e2vid_downsample(bool v) { e2vid_.set_downsample(v); }
+    bool e2vid_downsample() const { return e2vid_.downsample(); }
+
     void set_unsharp_amount(float v) { unsharp_mask_.set_amount(v); }
     float unsharp_amount() const { return unsharp_mask_.amount(); }
 

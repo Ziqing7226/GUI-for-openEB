@@ -631,7 +631,7 @@ void AlgoBridge::register_self_analytics() {
     // Common params (mode, output_fps) have an empty mode_filter.
     add({"event_to_video", "Event -> Video (E2VID)", "analytics", "self",
          AlgoDisplayMode::Standalone,
-         {penum("mode", "Mode", "0", {"0=BardowVariational", "1=InteractingMaps", "2=E2VID"}),
+         {penum("mode", "Mode", "2", {"0=BardowVariational", "1=InteractingMaps", "2=E2VID"}),
           pint("output_fps", "Output fps", "30", "1", "120"),
           // --- BardowVariational (mode 0) ---
           pfloat("window_ms", "Window (ms)", "15", "10", "500", "0"),
@@ -651,6 +651,7 @@ void AlgoBridge::register_self_analytics() {
           pstring("model_path", "Model path (ONNX)", "models/e2vid_lightweight.onnx", "2"),
           pint("num_bins", "Num bins", "5", "1", "20", "2"),
           pbool("auto_hdr", "Auto HDR", "false", "2"),
+          pbool("downsample", "1/4 Downsample", "true", "2"),
           pfloat("unsharp_amount", "Unsharp amount", "0.3", "0.0", "2.0", "2"),
           pfloat("unsharp_sigma", "Unsharp sigma", "1.0", "0.1", "5.0", "2"),
           pfloat("bilateral_sigma", "Bilateral sigma", "0.0", "0.0", "10.0", "2")}});

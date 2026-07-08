@@ -1077,7 +1077,7 @@ class EventToVideoBackend final : public AlgoBackend {
     // EventToVideo instance inherits every setting, including E2VID model
     // path and post-processing params — otherwise ROI changes would silently
     // drop the E2VID configuration and fall back to the heuristic path).
-    gui_algo::EventToVideo::Mode mode_{gui_algo::EventToVideo::Mode::BardowVariational};
+    gui_algo::EventToVideo::Mode mode_{gui_algo::EventToVideo::Mode::E2VID};
     int output_fps_{30};
     // BardowVariational params.
     float window_ms_{15.0F};
@@ -1093,6 +1093,7 @@ class EventToVideoBackend final : public AlgoBackend {
     std::string model_path_;
     int e2vid_num_bins_{5};
     bool e2vid_auto_hdr_{false};
+    bool e2vid_downsample_{true};  // 1/4 downsample (default on)
     float unsharp_amount_{0.3F};
     float unsharp_sigma_{1.0F};
     float bilateral_sigma_{0.0F};
@@ -1128,6 +1129,7 @@ public:
         if (!model_path_.empty()) algo_->set_model_path(model_path_);
         algo_->set_e2vid_num_bins(e2vid_num_bins_);
         algo_->set_e2vid_auto_hdr(e2vid_auto_hdr_);
+        algo_->set_e2vid_downsample(e2vid_downsample_);
         algo_->set_unsharp_amount(unsharp_amount_);
         algo_->set_unsharp_sigma(unsharp_sigma_);
         algo_->set_bilateral_sigma(bilateral_sigma_);
@@ -1188,6 +1190,9 @@ public:
         } else if (k == "auto_hdr") {
             e2vid_auto_hdr_ = to_b(v);
             if (algo_) algo_->set_e2vid_auto_hdr(e2vid_auto_hdr_);
+        } else if (k == "downsample") {
+            e2vid_downsample_ = to_b(v);
+            if (algo_) algo_->set_e2vid_downsample(e2vid_downsample_);
         } else if (k == "unsharp_amount") {
             unsharp_amount_ = static_cast<float>(to_d(v));
             if (algo_) algo_->set_unsharp_amount(unsharp_amount_);

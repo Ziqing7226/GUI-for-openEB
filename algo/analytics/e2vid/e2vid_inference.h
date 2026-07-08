@@ -110,8 +110,10 @@ public:
         : width_(width), height_(height),
           num_bins_(clamp_bins(num_bins)),
           num_encoders_(num_encoders),
-          crop_(E2VIDCropParams::compute(width, height, num_encoders)),
-          voxel_grid_(width, height, num_bins_) {}
+          crop_(E2VIDCropParams::compute(
+              effective_dim(width), effective_dim(height), num_encoders)),
+          full_crop_(E2VIDCropParams::compute(width, height, num_encoders)),
+          voxel_grid_(effective_dim(width), effective_dim(height), num_bins_) {}
 
     /// @brief Loads an ONNX model from file.
     /// @return true if the model was loaded successfully.
@@ -191,23 +193,57 @@ public:
     /// @brief Runs inference on a batch of events.
     /// @param events Event array.
     /// @param n Number of events.
-    /// @return ONNX path: CV_32FC1 padded image in [0,1] (crop_h x crop_w) —
-    ///         the caller is responsible for cropping back to sensor size.
-    ///         Heuristic path: CV_8UC1 sensor-sized image in [0,255].
+    /// @return ONNX path: CV_32FC1 padded image in [0,1] (full_crop_h x
+    ///         full_crop_w) — the caller is responsible for cropping back
+    ///         to sensor size. Heuristic path: CV_8UC1 sensor-sized image.
     cv::Mat infer(const Event* events, std::size_t n) {
         if (events == nullptr || n == 0 || width_ <= 0 || height_ <= 0) {
             return cv::Mat::zeros(height_, width_, CV_8UC1);
         }
 
-        // 1. Build voxel grid.
-        voxel_grid_.build(events, n);
+        // 1. Build voxel grid. When downsample_ is on, keep only events whose
+        //    x AND y are both even, and remap (x, y) → (x/2, y/2) into the
+        //    half-size grid. For a 128×128 ROI this produces a 64×64 grid,
+        //    cutting ONNX inference cost ~4×.
+        if (downsample_) {
+            const Event* src = events;
+            std::size_t src_n = n;
+            if (src_n > downsampled_events_.size()) {
+                downsampled_events_.reserve(src_n / 4 + 16);
+            }
+            downsampled_events_.clear();
+            for (std::size_t i = 0; i < src_n; ++i) {
+                const auto& e = src[i];
+                if ((e.x & 1u) == 0 && (e.y & 1u) == 0) {
+                    downsampled_events_.push_back(
+                        Event(static_cast<std::uint16_t>(e.x >> 1),
+                              static_cast<std::uint16_t>(e.y >> 1),
+                              e.p, e.t));
+                }
+            }
+            voxel_grid_.build(downsampled_events_.data(),
+                              downsampled_events_.size());
+        } else {
+            voxel_grid_.build(events, n);
+        }
         if (normalize_input_) {
             voxel_grid_.normalize();
         }
 
 #if defined(GUI_ALGO_HAS_ONNXRUNTIME)
         if (model_loaded_ && session_) {
-            return infer_onnx();
+            cv::Mat result = infer_onnx();  // effective crop size
+            // Upsample to full crop dimensions so crop_to_sensor works
+            // uniformly regardless of downsample_.
+            if (downsample_ &&
+                (result.rows != full_crop_.crop_height ||
+                 result.cols != full_crop_.crop_width)) {
+                cv::resize(result, result,
+                           cv::Size(full_crop_.crop_width,
+                                    full_crop_.crop_height),
+                           0, 0, cv::INTER_NEAREST);
+            }
+            return result;
         }
 #endif
         // Fallback: heuristic reconstruction from voxel grid.
@@ -216,9 +252,14 @@ public:
 
     /// @brief Crops a padded image back to the sensor dimensions.
     /// No-op if the image already matches the sensor size (heuristic path).
+    /// When downsample_ is on, the image has been upsampled to full_crop_
+    /// dimensions, so use full_crop_ for cropping.
     cv::Mat crop_to_sensor(const cv::Mat& img) const {
         if (img.rows == height_ && img.cols == width_) {
             return img;
+        }
+        if (downsample_) {
+            return full_crop_.crop(img);
         }
         return crop_.crop(img);
     }
@@ -226,6 +267,16 @@ public:
     /// @brief Sets whether to normalize the input voxel grid.
     void set_normalize_input(bool v) { normalize_input_ = v; }
     bool normalize_input() const { return normalize_input_; }
+
+    /// @brief Sets whether to 1/4-downsample the ROI before inference.
+    /// When on, only events with even x AND even y are kept, and coordinates
+    /// are halved. For 128×128 ROI this produces a 64×64 grid, ~4× faster.
+    void set_downsample(bool v) {
+        if (downsample_ == v) return;
+        downsample_ = v;
+        rebuild_effective_buffers();
+    }
+    bool downsample() const { return downsample_; }
 
     /// @brief Sets the hot-pixel mask for the voxel grid preprocessor.
     void set_hot_pixel_mask(const std::vector<std::uint8_t>& mask) {
@@ -247,11 +298,7 @@ public:
             target = model_num_bins_;
         }
         num_bins_ = target;
-        // Reconstruct voxel grid but preserve the hot-pixel mask.
-        voxel_grid_ = EventVoxelGrid(width_, height_, target);
-        if (!hot_pixel_mask_.empty()) {
-            voxel_grid_.set_hot_pixel_mask(hot_pixel_mask_);
-        }
+        rebuild_effective_buffers();
     }
     int num_bins() const { return num_bins_; }
 
@@ -296,13 +343,8 @@ private:
             // shape = [N, C, H, W]; C is the num_bins channel dimension.
             if (shape.size() >= 2 && shape[1] > 0) {
                 model_num_bins_ = static_cast<int>(shape[1]);
-                // Re-sync the voxel grid to the model's channel count.
                 if (model_num_bins_ != num_bins_) {
                     num_bins_ = model_num_bins_;
-                    voxel_grid_ = EventVoxelGrid(width_, height_, num_bins_);
-                    if (!hot_pixel_mask_.empty()) {
-                        voxel_grid_.set_hot_pixel_mask(hot_pixel_mask_);
-                    }
                 }
             }
             // Infer num_encoders from input count (E2VIDRecurrent only).
@@ -311,9 +353,10 @@ private:
                 int inferred = static_cast<int>((n_inputs - 1) / 2);
                 if (inferred > 0 && inferred != num_encoders_) {
                     num_encoders_ = inferred;
-                    crop_ = E2VIDCropParams::compute(width_, height_, num_encoders_);
                 }
             }
+            // Rebuild all effective-size buffers (voxel grid, crop, states).
+            rebuild_effective_buffers();
         } catch (const Ort::Exception&) {
             // Keep existing num_bins_ (best-effort).
         }
@@ -348,10 +391,13 @@ private:
             }
 
             // Copy voxel grid into padded tensor (reflection padding).
+            // voxel_grid_ is at effective dimensions (possibly downsampled).
+            const int ew = eff_width();
+            const int eh = eff_height();
             const float* grid = voxel_grid_.data();
-            const int stride_hw = width_ * height_;
+            const int stride_hw = ew * eh;
             for (int b = 0; b < num_bins_; ++b) {
-                cv::Mat bin(height_, width_, CV_32FC1,
+                cv::Mat bin(eh, ew, CV_32FC1,
                             const_cast<float*>(grid + b * stride_hw));
                 cv::Mat padded = crop_.pad(bin);
                 std::copy(padded.begin<float>(), padded.end<float>(),
@@ -466,27 +512,31 @@ private:
 #endif
 
     /// @brief Heuristic fallback: reconstructs from voxel grid without a model.
-    /// Sums bins, applies sigmoid, returns CV_8UC1.
+    /// Sums bins, applies sigmoid, returns CV_8UC1 at sensor dimensions.
     cv::Mat infer_heuristic() {
+        const int eh = eff_height();
+        const int ew = eff_width();
         // Sum across bins to get a 2D event count map.
-        cv::Mat sum_img(height_, width_, CV_32FC1, cv::Scalar(0.0f));
+        cv::Mat sum_img(eh, ew, CV_32FC1, cv::Scalar(0.0f));
         const float* grid = voxel_grid_.data();
-        const int stride_hw = width_ * height_;
+        const int stride_hw = ew * eh;
         for (int b = 0; b < num_bins_; ++b) {
-            cv::Mat bin(height_, width_, CV_32FC1,
+            cv::Mat bin(eh, ew, CV_32FC1,
                         const_cast<float*>(grid + b * stride_hw));
             sum_img += bin;
         }
         // Apply sigmoid: out = 1 / (1 + exp(-k * sum))
-        // The sum of events is proportional to edge activity; sigmoid maps
-        // it to [0, 1] where high activity = bright edges.
         cv::Mat sig;
-        const float k = 0.5f;  // gain
+        const float k = 0.5f;
         cv::exp(-k * sum_img, sig);
         sig = 1.0f / (1.0f + sig);
-        // Scale to [0, 255].
         cv::Mat gray;
         sig.convertTo(gray, CV_8UC1, 255.0);
+        // Upsample if downsampled.
+        if (downsample_ && (gray.rows != height_ || gray.cols != width_)) {
+            cv::resize(gray, gray, cv::Size(width_, height_), 0, 0,
+                       cv::INTER_NEAREST);
+        }
         return gray;
     }
 
@@ -495,7 +545,14 @@ private:
     int num_bins_;
     int model_num_bins_{0};  ///< Channel count read from the loaded ONNX model.
     int num_encoders_;
-    E2VIDCropParams crop_;
+    // Default true: 1/4-downsample (halve width and height) before inference.
+    // For 128×128 ROI → 64×64 grid, ~4× faster inference. Events whose x OR
+    // y is odd are discarded; the rest are remapped (x/2, y/2).
+    // Declared before crop_/voxel_grid_ because the constructor initialiser
+    // list uses effective_dim() which reads downsample_.
+    bool downsample_{true};
+    E2VIDCropParams crop_;       ///< Crop at effective (possibly downsampled) dims.
+    E2VIDCropParams full_crop_;  ///< Crop at original sensor dims (for upsampled output).
     EventVoxelGrid voxel_grid_;
     std::vector<std::uint8_t> hot_pixel_mask_;  ///< Cached for num_bins rebuilds.
     // Default false: rpg_e2vid README says --no-normalize "will improve speed
@@ -504,6 +561,38 @@ private:
     bool normalize_input_{false};
     bool model_loaded_{false};
     std::string model_path_;
+
+    /// Effective dimensions after optional 1/4 downsampling.
+    int eff_width() const { return effective_dim(width_); }
+    int eff_height() const { return effective_dim(height_); }
+
+    /// Returns half the dimension when downsample_ is on, else the dimension.
+    int effective_dim(int d) const {
+        return downsample_ ? (d > 0 ? (d + 1) / 2 : 0) : d;
+    }
+
+    /// Rebuilds voxel_grid_, crop_, and ONNX state buffers for the current
+    /// effective dimensions. Called whenever downsample_ or num_bins_ or
+    /// num_encoders_ changes. Preserves the hot-pixel mask.
+    void rebuild_effective_buffers() {
+        const int ew = eff_width();
+        const int eh = eff_height();
+        voxel_grid_ = EventVoxelGrid(ew, eh, num_bins_);
+        if (!hot_pixel_mask_.empty()) {
+            voxel_grid_.set_hot_pixel_mask(hot_pixel_mask_);
+        }
+        crop_ = E2VIDCropParams::compute(ew, eh, num_encoders_);
+        full_crop_ = E2VIDCropParams::compute(width_, height_, num_encoders_);
+#if defined(GUI_ALGO_HAS_ONNXRUNTIME)
+        state_buffers_.clear();
+        prev_states_.clear();
+        input_buffer_.clear();
+        cached_crop_w_ = 0;  // force resize on next infer
+#endif
+    }
+
+    /// Pre-allocated buffer for downsampled events (reused across frames).
+    std::vector<Event> downsampled_events_;
 
 #if defined(GUI_ALGO_HAS_ONNXRUNTIME)
     std::unique_ptr<Ort::Env> env_;
