@@ -706,7 +706,7 @@ void AlgoBridge::register_self_analytics() {
           pstring("model_path", "Model path (ONNX)", "models/e2vid_lightweight.onnx", "2"),
           pint("num_bins", "Num bins", "5", "1", "20", "2"),
           pbool("auto_hdr", "Auto HDR", "false", "2"),
-          pbool("downsample", "1/4 Downsample", "true", "2"),
+          pbool("downsample", "1/4 Downsample", "true"),
           pfloat("unsharp_amount", "Unsharp amount", "0.3", "0.0", "2.0", "2"),
           pfloat("unsharp_sigma", "Unsharp sigma", "1.0", "0.1", "5.0", "2"),
           pfloat("bilateral_sigma", "Bilateral sigma", "0.0", "0.0", "10.0", "2")}});

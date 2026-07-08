@@ -20,6 +20,7 @@
 #include <vector>
 
 #include <opencv2/core.hpp>
+#include <opencv2/imgproc.hpp>
 
 #include <metavision/sdk/base/utils/timestamp.h>
 
@@ -40,7 +41,7 @@ public:
     };
 
     /// @brief Constructs the reconstructor.
-    /// @param width,height Sensor dimensions.
+    /// @param width,height Sensor dimensions (or ROI dimensions).
     /// @param mode Reconstruction mode.
     /// @param output_fps Output frame rate in Hz, [1, 120].
     EventToVideo(int width, int height,
@@ -59,18 +60,39 @@ public:
     void process(const Event* events, std::size_t n) {
         if (events == nullptr || n == 0) return;
         if (mode_ == Mode::E2VID) {
-            // Buffer events for E2VID voxel grid inference.
+            // Buffer events for E2VID voxel grid inference (E2VID handles
+            // its own downsample internally).
             e2vid_event_buffer_.insert(e2vid_event_buffer_.end(),
                                        events, events + n);
             if (events[n - 1].t > current_t_) current_t_ = events[n - 1].t;
         } else {
-            for (std::size_t i = 0; i < n; ++i) {
-                const Event& e = events[i];
-                if (e.x >= width_ || e.y >= height_) continue;
-                const std::size_t idx =
-                    static_cast<std::size_t>(e.y) * width_ + e.x;
-                log_intensity_[idx] += (e.is_on() ? theta_ : -theta_);
-                if (e.t > current_t_) current_t_ = e.t;
+            // Non-E2VID: accumulate log-intensity at effective resolution.
+            const int W = eff_w(), H = eff_h();
+            if (static_cast<int>(log_intensity_.size()) != W * H) {
+                log_intensity_.assign(static_cast<std::size_t>(W) * H, 0.0);
+            }
+            if (downsample_) {
+                // 1/4 downsample: keep only even-coordinate events, halve
+                // coordinates (128x128 ROI -> 64x64 reconstruction).
+                for (std::size_t i = 0; i < n; ++i) {
+                    const Event& e = events[i];
+                    if ((e.x & 1u) == 0 && (e.y & 1u) == 0) {
+                        const int hx = e.x >> 1, hy = e.y >> 1;
+                        if (hx < W && hy < H) {
+                            log_intensity_[static_cast<std::size_t>(hy) * W + hx]
+                                += (e.is_on() ? theta_ : -theta_);
+                        }
+                    }
+                    if (e.t > current_t_) current_t_ = e.t;
+                }
+            } else {
+                for (std::size_t i = 0; i < n; ++i) {
+                    const Event& e = events[i];
+                    if (e.x >= W || e.y >= H) continue;
+                    log_intensity_[static_cast<std::size_t>(e.y) * W + e.x]
+                        += (e.is_on() ? theta_ : -theta_);
+                    if (e.t > current_t_) current_t_ = e.t;
+                }
             }
         }
     }
@@ -104,11 +126,23 @@ public:
                 frame = reconstruct_e2vid();
                 break;
         }
+        // Upsample non-E2VID downsampled output back to sensor/ROI size.
+        if (mode_ != Mode::E2VID && downsample_ &&
+            frame.rows != height_ && !frame.empty()) {
+            cv::resize(frame, frame, cv::Size(width_, height_),
+                       0, 0, cv::INTER_NEAREST);
+        }
         return frame;
     }
 
     // Mode setters --------------------------------------------------------
-    void set_mode(Mode m) { mode_ = m; }
+    void set_mode(Mode m) {
+        if (mode_ != m) {
+            mode_ = m;
+            // Mode change invalidates state buffers (different code path).
+            reset_state();
+        }
+    }
     Mode mode() const { return mode_; }
 
     void set_output_fps(int fps) { output_fps_ = clamp_fps(fps); }
@@ -158,6 +192,18 @@ public:
     }
     float fov_deg() const { return fov_deg_; }
 
+    // Downsample (non-E2VID modes) ---------------------------------------
+    /// @brief Enables/disables 1/4 downsample for Bardow/InteractingMaps.
+    /// When on, only even-coordinate events are processed at half resolution,
+    /// and the output is upsampled back (INTER_NEAREST) for display.
+    void set_downsample(bool v) {
+        if (downsample_ != v) {
+            downsample_ = v;
+            reset_state();  // buffer dimensions changed
+        }
+    }
+    bool downsample() const { return downsample_; }
+
     // E2VID parameters ----------------------------------------------------
     void set_model_path(const std::string& path) {
         model_path_ = path;
@@ -196,35 +242,12 @@ public:
 
     /// @brief Resets the reconstruction state (log-intensity + E2VID pipeline).
     void reset() {
-        std::fill(log_intensity_.begin(), log_intensity_.end(), 0.0);
-        current_t_ = 0;
-        last_frame_t_ = 0;
+        reset_state();
         e2vid_.reset();
         e2vid_event_buffer_.clear();
         intensity_rescaler_.reset();
-        // Bardow state.
-        std::fill(L_.begin(), L_.end(), 0.0);
-        std::fill(L_prev_.begin(), L_prev_.end(), 0.0);
-        std::fill(L_prior_.begin(), L_prior_.end(), 0.0);
-        std::fill(L_tp_.begin(), L_tp_.end(), 0.0);
-        std::fill(ux_.begin(), ux_.end(), 0.0);
-        std::fill(uy_.begin(), uy_.end(), 0.0);
-        std::fill(ux_prev_.begin(), ux_prev_.end(), 0.0);
-        std::fill(uy_prev_.begin(), uy_prev_.end(), 0.0);
-        std::fill(px_L_.begin(), px_L_.end(), 0.0);
-        std::fill(py_L_.begin(), py_L_.end(), 0.0);
-        std::fill(px_ux_.begin(), px_ux_.end(), 0.0);
-        std::fill(py_ux_.begin(), py_ux_.end(), 0.0);
-        std::fill(px_uy_.begin(), px_uy_.end(), 0.0);
-        std::fill(py_uy_.begin(), py_uy_.end(), 0.0);
-        // InteractingMaps state.
-        std::fill(I_map_.begin(), I_map_.end(), 0.0);
-        std::fill(Gx_.begin(), Gx_.end(), 0.0);
-        std::fill(Gy_.begin(), Gy_.end(), 0.0);
-        std::fill(Fx_.begin(), Fx_.end(), 0.0);
-        std::fill(Fy_.begin(), Fy_.end(), 0.0);
-        R_[0] = R_[1] = R_[2] = 0.0;
-        im_calib_dirty_ = true;
+        current_t_ = 0;
+        last_frame_t_ = 0;
     }
 
     int width() const { return width_; }
@@ -257,9 +280,30 @@ private:
         return n;
     }
 
+    /// @brief Effective reconstruction width (halved when downsample is on).
+    int eff_w() const { return downsample_ ? (width_ > 0 ? (width_ + 1) / 2 : 0) : width_; }
+    /// @brief Effective reconstruction height (halved when downsample is on).
+    int eff_h() const { return downsample_ ? (height_ > 0 ? (height_ + 1) / 2 : 0) : height_; }
+
+    /// @brief Resets non-E2VID reconstruction state.
+    void reset_state() {
+        std::fill(log_intensity_.begin(), log_intensity_.end(), 0.0);
+        L_.clear(); L_prev_.clear(); L_prior_.clear(); L_tp_.clear();
+        ux_.clear(); uy_.clear(); ux_prev_.clear(); uy_prev_.clear();
+        px_L_.clear(); py_L_.clear();
+        px_ux_.clear(); py_ux_.clear();
+        px_uy_.clear(); py_uy_.clear();
+        I_map_.clear(); Gx_.clear(); Gy_.clear();
+        Fx_.clear(); Fy_.clear();
+        Cx_.clear(); Cy_.clear(); Cz_.clear();
+        R_[0] = R_[1] = R_[2] = 0.0;
+        im_first_frame_ = true;
+        im_calib_dirty_ = true;
+    }
+
     /// @brief Converts a log-intensity buffer to a normalized CV_8UC1 frame.
-    cv::Mat to_gray(const std::vector<double>& u) const {
-        cv::Mat frame(height_, width_, CV_8UC1, cv::Scalar(0));
+    cv::Mat to_gray(const std::vector<double>& u, int w, int h) const {
+        cv::Mat frame(h, w, CV_8UC1, cv::Scalar(0));
         double lo = 0.0, hi = 0.0;
         bool first = true;
         for (const double v : u) {
@@ -267,11 +311,11 @@ private:
             else { if (v < lo) lo = v; if (v > hi) hi = v; }
         }
         const double range = hi - lo;
-        for (int y = 0; y < height_; ++y) {
+        for (int y = 0; y < h; ++y) {
             std::uint8_t* row = frame.ptr<std::uint8_t>(y);
-            for (int x = 0; x < width_; ++x) {
+            for (int x = 0; x < w; ++x) {
                 const std::size_t idx =
-                    static_cast<std::size_t>(y) * width_ + x;
+                    static_cast<std::size_t>(y) * w + x;
                 double g = range > 1e-9
                                ? (u[idx] - lo) / range
                                : 0.5;
@@ -288,11 +332,11 @@ private:
     /// via Chambolle's semi-implicit projection algorithm.
     /// Dual variables px,py are maintained across calls for warm-start.
     void chambolle_tv(const std::vector<double>& g, double lambda,
-                      int iters,
+                      int iters, int w, int h,
                       std::vector<double>& u,
                       std::vector<double>& px,
                       std::vector<double>& py) const {
-        const std::size_t N = static_cast<std::size_t>(width_) * height_;
+        const std::size_t N = static_cast<std::size_t>(w) * h;
         if (u.size() != N) u.assign(N, 0.0);
         if (px.size() != N) px.assign(N, 0.0);
         if (py.size() != N) py.assign(N, 0.0);
@@ -302,23 +346,23 @@ private:
         std::vector<double> phi(N);
         for (int iter = 0; iter < iters; ++iter) {
             // phi = div(p) - g/lambda.
-            for (int y = 0; y < height_; ++y) {
-                for (int x = 0; x < width_; ++x) {
+            for (int y = 0; y < h; ++y) {
+                for (int x = 0; x < w; ++x) {
                     const std::size_t idx =
-                        static_cast<std::size_t>(y) * width_ + x;
+                        static_cast<std::size_t>(y) * w + x;
                     const double div_p =
                         px[idx] - (x > 0 ? px[idx - 1] : 0.0) +
-                        py[idx] - (y > 0 ? py[idx - width_] : 0.0);
+                        py[idx] - (y > 0 ? py[idx - w] : 0.0);
                     phi[idx] = div_p - g[idx] * inv_lambda;
                 }
             }
             // p = (p + tau * grad(phi)) / (1 + tau * |grad(phi)|).
-            for (int y = 0; y < height_; ++y) {
-                for (int x = 0; x < width_; ++x) {
+            for (int y = 0; y < h; ++y) {
+                for (int x = 0; x < w; ++x) {
                     const std::size_t idx =
-                        static_cast<std::size_t>(y) * width_ + x;
-                    const double gx = (x + 1 < width_) ? phi[idx + 1] - phi[idx] : 0.0;
-                    const double gy = (y + 1 < height_) ? phi[idx + width_] - phi[idx] : 0.0;
+                        static_cast<std::size_t>(y) * w + x;
+                    const double gx = (x + 1 < w) ? phi[idx + 1] - phi[idx] : 0.0;
+                    const double gy = (y + 1 < h) ? phi[idx + w] - phi[idx] : 0.0;
                     const double denom = 1.0 + tau * std::sqrt(gx * gx + gy * gy);
                     px[idx] = (px[idx] + tau * gx) / denom;
                     py[idx] = (py[idx] + tau * gy) / denom;
@@ -326,13 +370,13 @@ private:
             }
         }
         // u = g - lambda * div(p).
-        for (int y = 0; y < height_; ++y) {
-            for (int x = 0; x < width_; ++x) {
+        for (int y = 0; y < h; ++y) {
+            for (int x = 0; x < w; ++x) {
                 const std::size_t idx =
-                    static_cast<std::size_t>(y) * width_ + x;
+                    static_cast<std::size_t>(y) * w + x;
                 const double div_p =
                     px[idx] - (x > 0 ? px[idx - 1] : 0.0) +
-                    py[idx] - (y > 0 ? py[idx - width_] : 0.0);
+                    py[idx] - (y > 0 ? py[idx - w] : 0.0);
                 u[idx] = g[idx] - lambda * div_p;
             }
         }
@@ -345,7 +389,6 @@ private:
                          + M[2]*(M[3]*M[7]-M[4]*M[6]);
         if (std::abs(det) < 1e-12) { x[0]=x[1]=x[2]=0.0; return; }
         const double inv = 1.0 / det;
-        // Cramer's rule: replace each column with b.
         x[0] = (b[0]*(M[4]*M[8]-M[5]*M[7]) - M[1]*(b[1]*M[8]-M[5]*b[2])
                + M[2]*(b[1]*M[7]-M[4]*b[2])) * inv;
         x[1] = (M[0]*(b[1]*M[8]-M[5]*b[2]) - b[0]*(M[3]*M[8]-M[5]*M[6])
@@ -362,19 +405,29 @@ private:
     // (M x N x K) with a single-time-step sliding window (current frame vs
     // previous frame). All six regularization terms (lambda1..6) and the
     // joint estimation of velocity field u and log-intensity L are preserved:
-    //   lambda1: TV(u)        — spatial smoothness of optical flow.
-    //   lambda2: ||u - u_prev|| — temporal smoothness of flow.
-    //   lambda3: TV(L)        — spatial smoothness of intensity.
+    //   lambda1: TV(u)           — spatial smoothness of optical flow.
+    //   lambda2: ||u - u_prev||  — temporal smoothness of flow.
+    //   lambda3: TV(L)           — spatial smoothness of intensity.
     //   lambda4: |<grad L, dt*u> + (L - L_prev)| — optical-flow constraint
     //           (brightness constancy, first-order Taylor approximation).
     //   lambda5: h_theta(L - L_tp) — no-event dead-zone constraint.
     //   lambda6: ||L - L_prior||^2 — prior image retention.
-    // The event data term (|L(t_i) - L(t_{i-1}) - theta*rho|) is represented
-    // by the event-accumulated log_intensity_ serving as data fidelity target.
-    // Optimization uses alternating Chambolle-Pock primal-dual updates.
+    //
+    // Optimization uses sequential proximal steps (Gauss-Seidel style):
+    //   1. TV-denoise event data f with lambda3 (data-driven, produces
+    //      visible structure — this is the core that prevents gray output).
+    //   2. Estimate optical flow u from L (lambda1, lambda2, lambda4) with
+    //      robustness: gradient-magnitude thresholding prevents division-
+    //      by-near-zero blow-up in flat regions; flow magnitude is clamped.
+    //   3. Apply flow-based temporal prediction (lambda4) — single blend.
+    //   4. Apply no-event dead-zone soft threshold (lambda5).
+    //   5. Apply prior image retention (lambda6) — single gentle blend.
+    // Each correction is applied exactly once (not iterated) to prevent the
+    // prior term from collapsing the estimate to a flat field.
     // =====================================================================
     cv::Mat reconstruct_bardow() {
-        const std::size_t N = static_cast<std::size_t>(width_) * height_;
+        const int W = eff_w(), H = eff_h();
+        const std::size_t N = static_cast<std::size_t>(W) * H;
         const std::vector<double>& f = log_intensity_;  // event data term
         // Lazy initialization of state buffers.
         if (L_.size() != N) {
@@ -382,71 +435,52 @@ private:
             L_prior_.assign(N, 0.0); L_tp_.assign(N, 0.0);
             ux_.assign(N, 0.0); uy_.assign(N, 0.0);
             ux_prev_.assign(N, 0.0); uy_prev_.assign(N, 0.0);
+            px_L_.assign(N, 0.0); py_L_.assign(N, 0.0);
+            px_ux_.assign(N, 0.0); py_ux_.assign(N, 0.0);
+            px_uy_.assign(N, 0.0); py_uy_.assign(N, 0.0);
+            im_first_frame_ = true;
         }
         const double dt = static_cast<double>(delta_t_ms_) * 1e-3;  // seconds
-        // Initialize L from event data on first frame (warm start).
+        // Warm-start L from event data on first frame.
         if (im_first_frame_) {
             L_ = f; L_prev_ = f; L_prior_ = f; L_tp_ = f;
             im_first_frame_ = false;
         }
-        // --- Alternating primal-dual optimization (Eq. 5, biconvex split) ---
-        for (int iter = 0; iter < num_iterations_; ++iter) {
-            // ===== L update (fix u) =====
-            // Build TV-denoising target g combining event data (weight 1),
-            // optical-flow temporal prediction (lambda4), and prior image
-            // (lambda6).
-            std::vector<double> g(N);
-            for (int y = 0; y < height_; ++y) {
-                for (int x = 0; x < width_; ++x) {
-                    const std::size_t idx =
-                        static_cast<std::size_t>(y) * width_ + x;
-                    // Spatial gradient of previous L (for flow prediction).
-                    const double gx = (x + 1 < width_)
-                        ? L_prev_[idx + 1] - L_prev_[idx] : 0.0;
-                    const double gy = (y + 1 < height_)
-                        ? L_prev_[idx + width_] - L_prev_[idx] : 0.0;
-                    // Optical-flow consistency: L_t = -<grad L, u> * dt,
-                    // i.e. L should be L_prev + dt * <grad L, u>.
-                    const double L_flow =
-                        L_prev_[idx] + dt * (ux_[idx] * gx + uy_[idx] * gy);
-                    g[idx] = (f[idx]
-                              + static_cast<double>(lambda4_) * L_flow
-                              + static_cast<double>(lambda6_) * L_prior_[idx])
-                           / (1.0 + lambda4_ + lambda6_);
-                }
-            }
-            // TV denoising with lambda3 (1 Chambolle iteration per outer iter;
-            // num_iterations_ outer iterations provide full convergence).
-            chambolle_tv(g, lambda3_, 1, L_, px_L_, py_L_);
-            // No-event dead-zone (lambda5): soft-threshold |L - L_tp| around
-            // theta (Eq. 4, 6). Within [-theta, theta] no cost; beyond, L1.
-            if (lambda5_ > 1e-9) {
-                const double shift = static_cast<double>(lambda5_);
-                for (std::size_t i = 0; i < N; ++i) {
-                    const double diff = L_[i] - L_tp_[i];
-                    const double thr = theta_ + shift;
-                    if (diff > thr)       L_[i] -= shift;
-                    else if (diff < -thr) L_[i] += shift;
-                }
-            }
-            // ===== u update (fix L) =====
-            // Optical-flow constraint (Eq. 2): <grad L, u> = -L_t.
-            // L_t = (L - L_prev) / dt. Minimum-norm solution (Horn-Schunck
-            // style): u_target = -L_t / |grad L|^2 * grad L.
+        // --- Step 1: TV-denoise event data (lambda3) ---
+        // L = argmin ||L - f||^2/2 + lambda3 * TV(L). Data-driven: produces
+        // visible structure from the event-accumulated log-intensity.
+        chambolle_tv(f, lambda3_, num_iterations_, W, H, L_, px_L_, py_L_);
+        // --- Step 2: Joint optical flow estimation (lambda1, lambda2, lambda4) ---
+        // Optical-flow constraint (Eq. 2): <grad L, u> = -L_t.
+        // L_t = (L - L_prev) / dt. Minimum-norm solution (Horn-Schunck style):
+        // u_target = -L_t / |grad L|^2 * grad L.
+        {
             std::vector<double> utx(N), uty(N);
-            for (int y = 0; y < height_; ++y) {
-                for (int x = 0; x < width_; ++x) {
+            const double inv_dt = 1.0 / std::max(dt, 1e-9);
+            for (int y = 0; y < H; ++y) {
+                for (int x = 0; x < W; ++x) {
                     const std::size_t idx =
-                        static_cast<std::size_t>(y) * width_ + x;
-                    const double gx = (x + 1 < width_)
-                        ? L_[idx + 1] - L_[idx] : 0.0;
-                    const double gy = (y + 1 < height_)
-                        ? L_[idx + width_] - L_[idx] : 0.0;
-                    const double Lt = (L_[idx] - L_prev_[idx])
-                                    / std::max(dt, 1e-9);
-                    const double g2 = gx * gx + gy * gy + 1e-6;
-                    utx[idx] = -Lt * gx / g2;
-                    uty[idx] = -Lt * gy / g2;
+                        static_cast<std::size_t>(y) * W + x;
+                    const double gx = (x + 1 < W) ? L_[idx + 1] - L_[idx] : 0.0;
+                    const double gy = (y + 1 < H) ? L_[idx + W] - L_[idx] : 0.0;
+                    const double gmag2 = gx * gx + gy * gy;
+                    // Only estimate flow where gradient is significant —
+                    // prevents division-by-near-zero blow-up in flat regions.
+                    if (gmag2 > 1e-4) {
+                        const double Lt = (L_[idx] - L_prev_[idx]) * inv_dt;
+                        utx[idx] = -Lt * gx / gmag2;
+                        uty[idx] = -Lt * gy / gmag2;
+                        // Clamp flow magnitude to prevent divergence.
+                        const double umag = std::sqrt(utx[idx] * utx[idx] +
+                                                      uty[idx] * uty[idx]);
+                        const double max_u = 5.0;
+                        if (umag > max_u) {
+                            const double s = max_u / umag;
+                            utx[idx] *= s; uty[idx] *= s;
+                        }
+                    } else {
+                        utx[idx] = 0.0; uty[idx] = 0.0;
+                    }
                 }
             }
             // Temporal smoothness (lambda2): blend with previous flow.
@@ -457,9 +491,50 @@ private:
                     uty[i] = (uty[i] + w * uy_prev_[i]) / (1.0 + w);
                 }
             }
-            // TV denoising of flow components with lambda1.
-            chambolle_tv(utx, lambda1_, 1, ux_, px_ux_, py_ux_);
-            chambolle_tv(uty, lambda1_, 1, uy_, px_uy_, py_uy_);
+            // Spatial TV smoothness (lambda1).
+            chambolle_tv(utx, lambda1_, num_iterations_, W, H,
+                         ux_, px_ux_, py_ux_);
+            chambolle_tv(uty, lambda1_, num_iterations_, W, H,
+                         uy_, px_uy_, py_uy_);
+        }
+        // --- Step 3: Flow-based temporal prediction (lambda4) ---
+        // Optical-flow consistency: L should satisfy
+        // L_t = -<grad L, u> * dt, i.e. L_flow = L_prev + dt * <grad L, u>.
+        // Blend L toward L_flow (single application, not iterated).
+        if (lambda4_ > 1e-9) {
+            const double w = lambda4_;
+            for (int y = 0; y < H; ++y) {
+                for (int x = 0; x < W; ++x) {
+                    const std::size_t idx =
+                        static_cast<std::size_t>(y) * W + x;
+                    const double gx = (x + 1 < W) ? L_[idx + 1] - L_[idx] : 0.0;
+                    const double gy = (y + 1 < H) ? L_[idx + W] - L_[idx] : 0.0;
+                    const double L_flow = L_prev_[idx]
+                        + dt * (ux_[idx] * gx + uy_[idx] * gy);
+                    L_[idx] = (L_[idx] + w * L_flow) / (1.0 + w);
+                }
+            }
+        }
+        // --- Step 4: No-event dead-zone (lambda5) ---
+        // Soft-threshold |L - L_tp| around theta (Eq. 4, 6). Within
+        // [-theta, theta] no cost; beyond, L1 penalty.
+        if (lambda5_ > 1e-9) {
+            const double shift = static_cast<double>(lambda5_);
+            for (std::size_t i = 0; i < N; ++i) {
+                const double diff = L_[i] - L_tp_[i];
+                const double thr = theta_ + shift;
+                if (diff > thr)       L_[i] -= shift;
+                else if (diff < -thr) L_[i] += shift;
+            }
+        }
+        // --- Step 5: Prior image retention (lambda6) ---
+        // Gentle temporal stabilization: blend with previous reconstruction.
+        // Applied once (not iterated) to prevent collapse to flat field.
+        if (lambda6_ > 1e-9) {
+            const double w = lambda6_;
+            for (std::size_t i = 0; i < N; ++i) {
+                L_[i] = (L_[i] + w * L_prior_[i]) / (1.0 + w);
+            }
         }
         // Persist state for next frame's sliding window.
         L_prior_ = L_;   // prior image L-hat
@@ -467,14 +542,14 @@ private:
         ux_prev_ = ux_;  // previous-frame flow
         uy_prev_ = uy_;
         L_tp_ = L_;      // intensity at last event (approx: current frame)
-        return to_gray(L_);
+        return to_gray(L_, W, H);
     }
 
     // =====================================================================
     // InteractingMaps: six-map interconnection (Cook et al. 2011 IJCNN).
     //
     // Full reproduction of the interacting-map network with six maps:
-    //   I: light intensity          (W+1 x H+1, scalar)
+    //   I: light intensity          ((W+1) x (H+1), scalar)
     //   G: spatial gradient         (W x H, 2D vector)
     //   V: temporal derivative      (W x H, scalar) — input from events
     //   F: optical flow             (W x H, 2D vector)
@@ -490,7 +565,7 @@ private:
     // relaxation step. R is updated via linear least squares (Eq. 10, 13).
     // =====================================================================
     cv::Mat reconstruct_interacting() {
-        const int W = width_, H = height_;
+        const int W = eff_w(), H = eff_h();
         const std::size_t N = static_cast<std::size_t>(W) * H;
         const std::size_t NI = static_cast<std::size_t>(W + 1) * (H + 1);
         const std::vector<double>& V = log_intensity_;  // input map V
@@ -592,9 +667,7 @@ private:
                     const double rx = Cy_[i] * 0.0 - Cz_[i] * Fy_[i];
                     const double ry = Cz_[i] * Fx_[i] - Cx_[i] * 0.0;
                     const double rz = Cx_[i] * Fy_[i] - Cy_[i] * Fx_[i];
-                    // Apply precomputed projection P_i = I - C_i C_i^T to the
-                    // candidate (rx,ry,rz) and accumulate into b.
-                    // P * v = v - C (C.v).
+                    // Apply projection P_i = I - C_i C_i^T: P * v = v - C(C.v).
                     const double cdot = Cx_[i] * rx + Cy_[i] * ry + Cz_[i] * rz;
                     b[0] += rx - Cx_[i] * cdot;
                     b[1] += ry - Cy_[i] * cdot;
@@ -615,14 +688,14 @@ private:
                     I_map_[static_cast<std::size_t>(y) * WI + x];
             }
         }
-        return to_gray(out);
+        return to_gray(out, W, H);
     }
 
     /// @brief Builds the camera calibration map C (3D unit direction per
     /// pixel) from the field-of-view, and precomputes the least-squares
     /// projection matrix M = sum(I - C_i C_i^T) used for rotation estimation.
     void build_calibration_map() {
-        const int W = width_, H = height_;
+        const int W = eff_w(), H = eff_h();
         const std::size_t N = static_cast<std::size_t>(W) * H;
         Cx_.assign(N, 0.0); Cy_.assign(N, 0.0); Cz_.assign(N, 0.0);
         const double fov = static_cast<double>(fov_deg_) * M_PI / 180.0;
@@ -641,7 +714,6 @@ private:
                 const double norm = std::sqrt(dx * dx + dy * dy + dz * dz);
                 dx /= norm; dy /= norm; dz /= norm;
                 Cx_[idx] = dx; Cy_[idx] = dy; Cz_[idx] = dz;
-                // M += I - C C^T.
                 M[0] += 1.0 - dx * dx;
                 M[1] += -dx * dy;
                 M[2] += -dx * dz;
@@ -659,36 +731,26 @@ private:
     /// @brief E2VID reconstruction: voxel grid -> neural network inference
     ///        (or heuristic fallback) -> unsharp mask -> intensity rescale ->
     ///        bilateral filter. Ported from rpg_e2vid image_reconstructor.py.
-    /// Pipeline order matches the reference: pad events -> infer ->
-    /// unsharp_mask -> intensity_rescale -> crop -> bilateral.
     cv::Mat reconstruct_e2vid() {
         if (e2vid_event_buffer_.empty()) {
             return cv::Mat::zeros(height_, width_, CV_8UC1);
         }
-        // 1. Run E2VID inference.
-        //    ONNX path returns CV_32FC1 padded image in [0,1] (crop_h x crop_w).
-        //    Heuristic path returns CV_8UC1 sensor-sized image in [0,255].
         cv::Mat raw = e2vid_.infer(e2vid_event_buffer_.data(),
                                    e2vid_event_buffer_.size());
-        // 2. Unsharp mask (skip if raw is 8-bit — heuristic already returns 8-bit).
         cv::Mat sharpened;
         if (raw.type() == CV_32FC1) {
             sharpened = unsharp_mask_(raw);
         } else {
             sharpened = raw;
         }
-        // 3. Intensity rescale (if float) or use directly (if 8-bit).
         cv::Mat rescaled;
         if (sharpened.type() == CV_32FC1) {
             rescaled = intensity_rescaler_(sharpened);
         } else {
             rescaled = sharpened;
         }
-        // 4. Crop padded image back to sensor size (no-op for heuristic path).
         cv::Mat cropped = e2vid_.crop_to_sensor(rescaled);
-        // 5. Bilateral filter (edge-preserving denoising).
         cv::Mat filtered = bilateral_filter_(cropped);
-        // Clear the event buffer for the next frame.
         e2vid_event_buffer_.clear();
         return filtered;
     }
@@ -715,6 +777,9 @@ private:
     int im_iterations_{50};
     float fov_deg_{60.0f};
 
+    // Downsample (non-E2VID modes).
+    bool downsample_{false};
+
     // Base reconstruction state (used by non-E2VID modes).
     std::vector<double> log_intensity_;
     Metavision::timestamp current_t_{0};
@@ -737,7 +802,7 @@ private:
     bool im_first_frame_{true};
 
     // --- InteractingMaps state ---
-    std::vector<double> I_map_;  ///< Intensity map (W+1 x H+1).
+    std::vector<double> I_map_;  ///< Intensity map ((W+1) x (H+1)).
     std::vector<double> Gx_, Gy_;  ///< Spatial gradient (W x H).
     std::vector<double> Fx_, Fy_;  ///< Optical flow (W x H).
     double R_[3] = {0.0, 0.0, 0.0};  ///< Global rotation vector.

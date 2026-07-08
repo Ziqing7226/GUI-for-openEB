@@ -244,17 +244,16 @@ void AlgoWindow::refresh_mode_visibility() {
     }
 
     // Auto-set mode-appropriate ROI and output_fps on every mode switch
-    // (design §4.4.2):
-    //   E2VID (idx==2):  128×128 center ROI, 24 fps. NN inference is
-    //                    computationally expensive, but multi-threaded ONNX
-    //                    Runtime + --no-normalize (see e2vid_inference.h)
-    //                    make 128×128 real-time feasible.
-    //   Other modes (0/1): restore defaults (256×256 center, 30 fps).
+    // (design §4.4.2): all three event_to_video modes default to a 128×128
+    // center ROI with 1/4 downsample enabled (effective reconstruction at
+    // 64×64). E2VID runs NN inference at this resolution; BardowVariational
+    // and InteractingMaps also downsample for the same throughput benefit
+    // (the output is upsampled back to the ROI size for display). 24 fps is
+    // a comfortable target across all modes.
     // Only event_to_video has a "mode" enum, so this code only runs for it.
-    const bool is_e2vid = (idx == 2);
-    const int target_w  = is_e2vid ? 128 : 256;
-    const int target_h  = is_e2vid ? 128 : 256;
-    const int target_fps = is_e2vid ? 24 : 30;
+    const int target_w  = 128;
+    const int target_h  = 128;
+    const int target_fps = 24;
 
     for (auto& row : param_rows_) {
         if (row.key == "roi_enabled") {
@@ -265,7 +264,7 @@ void AlgoWindow::refresh_mode_visibility() {
             if (sp) { QSignalBlocker b(sp); sp->setValue(-1); }
         } else if (row.key == "roi_w" || row.key == "roi_h") {
             auto* sp = qobject_cast<QSpinBox*>(row.field);
-            if (sp) { QSignalBlocker b(sp); sp->setValue(is_e2vid ? 128 : 256); }
+            if (sp) { QSignalBlocker b(sp); sp->setValue(128); }
         } else if (row.key == "output_fps") {
             auto* sp = qobject_cast<QSpinBox*>(row.field);
             if (sp) { QSignalBlocker b(sp); sp->setValue(target_fps); }

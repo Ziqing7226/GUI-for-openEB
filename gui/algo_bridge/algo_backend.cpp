@@ -1302,7 +1302,7 @@ class EventToVideoBackend final : public AlgoBackend {
     std::string model_path_;
     int e2vid_num_bins_{5};
     bool e2vid_auto_hdr_{false};
-    bool e2vid_downsample_{true};  // 1/4 downsample (default on)
+    bool downsample_{true};  // 1/4 downsample (default on, all modes)
     float unsharp_amount_{0.3F};
     float unsharp_sigma_{1.0F};
     float bilateral_sigma_{0.0F};
@@ -1339,7 +1339,8 @@ public:
         if (!model_path_.empty()) algo_->set_model_path(model_path_);
         algo_->set_e2vid_num_bins(e2vid_num_bins_);
         algo_->set_e2vid_auto_hdr(e2vid_auto_hdr_);
-        algo_->set_e2vid_downsample(e2vid_downsample_);
+        algo_->set_e2vid_downsample(downsample_);
+        algo_->set_downsample(downsample_);
         algo_->set_unsharp_amount(unsharp_amount_);
         algo_->set_unsharp_sigma(unsharp_sigma_);
         algo_->set_bilateral_sigma(bilateral_sigma_);
@@ -1404,8 +1405,11 @@ public:
             e2vid_auto_hdr_ = to_b(v);
             if (algo_) algo_->set_e2vid_auto_hdr(e2vid_auto_hdr_);
         } else if (k == "downsample") {
-            e2vid_downsample_ = to_b(v);
-            if (algo_) algo_->set_e2vid_downsample(e2vid_downsample_);
+            downsample_ = to_b(v);
+            if (algo_) {
+                algo_->set_e2vid_downsample(downsample_);
+                algo_->set_downsample(downsample_);
+            }
         } else if (k == "unsharp_amount") {
             unsharp_amount_ = static_cast<float>(to_d(v));
             if (algo_) algo_->set_unsharp_amount(unsharp_amount_);
@@ -1441,7 +1445,7 @@ public:
         if (k == "model_path") return model_path_;
         if (k == "num_bins") return from_i(e2vid_num_bins_);
         if (k == "auto_hdr") return from_b(e2vid_auto_hdr_);
-        if (k == "downsample") return from_b(e2vid_downsample_);
+        if (k == "downsample") return from_b(downsample_);
         if (k == "unsharp_amount") return from_d(unsharp_amount_);
         if (k == "unsharp_sigma") return from_d(unsharp_sigma_);
         if (k == "bilateral_sigma") return from_d(bilateral_sigma_);
