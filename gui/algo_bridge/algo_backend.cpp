@@ -1297,6 +1297,7 @@ class EventToVideoBackend final : public AlgoBackend {
     // InteractingMaps params.
     float relaxation_step_{0.1F};
     int im_iterations_{50};
+    float fov_deg_{60.0F};
     // E2VID params.
     std::string model_path_;
     int e2vid_num_bins_{5};
@@ -1331,6 +1332,7 @@ public:
         // InteractingMaps
         algo_->set_relaxation_step(relaxation_step_);
         algo_->set_im_iterations(im_iterations_);
+        algo_->set_fov_deg(fov_deg_);
         // E2VID (model reload is intentionally deferred to set_model_path so
         // an empty path keeps the heuristic fallback; non-empty path triggers
         // load_model which may fail silently and also fall back).
@@ -1383,6 +1385,9 @@ public:
         } else if (k == "im_iterations") {
             im_iterations_ = to_i(v);
             if (algo_) algo_->set_im_iterations(im_iterations_);
+        } else if (k == "fov_deg") {
+            fov_deg_ = static_cast<float>(to_d(v));
+            if (algo_) algo_->set_fov_deg(fov_deg_);
         } else if (k == "model_path") {
             model_path_ = v;
             if (algo_) {
@@ -1432,6 +1437,7 @@ public:
         if (k == "lambda6") return from_d(lambda6_);
         if (k == "relaxation_step") return from_d(relaxation_step_);
         if (k == "im_iterations") return from_i(im_iterations_);
+        if (k == "fov_deg") return from_d(fov_deg_);
         if (k == "model_path") return model_path_;
         if (k == "num_bins") return from_i(e2vid_num_bins_);
         if (k == "auto_hdr") return from_b(e2vid_auto_hdr_);

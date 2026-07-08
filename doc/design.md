@@ -1203,20 +1203,20 @@ openEB 未提供光流算法，需自研。结果以箭头/颜色图叠加到主
 
 | 模式 | 算法方案 | 参考文献 | 外部依赖 |
 |------|----------|----------|----------|
-| **InteractingMaps**（非 DL） | **简化实现**：对事件累积的对数亮度图做迭代拉普拉斯松弛（邻域加权平均），产生平滑的灰度重建。论文完整方法涉及六张互连图（强度 I、梯度 G、时变 V、光流 F、标定 C、旋转 R）交替松弛，输出灰度图 + 光流 + 旋转估计，仅适用旋转相机/静态场景——当前实现未包含光流/旋转估计和标定图互连 | [Interacting Maps for Fast Visual Interpretation](file:///home/justin/GUI_for_openEB/GUI-for-openEB/ref/Interacting_maps_for_fast_visual_interpretation.pdf)（Cook et al. 2011 IJCNN） | 无 |
-| **BardowVariational**（非 DL，默认） | **简化实现**：对事件累积的对数亮度图做 Chambolle 投影 TV-L1 去噪（仅使用 `lambda1` 作为 TV 正则化权重），产生边缘保持的灰度重建。论文完整方法联合估计连续速度场 u（光流）与对数亮度 L，使用 `lambda1`-`lambda6` 六个正则化权重（数据项 / TV 正则 / 速度先验 / 光流一致性 / 先验图保持 / 死区约束），支持任意 6-DOF 运动——当前实现未包含光流估计和 `lambda2`-`lambda6` | [Simultaneous Optical Flow and Intensity Estimation from an Event Camera](file:///home/justin/GUI_for_openEB/GUI-for-openEB/ref/Simultaneous_Optical_Flow_and_Intensity_Estimation_from_TQEb.pdf)（Bardow et al. 2016 CVPR） | 无 |
+| **InteractingMaps**（非 DL） | 六张互连图交替松弛：强度 I、梯度 G、时变 V、光流 F、标定 C、旋转 R。三个关系驱动更新：(i) G=∇I、(ii) −V=F·G（光流约束）、(iii) F=m32(R×C)（3D 旋转几何）。R 通过线性最小二乘估计。仅适用旋转相机/静态场景。从事件分箱构建 V 输入，其余五图由网络互连推断 | [Interacting Maps for Fast Visual Interpretation](file:///home/justin/GUI_for_openEB/GUI-for-openEB/ref/Interacting_maps_for_fast_visual_interpretation.pdf)（Cook et al. 2011 IJCNN） | 无 |
+| **BardowVariational**（非 DL） | 滑动窗口变分优化：联合估计连续速度场 u（光流）与对数亮度 L，使用 `lambda1`-`lambda6` 六个正则化权重（λ1 光流 TV、λ2 光流时间平滑、λ3 亮度 TV、λ4 光流约束一致性、λ5 无事件死区 h_θ、λ6 先验图保持）。Chambolle-Pock 原始-对偶交替优化（biconvex split）。适配实时 2D 框架：以单时间步滑动窗口（当前帧 ↔ 上一帧）近似时空体素，保留全部 6 项和光流-亮度联合估计 | [Simultaneous Optical Flow and Intensity Estimation from an Event Camera](file:///home/justin/GUI_for_openEB/GUI-for-openEB/ref/Simultaneous_Optical_Flow_and_Intensity_Estimation_from_TQEb.pdf)（Bardow et al. 2016 CVPR） | 无 |
 | **E2VID**（DL，可选，默认） | E2VID / UNet-Recurrent 神经网络推理，从事件流重建灰度帧。已从 [rpg_e2vid](https://github.com/uzh-rpg/rpg_e2vid) 完整移植：事件体素网格 → ONNX Runtime 推理（含 UNetRecurrent 状态管理）→ Unsharp Mask → 强度重缩放（auto-HDR）→ 裁剪 → 双边滤波。无模型时自动回退到启发式重建（体素求和 + Sigmoid） | [rpg_e2vid](https://github.com/uzh-rpg/rpg_e2vid) | ONNX Runtime（可选） |
 
 **子模块**：
-- `interacting_maps`（非 DL）：事件累积 → 对数亮度图 → 拉普拉斯松弛（邻域加权平均）→ 灰度帧。**简化实现**：未包含论文的六图互连（I/G/V/F/C/R）和光流/旋转估计
-- `bardow_variational`（非 DL，默认）：事件累积 → 对数亮度图 → Chambolle 投影 TV-L1 去噪 → 灰度帧。**简化实现**：仅使用 `lambda1`（TV 正则化权重），未包含论文的光流联合估计和 `lambda2`-`lambda6`
+- `interacting_maps`（非 DL）：事件分箱 → V 图（时间导数）→ 六图交替松弛（G=∇I、−V=F·G、F=m32(R×C)）→ 灰度帧 + 光流 + 旋转。标定图 C 由相机视场角 `fov_deg` 预计算，旋转 R 由线性最小二乘估计
+- `bardow_variational`（非 DL）：事件累积 → 对数亮度数据项 f → Chambolle-Pock 交替优化 L（亮度，含 λ3 TV + λ4 光流约束 + λ5 死区 + λ6 先验）和 u（光流，含 λ1 TV + λ2 时间平滑 + 光流约束最小范数解）→ 灰度帧
 - `e2vid/`（DL，默认）：子目录，包含 `e2vid_inference.h`（ONNX Runtime 推理 + 启发式回退 + UNetRecurrent 状态管理）、`event_voxel_grid.h`（事件→体素网格，双线性时间插值）、`intensity_rescaler.h`（auto-HDR 强度重缩放）、`unsharp_mask.h`（Unsharp Mask + 双边滤波）。已从 [rpg_e2vid](https://github.com/uzh-rpg/rpg_e2vid) 完整移植
 
 **参数与合法范围**（GUI 按当前 `mode` 仅显示对应模式的可调参数，由 `AlgoParamSpec::mode_filter` 控制行可见性）：
 - `mode`：枚举（BardowVariational / InteractingMaps / E2VID），默认 `E2VID`（通用参数，始终可见）
 - `output_fps`：int，`[1, 120]`，默认 `30`（通用参数，始终可见）
-- BardowVariational 模式（mode=0）：`window_ms`：float，`[10, 500]`，默认 `15`；`delta_t_ms`：float，`[1, 50]`，默认 `15`（快运动时减小）；`theta`：float，`[0.05, 0.5]`，默认 `0.22`（事件触发阈值）；`num_iterations`：int，`[10, 500]`，默认 `100`；`lambda1`-`lambda6`：float（正则化权重，默认 `0.02/0.05/0.02/0.2/0.1/1.0`）
-- InteractingMaps 模式（mode=1）：`relaxation_step`：float，`(0, 1)`，默认 `0.1`（松弛步长）；`im_iterations`：int，`[10, 1000]`，默认 `50`（迭代次数，键名与 Bardow 的 `num_iterations` 区分以避免冲突）
+- BardowVariational 模式（mode=0）：`window_ms`：float，`[10, 500]`，默认 `15`；`delta_t_ms`：float，`[1, 50]`，默认 `15`（快运动时减小）；`theta`：float，`[0.05, 0.5]`，默认 `0.22`（事件触发阈值）；`num_iterations`：int，`[10, 500]`，默认 `100`（Chambolle-Pock 交替优化外层迭代数）；`lambda1`：float，默认 `0.02`（光流 TV 空间平滑）；`lambda2`：float，默认 `0.05`（光流时间平滑）；`lambda3`：float，默认 `0.02`（亮度 TV 空间平滑）；`lambda4`：float，默认 `0.2`（光流约束一致性，亮度时间变化 = 光流·梯度）；`lambda5`：float，默认 `0.1`（无事件死区 h_θ 约束）；`lambda6`：float，默认 `1.0`（先验图保持）
+- InteractingMaps 模式（mode=1）：`relaxation_step`：float，`(0, 1)`，默认 `0.1`（松弛步长 δ，所有关系共用）；`im_iterations`：int，`[10, 1000]`，默认 `50`（迭代次数，键名与 Bardow 的 `num_iterations` 区分以避免冲突）；`fov_deg`：float，`[10, 170]`，默认 `60`（相机视场角，用于预计算标定图 C——每像素 3D 方向单位向量，驱动 F=m32(R×C) 关系和 R 最小二乘估计）
 - E2VID 模式（mode=2）：`model_path`：string（ONNX 模型路径，加载失败自动回退到启发式）；`num_bins`：int，`[1, 20]`，默认 `5`（时间体素分箱数；**加载 ONNX 模型后自动同步为模型的输入通道数**，对齐 rpg_e2vid 的 `model.num_bins` 行为——见 [run_reconstruction.py:55](file:///home/justin/GUI-for-openEB/ref/rpg_e2vid/run_reconstruction.py#L55)、[model/model.py:14](file:///home/justin/GUI-for-openEB/ref/rpg_e2vid/model/model.py#L14)，此时用户修改 num_bins 不再生效）；`auto_hdr`：bool，默认 `false`（自动 HDR 强度重缩放，对齐 README `--auto_hdr`）；`downsample`：bool，默认 `true`（**1/4 下采样**：开启时仅保留 x、y 坐标均为偶数的事件并映射到 `(x/2, y/2)`，对 128×128 ROI 产生 64×64 体素网格送入 ONNX 推理，输出后 `INTER_NEAREST` 上采样回 128×128；推理计算量降至 ~1/4，大幅提升实时流畅度）；`unsharp_amount`：float，`[0, 2]`，默认 `0.3`（锐化强度，对齐 `--unsharp_mask_amount`）；`unsharp_sigma`：float，`[0.1, 5]`，默认 `1.0`（高斯模糊 σ，对齐 `--unsharp_mask_sigma`）；`bilateral_sigma`：float，`[0, 10]`，默认 `0.0`（双边滤波 σ，0 = 禁用，对齐 `--bilateral_filter_sigma`）。`hot_pixel_mask`（uint8 向量，长度 = width × height）为程序内部接口，不在 GUI 暴露。rpg_e2vid 的 `--no-recurrent`/`--color`/`--flip` 等高级选项未暴露（默认值与 rpg_e2vid 一致：循环连接开启、灰度、不翻转）。`--no-normalize` 已默认启用（`normalize_input_=false`）以提升实时性能
 
 **ROI 处理区**（默认启用，详见 §5.6.6）：`roi_enabled`：bool，默认 `true`；`roi_x`/`roi_y`：int，`-1` 表示自动居中，默认 `-1`；`roi_w`/`roi_h`：int，`0` 表示全幅，默认 `256`（即默认 256×256 中心区域）。启用时仅向重建算法推送 ROI 内事件并按 ROI 尺寸重建算法实例（避免全幅高延迟），主显示帧同步绘制黄色 ROI 边框。重建窗口以 ROI 大小独立显示灰度帧。**切换 `mode` 时 GUI 自动设置模式对应的 ROI 与帧率**：切到 E2VID 模式时自动设为 128×128 中心区域（`roi_w`/`roi_h`=128、`roi_x`/`roi_y`=-1）+ `output_fps`=24；切回 BardowVariational 或 InteractingMaps 模式时自动恢复默认参数（256×256 中心区域 + `output_fps`=30）。此自动设置在主面板（AlgorithmsPanel）和小窗（AlgoWindow）中均生效。E2VID 模式下 128×128 的实时性能由以下优化保障：(1) ONNX Runtime 使用全部 CPU 核心（`SetIntraOpNumThreads(hardware_concurrency)`，上限 8）并行推理 Conv/MatMul；(2) `GraphOptimizationLevel::ORT_ENABLE_ALL` 启用全部图优化；(3) 默认禁用事件张量归一化（`normalize_input_=false`，对齐 rpg_e2vid README `--no-normalize`：「will improve speed a bit, but might degrade the image quality a bit」）；(4) **默认开启 1/4 下采样**（`downsample=true`）：仅保留 x、y 坐标均为偶数的事件并映射到 `(x/2, y/2)`，对 128×128 ROI 产生 64×64 体素网格送入 ONNX 推理（计算量降至 ~1/4），输出后 `INTER_NEAREST` 上采样回 128×128；用户可在 GUI 取消勾选以获得全分辨率（代价是推理变慢 ~4×）。
@@ -1751,7 +1751,7 @@ RAW/HDF5 文件
 ### Phase 10：分析模块 (algo/analytics/ 7 个)
 借鉴 jAER `DvsFramer`、`particlecounter`、`freq_analyzer` 等：
 - [x] 4.4.1 主动标记跟踪（滑动窗口聚类 + 事件数颜色映射）
-- [x] 4.4.2 事件→灰度图像重建（非 DL：BardowVariational 简化版 / InteractingMaps 简化版 / DL：E2VID 已移植且为默认模式，含 ONNX Runtime 推理 + 启发式回退）
+- [x] 4.4.2 事件→灰度图像重建（非 DL：BardowVariational 完整复现（联合光流+亮度估计，λ1-6，Chambolle-Pock）/ InteractingMaps 完整复现（六图互连 I/G/V/F/C/R，旋转最小二乘）/ DL：E2VID 已移植且为默认模式，含 ONNX Runtime 推理 + 启发式回退）
 - [x] 4.4.3 光流评估（EPE/PE/角度误差）
 - [x] 4.4.4 ISI 直方图分析
 - [x] 4.4.5 通用颗粒计数器

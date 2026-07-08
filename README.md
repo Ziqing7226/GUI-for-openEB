@@ -114,7 +114,7 @@ cmake --build build -- -j$(nproc)
 
 After setup, launch EBplus and enable **Algorithm → Event → Video** — it defaults to E2VID mode with 128×128 ROI, 24 fps, and 1/4 downsample (64×64 inference → upsampled to 128×128). The GUI exposes toggleable parameters (model path, auto-HDR, downsample, unsharp mask, bilateral filter).
 
-> **Without ONNX Runtime**: E2VID falls back to a heuristic mode (voxel-grid sum + sigmoid). BardowVariational and InteractingMaps modes work without any setup but are simplified implementations (TV-L1 denoising / Laplacian relaxation respectively, without the full paper's optical-flow estimation).
+> **Without ONNX Runtime**: E2VID falls back to a heuristic mode (voxel-grid sum + sigmoid). BardowVariational and InteractingMaps modes work without any setup — BardowVariational jointly estimates optical flow and intensity via Chambolle-Pock primal-dual optimization (all six λ terms), and InteractingMaps uses six interconnected maps (I/G/V/F/C/R) with rotation estimation via least squares.
 
 See [doc/design.md §4.4.2](doc/design.md) for full algorithm specifications.
 

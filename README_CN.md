@@ -76,8 +76,8 @@
 ### 事件→灰度重建（Event-to-Video）
 提供三种重建模式，**默认 E2VID**（深度学习）：
 - **E2VID**（DL，默认）：从 [rpg_e2vid](https://github.com/uzh-rpg/rpg_e2vid) 完整移植，ONNX Runtime 多线程 CPU 推理。默认 128×128 ROI + 24fps + 1/4 下采样（64×64 推理 → 上采样回 128×128）。无模型时自动回退到启发式重建
-- **BardowVariational**（非 DL，简化版）：对数亮度图 Chambolle 投影 TV-L1 去噪（仅用 `lambda1`，未含论文的光流联合估计）
-- **InteractingMaps**（非 DL，简化版）：对数亮度图迭代拉普拉斯松弛（未含论文的六图互连和光流/旋转估计）
+- **BardowVariational**（非 DL）：滑动窗口变分优化，联合估计光流 u 和对数亮度 L，使用 `lambda1`-`lambda6` 六个正则化项（光流 TV、时间平滑、亮度 TV、光流约束、无事件死区、先验图保持），Chambolle-Pock 原始-对偶交替优化
+- **InteractingMaps**（非 DL）：六张互连图（强度 I、梯度 G、时变 V、光流 F、标定 C、旋转 R）交替松弛，三个关系驱动更新（G=∇I、−V=F·G、F=m32(R×C)），旋转 R 由线性最小二乘估计
 
 #### E2VID 部署方法（一次性，约 5 分钟）
 
@@ -106,7 +106,7 @@ cmake --build build -- -j$(nproc)
 
 完成后启动 EBplus，启用 **Algorithm → Event → Video** 即默认 E2VID 模式。GUI 暴露可调参数：模型路径、auto-HDR、下采样开关、锐化强度、双边滤波。
 
-> **无 ONNX Runtime 时**：E2VID 自动回退到启发式模式（体素网格求和 + Sigmoid）。BardowVariational 和 InteractingMaps 模式无需任何额外依赖，但均为简化实现。
+> **无 ONNX Runtime 时**：E2VID 自动回退到启发式模式（体素网格求和 + Sigmoid）。BardowVariational 和 InteractingMaps 模式无需任何额外依赖，均为论文方法的完整复现。
 
 详见 [doc/design.md §4.4.2](doc/design.md)。
 

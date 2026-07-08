@@ -701,6 +701,7 @@ void AlgoBridge::register_self_analytics() {
           // --- InteractingMaps (mode 1) ---
           pfloat("relaxation_step", "Relaxation step", "0.1", "0.001", "0.5", "1"),
           pint("im_iterations", "Iterations", "50", "10", "1000", "1"),
+          pfloat("fov_deg", "Camera FOV (deg)", "60", "10", "170", "1"),
           // --- E2VID (mode 2) ---
           pstring("model_path", "Model path (ONNX)", "models/e2vid_lightweight.onnx", "2"),
           pint("num_bins", "Num bins", "5", "1", "20", "2"),
