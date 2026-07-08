@@ -2,10 +2,12 @@
 //
 // Design §4.3.25 and §1.6.6 (jAER SpaceTimeRollingEventDisplayMethod). A
 // QOpenGLWidget that renders the recent event stream as a 3D point cloud:
-// X = pixel column, Y = pixel row, T = time (depth axis). Polarity colouring
-// (ON = red / OFF = green) or an age gradient (blue → green → red) is
-// provided by algo/cv/xyt_visualizer.h; this widget owns the VBO + GLSL
-// rendering and the orbit camera.
+// X = pixel column, Y = pixel row, T = time (depth axis, newest in front).
+// Age-based coloring (newest=blue, oldest=red, matching jAER's fragment
+// shader) or polarity coloring is provided by algo/cv/xyt_visualizer.h;
+// this widget owns the VBO + GLSL rendering and the orbit camera.
+// A 3D bounding box (cuboid wireframe) with axis labels is drawn to match
+// jAER's SpaceTimeRollingEventDisplayMethod axes rendering.
 
 #ifndef GUI_DISPLAY_SPACE_TIME_DISPLAY_H
 #define GUI_DISPLAY_SPACE_TIME_DISPLAY_H
@@ -15,6 +17,8 @@
 #include <QOpenGLShaderProgram>
 #include <QOpenGLVertexArrayObject>
 #include <QOpenGLWidget>
+#include <QPainter>
+#include <QTimer>
 #include <memory>
 #include <vector>
 
@@ -60,28 +64,46 @@ protected:
 
 private:
     void rebuild_vbo();
-    void update_camera_uniforms();
+    /// @brief Draws a 3D bounding box (12-edge cuboid wireframe) with
+    /// color gradient (blue front = newest, dark red back = oldest),
+    /// plus axis labels and time-window info as a QPainter 2D overlay.
+    /// Matches jAER SpaceTimeRollingEventDisplayMethod maybeRegenerateAxesDisplayList().
+    void draw_axes_overlay(const QMatrix4x4& mvp);
 
     std::unique_ptr<QOpenGLShaderProgram> program_;
     std::unique_ptr<QOpenGLVertexArrayObject> vao_;
     std::unique_ptr<QOpenGLBuffer> vbo_;
 
+    // Line shader for 3D bounding box (separate from point shader because
+    // the point fragment shader discards non-circular gl_PointCoord pixels).
+    std::unique_ptr<QOpenGLShaderProgram> line_program_;
+    std::unique_ptr<QOpenGLVertexArrayObject> axis_vao_;
+    std::unique_ptr<QOpenGLBuffer> axis_vbo_;
+
     gui_algo::XYTVisualizer viz_;
     std::vector<gui_algo::XYTPoint> points_;
+    std::vector<float> vbo_data_;  ///< Reused across frames to avoid allocation
     int point_count_{0};
     int vbo_capacity_bytes_{0};
     bool gl_ready_{false};
 
+    /// Render timer ensures smooth 60 FPS rendering independent of event
+    /// push timing (matching jAER's display-rate-driven rendering).
+    QTimer* render_timer_{nullptr};
+
     int sensor_w_{0};
     int sensor_h_{0};
 
+    /// Time axis aspect ratio (depth relative to max of x,y). jAER default=4.
+    float time_aspect_ratio_{4.0f};
+
     // Orbit camera.
-    float azimuth_{-58.0f};    ///< degrees (matches Lighthouse view_init azim)
-    float elevation_{8.0f};    ///< degrees (matches Lighthouse view_init elev)
-    // Scene bounds are 5x2x3 (matching Lighthouse box aspect (5,3,2) remapped
-    // to OGL (t, 1-y, x)). Half-diagonal ~= 3.08; with 45 deg perspective we
-    // need dist > ~7.4 to fit the whole cube, so default to 8.0.
-    float distance_{8.0f};     ///< relative to scene scale
+    float azimuth_{-35.0f};    ///< degrees
+    float elevation_{20.0f};   ///< degrees
+    // Scene is a unit cube scaled by (1, 1, time_aspect_ratio_=4) →
+    // half-diagonal ≈ sqrt(0.25+0.25+4) ≈ 2.12; with 45° perspective we
+    // need dist > ~5.6 to fit, so default to 6.0.
+    float distance_{6.0f};
     bool dragging_{false};
     QPoint last_mouse_;
     bool auto_rotate_{false};

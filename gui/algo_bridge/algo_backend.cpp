@@ -382,8 +382,10 @@ public:
     }
     std::string get_param(const std::string& k) const override {
         auto r = roi_.get_param(k); if (!r.empty()) return r;
+        if (k == "learning_window_s") return from_d(algo_.learning_window_s());
         if (k == "n_sigma") return from_d(algo_.n_sigma());
         if (k == "enable_fpn_correction") return from_b(algo_.enable_fpn_correction());
+        if (k == "fpn_target_rate_hz") return from_d(algo_.fpn_target_rate_hz());
         return {};
     }
     void push_events(const Metavision::EventCD* b, const Metavision::EventCD* e) override {
@@ -497,10 +499,12 @@ public:
     void set_param(const std::string& k, const std::string& v) override {
         if (roi_.set_param(k, v)) return;
         if (k == "enable") algo_.set_undistort(to_b(v));
+        else if (k == "zoom") algo_.set_zoom(static_cast<float>(to_d(v)));
     }
     std::string get_param(const std::string& k) const override {
         auto r = roi_.get_param(k); if (!r.empty()) return r;
         if (k == "enable") return from_b(algo_.undistort());
+        if (k == "zoom") return from_d(algo_.zoom());
         return {};
     }
     void push_events(const Metavision::EventCD* b, const Metavision::EventCD* e) override {
@@ -558,6 +562,7 @@ public:
     }
     std::string get_param(const std::string& k) const override {
         auto r = roi_.get_param(k); if (!r.empty()) return r;
+        if (k == "mode") return from_i(static_cast<int>(algo_.mode()));
         if (k == "cluster_size_px") return from_i(algo_.cluster_size_px());
         if (k == "cluster_time_us") return from_i(algo_.cluster_time_us());
         if (k == "min_cluster_events") return from_i(algo_.min_cluster_events());
@@ -635,6 +640,8 @@ public:
     }
     std::string get_param(const std::string& k) const override {
         auto r = roi_.get_param(k); if (!r.empty()) return r;
+        if (k == "mode") return from_i(static_cast<int>(algo_.mode()));
+        if (k == "min_score") return from_d(algo_.threshold());
         return {};
     }
     void push_events(const Metavision::EventCD* b, const Metavision::EventCD* e) override {
@@ -674,6 +681,8 @@ public:
     }
     std::string get_param(const std::string& k) const override {
         auto r = roi_.get_param(k); if (!r.empty()) return r;
+        if (k == "threshold") return from_d(algo_.threshold());
+        if (k == "learning_rate") return from_d(algo_.learning_rate());
         return {};
     }
     void push_events(const Metavision::EventCD* b, const Metavision::EventCD* e) override {
@@ -718,6 +727,7 @@ public:
     }
     std::string get_param(const std::string& k) const override {
         auto r = roi_.get_param(k); if (!r.empty()) return r;
+        if (k == "mode") return from_i(static_cast<int>(algo_.mode()));
         if (k == "search_radius") return from_i(algo_.search_radius_px());
         if (k == "time_window_us") return from_i(algo_.time_window_us());
         if (k == "cluster_ema_alpha") return from_d(algo_.cluster_ema_alpha());
@@ -835,8 +845,9 @@ public:
     std::string get_param(const std::string& k) const override {
         if (k == "roi_enabled") return from_b(roi_.enabled);
         if (k == "threshold" && algo_) return from_i(algo_->threshold());
-        if (k == "num_theta_bins" && algo_) return from_i(algo_->num_theta_bins());
-        if (k == "num_rho_bins" && algo_) return from_i(algo_->num_rho_bins());
+        if (k == "num_theta_bins") return from_i(num_theta_bins_);
+        if (k == "num_rho_bins") return from_i(num_rho_bins_);
+        if (k == "accumulator_decay_us") return from_i(static_cast<int>(decay_us_));
         if (k == "hough_decay_factor" && algo_) return from_d(algo_->hough_decay_factor());
         return {};
     }
@@ -965,6 +976,7 @@ public:
         if (k == "min_radius") return from_i(min_radius_);
         if (k == "max_radius") return from_i(max_radius_);
         if (k == "threshold") return from_i(threshold_);
+        if (k == "accumulator_decay_us") return from_i(static_cast<int>(decay_us_));
         if (k == "decay" && algo_) return from_d(algo_->decay());
         if (k == "buffer_length" && algo_) return from_i(algo_->buffer_length());
         if (k == "nr_max" && algo_) return from_i(algo_->nr_max());
@@ -1054,6 +1066,8 @@ public:
     }
     std::string get_param(const std::string& k) const override {
         auto r = roi_.get_param(k); if (!r.empty()) return r;
+        if (k == "min_length") return from_i(algo_.min_line_length_px());
+        if (k == "gap") return from_i(algo_.max_line_gap_px());
         return {};
     }
     void push_events(const Metavision::EventCD* b, const Metavision::EventCD* e) override {
@@ -1105,6 +1119,7 @@ public:
     }
     std::string get_param(const std::string& k) const override {
         auto r = roi_.get_param(k); if (!r.empty()) return r;
+        if (k == "min_events") return from_i(algo_.min_cluster_size());
         return {};
     }
     void push_events(const Metavision::EventCD* b, const Metavision::EventCD* e) override {
@@ -1149,6 +1164,8 @@ public:
     }
     std::string get_param(const std::string& k) const override {
         auto r = roi_.get_param(k); if (!r.empty()) return r;
+        if (k == "tau_ms") return from_d(algo_.tau_ms());
+        if (k == "threshold") return from_d(algo_.threshold());
         return {};
     }
     void push_events(const Metavision::EventCD* b, const Metavision::EventCD* e) override {
@@ -1225,6 +1242,9 @@ public:
     }
     std::string get_param(const std::string& k) const override {
         if (k == "roi_enabled") return from_b(roi_.enabled);
+        if (k == "decay_time_us") return from_i(decay_time_us_);
+        if (k == "palette") return from_i(static_cast<int>(palette_));
+        if (k == "channels") return from_i(channels_ == gui_algo::TimeSurface::Channels::Split ? 2 : 1);
         return {};
     }
     void push_events(const Metavision::EventCD* b, const Metavision::EventCD* e) override {
@@ -1398,7 +1418,27 @@ public:
         if (need_rebuild) { roi_.compute(sensor_w_, sensor_h_); rebuild(); }
     }
     std::string get_param(const std::string& k) const override {
+        if (k == "mode") return from_i(static_cast<int>(mode_));
         if (k == "output_fps") return from_i(output_fps_);
+        if (k == "window_ms") return from_d(window_ms_);
+        if (k == "delta_t_ms") return from_d(delta_t_ms_);
+        if (k == "theta") return from_d(theta_);
+        if (k == "num_iterations") return from_i(num_iterations_);
+        if (k == "lambda1") return from_d(lambda1_);
+        if (k == "lambda2") return from_d(lambda2_);
+        if (k == "lambda3") return from_d(lambda3_);
+        if (k == "lambda4") return from_d(lambda4_);
+        if (k == "lambda5") return from_d(lambda5_);
+        if (k == "lambda6") return from_d(lambda6_);
+        if (k == "relaxation_step") return from_d(relaxation_step_);
+        if (k == "im_iterations") return from_i(im_iterations_);
+        if (k == "model_path") return model_path_;
+        if (k == "num_bins") return from_i(e2vid_num_bins_);
+        if (k == "auto_hdr") return from_b(e2vid_auto_hdr_);
+        if (k == "downsample") return from_b(e2vid_downsample_);
+        if (k == "unsharp_amount") return from_d(unsharp_amount_);
+        if (k == "unsharp_sigma") return from_d(unsharp_sigma_);
+        if (k == "bilateral_sigma") return from_d(bilateral_sigma_);
         if (k == "roi_enabled") return from_b(roi_.enabled);
         return {};
     }
@@ -1504,6 +1544,8 @@ public:
     }
     std::string get_param(const std::string& k) const override {
         if (k == "roi_enabled") return from_b(roi_.enabled);
+        if (k == "per_pixel") return from_b(per_pixel_);
+        if (k == "max_isi_ms") return from_d(max_isi_ms_);
         return {};
     }
     void push_events(const Metavision::EventCD* b, const Metavision::EventCD* e) override {
@@ -1562,6 +1604,8 @@ public:
     }
     std::string get_param(const std::string& k) const override {
         if (k == "roi_enabled") return from_b(roi_.enabled);
+        if (k == "update_interval_s") return from_d(algo_.update_interval_s());
+        if (k == "min_events") return from_i(algo_.min_cc_area());
         return {};
     }
     void push_events(const Metavision::EventCD* b, const Metavision::EventCD* e) override {
@@ -1621,6 +1665,8 @@ public:
     }
     std::string get_param(const std::string& k) const override {
         auto r = roi_.get_param(k); if (!r.empty()) return r;
+        if (k == "window_us") return from_i(static_cast<int>(algo_.window_ms() * 1000.0F));
+        if (k == "min_events") return from_i(algo_.min_cluster_area());
         return {};
     }
     void push_events(const Metavision::EventCD* b, const Metavision::EventCD* e) override {
@@ -1676,6 +1722,8 @@ public:
     }
     std::string get_param(const std::string& k) const override {
         auto r = roi_.get_param(k); if (!r.empty()) return r;
+        if (k == "line_y") return from_i(algo_.counting_line_y());
+        if (k == "min_area") return from_i(algo_.min_particle_size_px());
         return {};
     }
     void push_events(const Metavision::EventCD* b, const Metavision::EventCD* e) override {
@@ -1774,6 +1822,7 @@ public:
     }
     std::string get_param(const std::string& k) const override {
         auto r = roi_.get_param(k); if (!r.empty()) return r;
+        if (k == "window_us") return from_i(static_cast<int>(algo_.trigger_window_us()));
         return {};
     }
     void push_events(const Metavision::EventCD* b, const Metavision::EventCD* e) override {
@@ -1816,6 +1865,7 @@ public:
     }
     std::string get_param(const std::string& k) const override {
         auto r = roi_.get_param(k); if (!r.empty()) return r;
+        if (k == "factor") return from_d(algo_.dilation_factor());
         return {};
     }
     void push_events(const Metavision::EventCD* b, const Metavision::EventCD* e) override {
@@ -1860,20 +1910,22 @@ class XYTVisualizerBackend final : public AlgoBackend {
     int sensor_w_{0}, sensor_h_{0};
     ProcessRegion roi_;
     gui_algo::XYTVisualizer algo_;
+    int max_points_{50000};
     std::vector<Metavision::EventCD> passthrough_;
     std::vector<gui_algo::Event> roi_events_;
 public:
     XYTVisualizerBackend(int w, int h)
         : sensor_w_(w), sensor_h_(h),
           algo_(1000.0f,
-                gui_algo::XYTVisualizer::ColorMode::Polarity,
+                gui_algo::XYTVisualizer::ColorMode::Age,
                 2.5f,
                 false,
-                false) {
+                true) {
         roi_.compute(sensor_w_, sensor_h_);
     }
     void set_param(const std::string& k, const std::string& v) override {
         if (k == "time_window_us") algo_.set_time_window_ms(static_cast<float>(to_i(v)) / 1000.0F);
+        else if (k == "max_points") max_points_ = to_i(v);
         else if (k == "roi_enabled") { roi_.enabled = to_b(v); roi_.compute(sensor_w_, sensor_h_); }
         else if (k == "roi_x") { roi_.x = to_i(v); roi_.compute(sensor_w_, sensor_h_); }
         else if (k == "roi_y") { roi_.y = to_i(v); roi_.compute(sensor_w_, sensor_h_); }
@@ -1882,6 +1934,8 @@ public:
     }
     std::string get_param(const std::string& k) const override {
         if (k == "roi_enabled") return from_b(roi_.enabled);
+        if (k == "time_window_us") return from_i(static_cast<int>(algo_.time_window_ms() * 1000.0F));
+        if (k == "max_points") return from_i(max_points_);
         return {};
     }
     void push_events(const Metavision::EventCD* b, const Metavision::EventCD* e) override {
@@ -1925,7 +1979,10 @@ class OrientationFilterBackend final : public AlgoBackend {
     RoiFilter roi_;
     std::vector<gui_algo::Event> roi_buf_;
     std::vector<int> last_orientations_;  // per-event orientation labels
-    int hist_[gui_algo::OrientationFilter::kNumOrientations]{};
+    // Decaying histogram (jAER uses a per-packet decay factor on the
+    // orientation counters). A cumulative counter would grow without bound.
+    float hist_[gui_algo::OrientationFilter::kNumOrientations]{};
+    static constexpr float kHistDecay = 0.9F;  // per-packet decay
 public:
     OrientationFilterBackend(int w, int h) : algo_(w, h) { roi_.init(w, h); }
     void set_param(const std::string& k, const std::string& v) override {
@@ -1956,11 +2013,15 @@ public:
         auto [ev, n] = roi_.apply(as_events(passthrough_.data()),
                                    passthrough_.size(), roi_buf_);
         last_orientations_.resize(n);
+        // Per-packet exponential decay (jAER oriCountsMap decay).
+        for (int i = 0; i < gui_algo::OrientationFilter::kNumOrientations; ++i) {
+            hist_[i] *= kHistDecay;
+        }
         for (std::size_t i = 0; i < n; ++i) {
             last_orientations_[i] = algo_.classify(ev[i]);
             if (last_orientations_[i] >= 0 &&
                 last_orientations_[i] < gui_algo::OrientationFilter::kNumOrientations) {
-                ++hist_[last_orientations_[i]];
+                hist_[last_orientations_[i]] += 1.0F;
             }
         }
     }
@@ -1983,8 +2044,8 @@ public:
             float gx = 0, gy = 0;
             for (int i = 0; i < gui_algo::OrientationFilter::kNumOrientations; ++i) {
                 const float angle = i * kPiF * 0.25F;
-                gx += std::cos(angle) * static_cast<float>(hist_[i]);
-                gy += std::sin(angle) * static_cast<float>(hist_[i]);
+                gx += std::cos(angle) * hist_[i];
+                gy += std::sin(angle) * hist_[i];
             }
             const int cx = algo_.width() / 2;
             const int cy = algo_.height() / 2;
@@ -1999,17 +2060,17 @@ public:
         // Histogram text + legend.
         OverlayText t;
         t.x = 10; t.y = 20;
-        t.text = "orient: 0=" + std::to_string(hist_[0]) +
-                 " 45=" + std::to_string(hist_[1]) +
-                 " 90=" + std::to_string(hist_[2]) +
-                 " 135=" + std::to_string(hist_[3]);
+        t.text = "orient: 0=" + std::to_string(static_cast<int>(hist_[0])) +
+                 " 45=" + std::to_string(static_cast<int>(hist_[1])) +
+                 " 90=" + std::to_string(static_cast<int>(hist_[2])) +
+                 " 135=" + std::to_string(static_cast<int>(hist_[3]));
         r.texts.push_back(t);
         r.status = "orient_filter: " + std::to_string(r.colored_events.size()) +
                    " colored events" +
                    std::string(roi_.region.enabled ? " (ROI)" : "");
         return r;
     }
-    void reset() override { algo_.reset(); passthrough_.clear(); roi_buf_.clear(); last_orientations_.clear(); std::fill(hist_, hist_ + 4, 0); }
+    void reset() override { algo_.reset(); passthrough_.clear(); roi_buf_.clear(); last_orientations_.clear(); std::fill(hist_, hist_ + 4, 0.0F); }
 };
 
 /// DirectionSelectiveFilter backend — direction histogram as overlay text.
@@ -2140,6 +2201,8 @@ public:
     }
     std::string get_param(const std::string& k) const override {
         auto r = roi_.get_param(k); if (!r.empty()) return r;
+        if (k == "learning_rate") return from_d(algo_.learning_window_s());
+        if (k == "threshold") return from_d(algo_.background_rate_threshold_hz());
         return {};
     }
     void push_events(const Metavision::EventCD* b, const Metavision::EventCD* e) override {
@@ -2185,6 +2248,8 @@ public:
     }
     std::string get_param(const std::string& k) const override {
         auto r = roi_.get_param(k); if (!r.empty()) return r;
+        if (k == "low_cutoff_hz") return from_d(low_cutoff_hz_);
+        if (k == "high_cutoff_hz") return from_d(high_cutoff_hz_);
         return {};
     }
     void push_events(const Metavision::EventCD* b, const Metavision::EventCD* e) override {

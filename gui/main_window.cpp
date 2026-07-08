@@ -997,7 +997,7 @@ void MainWindow::install_algo_callback() {
                 const Metavision::timestamp cur_ts = (e - 1)->t;
                 const Metavision::timestamp last =
                     algo_last_xyt_post_us_.load(std::memory_order_relaxed);
-                if (cur_ts - last >= 50000) {  // 50ms minimum interval
+                if (cur_ts - last >= 16000) {  // 16ms ≈ 60 FPS
                     algo_last_xyt_post_us_.store(cur_ts, std::memory_order_relaxed);
                     const std::size_t count = static_cast<std::size_t>(e - b);
                     auto copy = std::make_shared<std::vector<Metavision::EventCD>>();
@@ -1012,6 +1012,15 @@ void MainWindow::install_algo_callback() {
                     }
                     QMetaObject::invokeMethod(this, [this, copy]() {
                         if (xyt_display_) {
+                            // Sync time_window from algo parameter in case
+                            // the user changed it in the AlgoWindow.
+                            if (xyt_algo_) {
+                                const auto tw = xyt_algo_->get_param("time_window_us");
+                                if (!tw.empty()) {
+                                    xyt_display_->set_time_window_ms(
+                                        static_cast<float>(std::stoi(tw)) / 1000.0f);
+                                }
+                            }
                             xyt_display_->push_events(copy->data(),
                                                       copy->data() + copy->size());
                         }
@@ -1545,6 +1554,17 @@ void MainWindow::on_open_xyt_view() {
         xyt_algo_ = algo_bridge_.find_live("xyt_visualizer");
         if (!xyt_algo_) xyt_algo_ = algo_bridge_.find_or_create("xyt_visualizer");
         if (xyt_algo_) xyt_algo_->set_enabled(true);
+        // Sync the time_window from the algo parameter to the 3D display.
+        // The GUI registers time_window_us (default 1000000 = 1s); the
+        // SpaceTimeDisplay uses time_window_ms. Without this sync, the
+        // display would always use its 50ms default.
+        if (xyt_algo_) {
+            const auto tw_us = xyt_algo_->get_param("time_window_us");
+            if (!tw_us.empty()) {
+                xyt_display_->set_time_window_ms(
+                    static_cast<float>(std::stoi(tw_us)) / 1000.0f);
+            }
+        }
         // Sync the sidebar checkbox (blocked, no re-entry).
         if (auto* ap = settings_->algorithms_panel()) {
             ap->set_algo_enabled("xyt_visualizer", true);

@@ -36,20 +36,22 @@ class XYTVisualizer {
 public:
     enum class ColorMode {
         Polarity,  ///< ON = red, OFF = green
-        Age,       ///< Age gradient: blue (old) -> green -> red (new)
+        Age,       ///< jAER shader: newest=blue, oldest=red, green in middle
     };
 
     /// @brief Constructs the visualizer.
     /// @param time_window_ms Display window length in ms, [10, 10000].
-    /// @param color_mode Polarity- or age-based coloring.
+    /// @param color_mode Polarity- or age-based coloring. Default Age matches
+    ///   jAER SpaceTimeRollingEventDisplayMethod shader coloring.
     /// @param point_size GL point size in [0.5, 10].
     /// @param auto_rotate Enable automatic scene rotation (rendering hint).
-    /// @param depth_shade Enable depth-based shading (rendering hint).
+    /// @param depth_shade Enable depth-based shading. Default true matches
+    ///   jAER's always-on fragment shader brightness (0.75*f1+0.25).
     XYTVisualizer(float time_window_ms = 50.0f,
-                  ColorMode color_mode = ColorMode::Polarity,
+                  ColorMode color_mode = ColorMode::Age,
                   float point_size = 2.5f,
                   bool auto_rotate = false,
-                  bool depth_shade = false)
+                  bool depth_shade = true)
         : time_window_ms_(clamp_window(time_window_ms)),
           color_mode_(color_mode),
           point_size_(clamp_point(point_size)),
@@ -77,29 +79,35 @@ public:
     std::size_t size() const { return buffer_.size(); }
 
     /// @brief Slices the rolling buffer to the current time window and applies
-    ///        color mapping, returning the point cloud for VBO rendering.
-    std::vector<XYTPoint> render() const {
-        std::vector<XYTPoint> pts;
-        if (buffer_.empty()) return pts;
-        const Metavision::timestamp window_us =
-            static_cast<Metavision::timestamp>(time_window_ms_ * 1000.0f);
+    ///        color mapping, filling @p out with the point cloud for VBO
+    ///        rendering. Reuses @p out's capacity across calls to avoid
+    ///        per-frame heap allocation (important for 60 FPS rendering).
+    void render(std::vector<XYTPoint>& out) const {
+        out.clear();
+        if (buffer_.empty()) return;
+        // Normalize tn by the ACTUAL time range of events in the buffer,
+        // not the theoretical time_window_ms. jAER dynamically sets its
+        // time window to match the frame duration, so events always fill
+        // the window. With our fixed window, events may only span a tiny
+        // fraction of window_us (e.g., 1ms of a 50ms window), which would
+        // make all tn ≈ 1.0 (all "newest", all blue, flat plane).
+        // Using the actual buffer range ensures tn spans [0, 1] regardless
+        // of event density.
         const Metavision::timestamp t_hi = latest_t_;
-        const Metavision::timestamp t_lo = t_hi - window_us;
-        pts.reserve(buffer_.size());
+        const Metavision::timestamp t_lo = buffer_.front().t;
+        const Metavision::timestamp t_range = t_hi - t_lo;
+        out.reserve(buffer_.size());
         for (const Event& e : buffer_) {
-            if (e.t < t_lo) continue;  // outside window
             XYTPoint p;
             p.x = static_cast<float>(e.x);
             p.y = static_cast<float>(e.y);
-            const float tn =
-                window_us > 0
-                    ? static_cast<float>(e.t - t_lo) / static_cast<float>(window_us)
-                    : 0.0f;
+            const float tn = t_range > 0
+                ? static_cast<float>(e.t - t_lo) / static_cast<float>(t_range)
+                : 1.0f;
             p.t = tn < 0.0f ? 0.0f : (tn > 1.0f ? 1.0f : tn);
             colorize(e, tn, p);
-            pts.push_back(p);
+            out.push_back(p);
         }
-        return pts;
     }
 
     void set_time_window_ms(float ms) { time_window_ms_ = clamp_window(ms); }
@@ -143,18 +151,19 @@ private:
                 break;
             }
             case ColorMode::Age: {
-                // tn in [0,1]: 0 = oldest (blue), 0.5 = green, 1 = newest (red)
-                if (tn < 0.5f) {
-                    const float a = tn * 2.0f;  // 0..1
-                    p.r = 0.0f;
-                    p.g = a;
-                    p.b = 1.0f - a;
-                } else {
-                    const float a = (tn - 0.5f) * 2.0f;  // 0..1
-                    p.r = a;
-                    p.g = 1.0f - a;
-                    p.b = 0.0f;
-                }
+                // Match jAER SpaceTimeRollingEventDisplayMethod_Fragment.glsl:
+                // f = 1 - tn (0 at newest, 1 at oldest)
+                // b = max(1-2f, 0), r = max(2(f-0.5), 0), g = f if f<=0.5 else 1-f
+                // brightness = 0.75*f1 + 0.25 is applied in the fragment
+                // shader (space_time_display.cpp), NOT here — to avoid
+                // double-application when depth_shade is enabled.
+                const float f = 1.0f - tn;
+                const float b = std::max(1.0f - 2.0f * f, 0.0f);
+                const float r = std::max(2.0f * (f - 0.5f), 0.0f);
+                float g = (f <= 0.5f) ? f : (1.0f - f);
+                p.r = r;
+                p.g = g;
+                p.b = b;
                 break;
             }
         }

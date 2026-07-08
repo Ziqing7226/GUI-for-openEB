@@ -1,4 +1,15 @@
 // gui/display/space_time_display.cpp
+//
+// Renders events as a 3D XYT point cloud matching jAER's
+// SpaceTimeRollingEventDisplayMethod:
+//   X = pixel column (0..1 normalized, horizontal)
+//   Y = pixel row (0..1 normalized, vertical, OpenGL Y-up)
+//   Z = time (0=oldest at back, 1=newest at front, depth axis)
+// The time axis is scaled by time_aspect_ratio_ (default 4, matching jAER).
+// A 3D bounding box (12-edge cuboid wireframe) is drawn with a blue→dark-red
+// color gradient (front/newest=blue, back/oldest=dark red), matching jAER's
+// maybeRegenerateAxesDisplayList(). Axis labels ("x=sx", "y=sy", "t=0",
+// "t=-Xms") are placed at the correct 3D corner positions.
 
 #include "space_time_display.h"
 
@@ -8,21 +19,22 @@
 #include <QVector3D>
 #include <QWheelEvent>
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 
 namespace gui {
 
 namespace {
+// Point shader: renders event points as round, depth-shaded GL_POINTS.
+// aPos = (x_norm, y_norm, t_norm), each in [0,1].
+// t_norm=1 at newest (front), t_norm=0 at oldest (back).
 constexpr const char* kVertSrc = R"GLSL(#version 330 core
-// aPos layout matches Lighthouse event_3d_scatter.py: (t, 1-y, x) so that in
-// OGL space X=t (horizontal), Y=1-y (vertical, image origin at top), Z=x
-// (depth). This matches mpl's z-up convention after the (t, x, y)->mpl
-// (x, y, z) remap used by ax.scatter(t, x, y).
-in vec3 aPos;     // (t_norm, 1 - y_norm, x_norm), each in [0,1]
+in vec3 aPos;     // (x_norm, y_norm, t_norm), each in [0,1]
 in vec3 aColor;
 out vec3 vColor;
-out float vAge;
+out float vAge;   // t_norm: 1=newest, 0=oldest
 uniform mat4 uMVP;
 uniform float uPointSize;
 uniform bool uDepthShade;
@@ -30,10 +42,12 @@ void main() {
     // Centre the unit cube around the origin.
     vec3 p = aPos - vec3(0.5, 0.5, 0.5);
     gl_Position = uMVP * vec4(p, 1.0);
-    vAge = aPos.x;
+    vAge = aPos.z;
     float ps = uPointSize;
     if (uDepthShade) {
-        ps *= 0.5 + 0.5 * vAge;
+        // Newer events (higher t) are larger, matching jAER's
+        // gl_PointSize = pointSize * f1 + 1 where f1 = tn.
+        ps = 1.0 + ps * vAge;
     }
     gl_PointSize = ps;
     vColor = aColor;
@@ -52,11 +66,77 @@ void main() {
     if (r2 > 0.25) discard;
     vec3 c = vColor;
     if (uDepthShade) {
-        c *= (0.3 + 0.7 * vAge);
+        // Match jAER SpaceTimeRollingEventDisplayMethod_Fragment.glsl:
+        // brightness = 0.75*f1 + 0.25, where f1 = tn = vAge.
+        c *= (0.75 * vAge + 0.25);
     }
     fragColor = vec4(c, 0.75);
 }
 )GLSL";
+
+// Line shader for 3D bounding box edges (per-vertex color, no point rounding).
+constexpr const char* kLineVertSrc = R"GLSL(#version 330 core
+in vec3 aPos;
+in vec3 aColor;
+out vec3 vColor;
+uniform mat4 uMVP;
+void main() {
+    vec3 p = aPos - vec3(0.5, 0.5, 0.5);
+    gl_Position = uMVP * vec4(p, 1.0);
+    vColor = aColor;
+}
+)GLSL";
+
+constexpr const char* kLineFragSrc = R"GLSL(#version 330 core
+in vec3 vColor;
+out vec4 fragColor;
+void main() {
+    fragColor = vec4(vColor, 0.8);
+}
+)GLSL";
+
+/// Builds the 12-edge cuboid bounding box in normalized [0,1]^3 space.
+/// z=1 is the front face (newest, blue), z=0 is the back face (oldest,
+/// dark red). Depth edges have a per-vertex color gradient.
+/// Returns 24 vertices × 6 floats (3 pos + 3 color) = 144 floats.
+constexpr std::size_t kBoxVerts = 24;
+constexpr std::size_t kBoxFloats = kBoxVerts * 6;
+
+std::array<float, kBoxFloats> make_bounding_box() {
+    // Colors matching jAER maybeRegenerateAxesDisplayList().
+    const float blue[3]   = {0.0f, 0.0f, 1.0f};  // front (newest)
+    const float dred[3]   = {0.5f, 0.0f, 0.0f};  // back (oldest)
+
+    auto v = [](float x, float y, float z, const float c[3]) {
+        return std::array<float, 6>{x, y, z, c[0], c[1], c[2]};
+    };
+
+    std::array<float, kBoxFloats> d{};
+    std::size_t i = 0;
+    auto put = [&](const std::array<float, 6>& a) {
+        for (std::size_t j = 0; j < 6; ++j) d[i++] = a[j];
+    };
+
+    // Front face edges (z=1, newest) — blue
+    put(v(0,0,1, blue));  put(v(1,0,1, blue));   // bottom
+    put(v(0,0,1, blue));  put(v(0,1,1, blue));   // left
+    put(v(1,0,1, blue));  put(v(1,1,1, blue));   // right
+    put(v(1,1,1, blue));  put(v(0,1,1, blue));   // top
+
+    // Back face edges (z=0, oldest) — dark red
+    put(v(0,0,0, dred));  put(v(1,0,0, dred));   // bottom
+    put(v(0,0,0, dred));  put(v(0,1,0, dred));   // left
+    put(v(1,0,0, dred));  put(v(1,1,0, dred));   // right
+    put(v(1,1,0, dred));  put(v(0,1,0, dred));   // top
+
+    // Depth edges (z=1→0) — gradient blue→dark red
+    put(v(0,0,1, blue));  put(v(0,0,0, dred));   // bottom-left
+    put(v(1,0,1, blue));  put(v(1,0,0, dred));   // bottom-right
+    put(v(0,1,1, blue));  put(v(0,1,0, dred));   // top-left
+    put(v(1,1,1, blue));  put(v(1,1,0, dred));   // top-right
+
+    return d;
+}
 } // namespace
 
 SpaceTimeDisplay::SpaceTimeDisplay(QWidget* parent) : QOpenGLWidget(parent) {
@@ -71,9 +151,13 @@ SpaceTimeDisplay::SpaceTimeDisplay(QWidget* parent) : QOpenGLWidget(parent) {
 }
 
 SpaceTimeDisplay::~SpaceTimeDisplay() {
+    if (render_timer_) render_timer_->stop();
     // GL resources must be freed with a current context.
     if (gl_ready_) {
         makeCurrent();
+        axis_vbo_.reset();
+        axis_vao_.reset();
+        line_program_.reset();
         vbo_.reset();
         vao_.reset();
         program_.reset();
@@ -168,8 +252,42 @@ void SpaceTimeDisplay::initializeGL() {
     vao_->release();
     vbo_->release();
 
+    // --- Line shader + bounding box VBO (jAER cuboid wireframe) ---
+    line_program_ = std::make_unique<QOpenGLShaderProgram>();
+    line_program_->addShaderFromSourceCode(QOpenGLShader::Vertex, kLineVertSrc);
+    line_program_->addShaderFromSourceCode(QOpenGLShader::Fragment, kLineFragSrc);
+    line_program_->bindAttributeLocation("aPos", 0);
+    line_program_->bindAttributeLocation("aColor", 1);
+    line_program_->link();
+
+    // 12-edge bounding box in [0,1]^3 (24 vertices, 6 floats each).
+    const auto box = make_bounding_box();
+    axis_vao_ = std::make_unique<QOpenGLVertexArrayObject>();
+    axis_vao_->create();
+    axis_vao_->bind();
+    axis_vbo_ = std::make_unique<QOpenGLBuffer>(QOpenGLBuffer::VertexBuffer);
+    axis_vbo_->create();
+    axis_vbo_->setUsagePattern(QOpenGLBuffer::StaticDraw);
+    axis_vbo_->bind();
+    axis_vbo_->allocate(box.data(), static_cast<int>(box.size() * sizeof(float)));
+    const int axis_stride = 6 * static_cast<int>(sizeof(float));
+    line_program_->enableAttributeArray(0);
+    line_program_->setAttributeBuffer(0, GL_FLOAT, 0, 3, axis_stride);
+    line_program_->enableAttributeArray(1);
+    line_program_->setAttributeBuffer(1, GL_FLOAT, 3 * sizeof(float), 3, axis_stride);
+    axis_vao_->release();
+    axis_vbo_->release();
+
     glClearColor(0.08f, 0.08f, 0.10f, 1.0f);
     gl_ready_ = true;
+
+    // Start a 60 FPS render timer. This decouples rendering from event push
+    // timing, matching jAER's display-rate-driven rendering. Without this,
+    // the FPS is limited by the event push interval (which may be variable).
+    render_timer_ = new QTimer(this);
+    render_timer_->setInterval(16);  // ~60 FPS
+    connect(render_timer_, &QTimer::timeout, this, [this]() { update(); });
+    render_timer_->start();
 }
 
 void SpaceTimeDisplay::resizeGL(int w, int h) {
@@ -177,63 +295,37 @@ void SpaceTimeDisplay::resizeGL(int w, int h) {
 }
 
 void SpaceTimeDisplay::rebuild_vbo() {
-    points_ = viz_.render();
+    viz_.render(points_);
     point_count_ = static_cast<int>(points_.size());
     if (!gl_ready_ || !vbo_) return;
 
     // Build a flat float buffer of normalized positions + colors.
+    // X = pixel column / sensor_w, Y = pixel row / sensor_h (no flip),
+    // Z = t_norm (0=oldest, 1=newest).
     const float sx = (sensor_w_ > 0) ? 1.0f / static_cast<float>(sensor_w_) : 1.0f;
     const float sy = (sensor_h_ > 0) ? 1.0f / static_cast<float>(sensor_h_) : 1.0f;
 
-    std::vector<float> data;
-    data.reserve(static_cast<std::size_t>(point_count_) * 6);
+    // Reuse vbo_data_ across frames to avoid per-frame heap allocation.
+    vbo_data_.clear();
+    vbo_data_.reserve(static_cast<std::size_t>(point_count_) * 6);
     for (const auto& p : points_) {
-        data.push_back(p.t);
-        data.push_back(1.0f - p.y * sy);
-        data.push_back(p.x * sx);
-        data.push_back(p.r);
-        data.push_back(p.g);
-        data.push_back(p.b);
+        vbo_data_.push_back(p.x * sx);
+        vbo_data_.push_back(p.y * sy);
+        vbo_data_.push_back(p.t);
+        vbo_data_.push_back(p.r);
+        vbo_data_.push_back(p.g);
+        vbo_data_.push_back(p.b);
     }
 
     vbo_->bind();
-    const int needed = static_cast<int>(data.size() * sizeof(float));
+    const int needed = static_cast<int>(vbo_data_.size() * sizeof(float));
     if (needed > vbo_capacity_bytes_) {
         const int new_cap = std::max(needed, vbo_capacity_bytes_ * 2);
         vbo_->allocate(nullptr, new_cap);
         vbo_capacity_bytes_ = new_cap;
     }
-    vbo_->write(0, data.data(), needed);
+    vbo_->write(0, vbo_data_.data(), needed);
     vbo_->release();
-}
-
-void SpaceTimeDisplay::update_camera_uniforms() {
-    const float az = azimuth_ * static_cast<float>(M_PI) / 180.0f;
-    const float el = elevation_ * static_cast<float>(M_PI) / 180.0f;
-    const float dist = distance_;
-
-    QVector3D eye(dist * std::cos(el) * std::sin(az),
-                  dist * std::sin(el),
-                  dist * std::cos(el) * std::cos(az));
-
-    QMatrix4x4 view;
-    view.lookAt(eye, QVector3D(0, 0, 0), QVector3D(0, 1, 0));
-
-    QMatrix4x4 proj;
-    proj.perspective(45.0f,
-                     static_cast<float>(width()) / static_cast<float>(std::max(height(), 1)),
-                     0.05f, 100.0f);
-
-    QMatrix4x4 model;
-    // Match Lighthouse ax.set_box_aspect((5, 3, 2)) — mpl x=t, y=image-x,
-    // z=image-y. After our OGL remap (X=t, Y=1-y, Z=x) the per-axis scales
-    // become (t=5, image-y=2, image-x=3).
-    model.scale(5.0f, 2.0f, 3.0f);
-
-    QMatrix4x4 mvp = proj * view * model;
-    program_->setUniformValue("uMVP", mvp);
-    program_->setUniformValue("uPointSize", viz_.point_size());
-    program_->setUniformValue("uDepthShade", viz_.depth_shade());
 }
 
 void SpaceTimeDisplay::paintGL() {
@@ -246,20 +338,125 @@ void SpaceTimeDisplay::paintGL() {
     }
 
     rebuild_vbo();
-    if (point_count_ == 0) {
-        return;  // nothing to draw
+
+    // Compute MVP. jAER preserves the sensor aspect ratio: the box is
+    // sx × sy × (smax * timeAspectRatio). We normalize by smax so the
+    // largest spatial dimension is 1.0, then scale Z by time_aspect_ratio.
+    // This matches jAER's proportions exactly (e.g. 640×480 → 1.0 × 0.75 × 4).
+    const int sw_raw = sensor_w_ > 0 ? sensor_w_ : 1;
+    const int sh_raw = sensor_h_ > 0 ? sensor_h_ : 1;
+    const float smax = static_cast<float>(std::max(sw_raw, sh_raw));
+    const float sw = static_cast<float>(sw_raw) / smax;
+    const float sh = static_cast<float>(sh_raw) / smax;
+
+    const float az = azimuth_ * static_cast<float>(M_PI) / 180.0f;
+    const float el = elevation_ * static_cast<float>(M_PI) / 180.0f;
+    const float dist = distance_;
+    QVector3D eye(dist * std::cos(el) * std::sin(az),
+                  dist * std::sin(el),
+                  dist * std::cos(el) * std::cos(az));
+    QMatrix4x4 view;
+    view.lookAt(eye, QVector3D(0, 0, 0), QVector3D(0, 1, 0));
+    QMatrix4x4 proj;
+    proj.perspective(45.0f,
+                     static_cast<float>(width()) / static_cast<float>(std::max(height(), 1)),
+                     0.05f, 100.0f);
+    QMatrix4x4 model;
+    model.scale(sw, sh, time_aspect_ratio_);
+    const QMatrix4x4 mvp = proj * view * model;
+
+    // Draw event points.
+    if (point_count_ > 0) {
+        program_->bind();
+        vao_->bind();
+        program_->setUniformValue("uMVP", mvp);
+        program_->setUniformValue("uPointSize", viz_.point_size());
+        program_->setUniformValue("uDepthShade", viz_.depth_shade());
+        glDrawArrays(GL_POINTS, 0, point_count_);
+        vao_->release();
+        program_->release();
     }
 
-    program_->bind();
-    vao_->bind();
-    update_camera_uniforms();
-    glDrawArrays(GL_POINTS, 0, point_count_);
-    vao_->release();
-    program_->release();
+    // Draw 3D bounding box + labels.
+    draw_axes_overlay(mvp);
+    // Note: no need to call update() for auto_rotate_ — the render timer
+    // (render_timer_) drives continuous 60 FPS repaints.
+}
 
-    if (auto_rotate_) {
-        update();  // keep animating
+void SpaceTimeDisplay::draw_axes_overlay(const QMatrix4x4& mvp) {
+    // Draw 12-edge bounding box with the line shader.
+    if (line_program_ && axis_vao_) {
+        glLineWidth(2.0f);
+        line_program_->bind();
+        axis_vao_->bind();
+        line_program_->setUniformValue("uMVP", mvp);
+        glDrawArrays(GL_LINES, 0, 24);  // 12 edges × 2 vertices
+        axis_vao_->release();
+        line_program_->release();
     }
+
+    // QPainter 2D overlay: axis labels + info text.
+    // Project 3D corner positions to screen coordinates for label placement.
+    // The shader centers by -0.5, and the model matrix (included in mvp)
+    // handles all scaling (sw, sh, time_aspect_ratio). We must NOT
+    // double-scale Z here — just center and let mvp do the rest.
+    auto project = [&](float x, float y, float z) -> QPointF {
+        QVector3D p(x - 0.5f, y - 0.5f, z - 0.5f);
+        QVector3D clip = mvp.map(p);
+        if (clip.z() < -1.0f || clip.z() > 1.0f) return QPointF(-1, -1);
+        return QPointF((clip.x() * 0.5f + 0.5f) * width(),
+                       (1.0f - (clip.y() * 0.5f + 0.5f)) * height());
+    };
+
+    QPainter painter(this);
+    painter.setRenderHint(QPainter::Antialiasing);
+    QFont font("Monospace", 9);
+    font.setBold(true);
+    painter.setFont(font);
+
+    // Label positions matching jAER maybeRegenerateAxesDisplayList():
+    //   "x=sx"  at (1.05, 0, 1) — beyond right edge, bottom, front (newest)
+    //   "y=sy"  at (0, 1.05, 1) — left, beyond top, front
+    //   "t=0"   at (-0.05, 0, 1) — beyond left, bottom, front (t=now)
+    //   "t=-Xms" at (1.05, 0, 0) — beyond right, bottom, back (oldest) — RED
+    const QPointF x_pos = project(1.05f, 0.0f, 1.0f);
+    const QPointF y_pos = project(0.0f, 1.05f, 1.0f);
+    const QPointF t0_pos = project(-0.05f, 0.0f, 1.0f);
+    const QPointF t1_pos = project(1.05f, 0.0f, 0.0f);
+
+    const QString x_label = QString("x=%1").arg(sensor_w_);
+    const QString y_label = QString("y=%1").arg(sensor_h_);
+    const QString t0_label = QStringLiteral("t=0");
+    const float tw_ms = viz_.time_window_ms();
+    const QString t1_label = QString("t=-%1ms").arg(tw_ms, 0, 'f', 1);
+
+    auto draw_label = [&](const QPointF& pos, const QString& text, const QColor& color) {
+        if (pos.x() < 0) return;
+        const QRectF br = painter.fontMetrics().boundingRect(text);
+        QRectF box = br.adjusted(-4, -2, 4, 2);
+        box.moveCenter(pos);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(QColor(0, 0, 0, 180));
+        painter.drawRoundedRect(box, 3, 3);
+        painter.setPen(QPen(color));
+        painter.drawText(box, Qt::AlignCenter, text);
+    };
+
+    draw_label(x_pos, x_label, QColor(100, 150, 255));   // x axis — blue
+    draw_label(y_pos, y_label, QColor(100, 255, 100));   // y axis — green
+    draw_label(t0_pos, t0_label, QColor(100, 150, 255)); // t=0 (newest) — blue
+    draw_label(t1_pos, t1_label, QColor(255, 80, 80));   // t=-Xms (oldest) — red
+
+    // Info overlay (top-left corner).
+    QString info = QString("events: %1  |  window: %2ms  |  color: %3")
+                       .arg(point_count_)
+                       .arg(tw_ms, 0, 'f', 1)
+                       .arg(viz_.color_mode() == gui_algo::XYTVisualizer::ColorMode::Age
+                                ? "Age" : "Polarity");
+    painter.setPen(QPen(QColor(200, 200, 200)));
+    painter.drawText(10, 15, info);
+
+    painter.end();
 }
 
 void SpaceTimeDisplay::mousePressEvent(QMouseEvent* event) {

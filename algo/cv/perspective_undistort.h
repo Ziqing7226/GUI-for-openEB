@@ -71,7 +71,8 @@ public:
     }
 
     /// @brief Remaps event coordinates in-place into the undistorted plane.
-    /// Out-of-bounds results are clamped to the image extent.
+    /// Out-of-bounds results are clamped to the image extent. When zoom != 1.0,
+    /// coordinates are scaled around the image center after undistortion.
     void process(MutableEventPacket& packet) {
         if (!undistort_) return;
         if (K_.empty() || dist_coeffs_.empty()) return;
@@ -79,6 +80,8 @@ public:
         if (width_ <= 0 || height_ <= 0) return;
         const float xmax = static_cast<float>(width_ - 1);
         const float ymax = static_cast<float>(height_ - 1);
+        const float cx = xmax * 0.5f;
+        const float cy = ymax * 0.5f;
         for (Event& e : packet) {
             if (e.x >= width_ || e.y >= height_) continue;
             float ox = 0.0f;
@@ -97,6 +100,11 @@ public:
                 ox = dst[0].x;
                 oy = dst[0].y;
             }
+            // Apply zoom around image center.
+            if (zoom_ != 1.0f) {
+                ox = cx + (ox - cx) * zoom_;
+                oy = cy + (oy - cy) * zoom_;
+            }
             if (ox < 0.0f) ox = 0.0f;
             else if (ox > xmax) ox = xmax;
             if (oy < 0.0f) oy = 0.0f;
@@ -113,6 +121,8 @@ public:
     void set_use_lut(bool v) { use_lut_ = v; }
     void set_undistort(bool v) { undistort_ = v; }
     void set_rectify(bool v) { rectify_ = v; }
+    void set_zoom(float z) { zoom_ = (z > 0.01f) ? z : 1.0f; }
+    float zoom() const { return zoom_; }
 
     void reset() {
         lut_x_.clear();
@@ -121,12 +131,14 @@ public:
         dist_coeffs_.release();
         width_ = 0;
         height_ = 0;
+        zoom_ = 1.0f;
     }
 
 private:
     bool use_lut_;
     bool undistort_;
     bool rectify_;
+    float zoom_{1.0f};
     cv::Mat K_;
     cv::Mat dist_coeffs_;
     cv::Mat R_;   ///< Rectification rotation (identity by default).

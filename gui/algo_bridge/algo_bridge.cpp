@@ -628,9 +628,11 @@ void AlgoBridge::register_self_cv() {
          {pfloat("low_cutoff_hz", "Low cutoff (Hz)", "1.0", "0.01", "100"),
           pfloat("high_cutoff_hz", "High cutoff (Hz)", "10.0", "0.01", "1000")}});
 
-    // §4.3.23 Optical Gyro (EIS)
+    // §4.3.23 Optical Gyro (EIS) — Overlay: draws translation/rotation
+    // vectors on top of the stabilized event display (jAER OpticalGyro
+    // annotates the GL canvas with motion vectors).
     add({"optical_gyro", "EIS (Optical Gyro)", "cv", "self",
-         AlgoDisplayMode::Passive,
+         AlgoDisplayMode::Overlay,
          {pbool("stabilize", "Stabilize", "true"),
           pbool("rotation_enabled", "Rotation estimation", "false"),
           pfloat("smoothing_window_ms", "Smoothing window (ms)", "100", "10", "1000")}});

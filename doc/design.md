@@ -411,7 +411,7 @@ GUI-for-openEB/
 | `DavisColorRenderer` | `eu/seebetter/ini/chips/davis/` | RGBW Bayer demosaic + 3x4 颜色校正矩阵 | ⚠️ 仅彩色 DAVIS | — |
 | `AdaptiveIntensityRenderer` ★ | `net/sf/jaer/graphics/` | 用 dt（距上次事件时间）作为灰度 + 校准矩阵 | ✅ 移植 | `gui/display/adaptive_renderer.h` |
 | `SpaceTimeRollingEventDisplayMethod` ★ | `net/sf/jaer/graphics/` | 滚动 XYT 3D 显示（VBO + GLSL，时间窗剔除） | ✅ 强烈移植 | `gui/display/space_time_display.h` |
-| `SpaceTimeEventDisplayMethod` | `net/sf/jaer/graphics/` | 静态 XYT 3D（cube spike list） | ⚠️ 适合小数据 | — |
+| `SpaceTimeEventDisplayMethod` | `net/sf/jaer/graphics/` | 静态 XYT 3D（cube spike list） | ✅ 已借鉴（坐标轴+标签） | `gui/display/space_time_display.cpp` `draw_axes_overlay()` |
 | `TimestampImage3DDisplayMethod` | `net/sf/jaer/graphics/` | 时间戳 3D 显示 | ⚠️ 与 SpaceTime 重叠 | — |
 | `ChipRendererDisplayMethodRGBA` | `net/sf/jaer/graphics/` | 三 GL 纹理叠加（APS+DVS+标注） | ✅ 借鉴 | `gui/display/event_display_widget.h` |
 | `FrameAnnotater` 接口 | `net/sf/jaer/graphics/` | 算法绘制叠加层抽象 | ✅ 借鉴接口 | `gui/display/frame_annotator.h` |
@@ -1138,9 +1138,19 @@ openEB 未提供光流算法，需自研。结果以箭头/颜色图叠加到主
 
 #### 4.3.25 🆕 XYT 3D 事件点云 (XYTVisualizer) — 独立窗口型
 
-3D x-y-t 事件点云可视化，替代原 Temporal Plot（2D x-t/y-t 散点图）。每个事件为 3D 空间中的一个点（X=像素列, Y=像素行, T=时间轴/深度），支持极性着色（ON=红/OFF=绿）或事件年龄渐变（蓝→绿→红）。底层为 `gui/display/space_time_display.h`（VBO+GLSL），借鉴 jAER `SpaceTimeRollingEventDisplayMethod` 与 [`ref/Lighthouse/tools/event_3d_scatter.py`](file:///home/justin/GUI_for_openEB/GUI-for-openEB/ref/Lighthouse/tools/event_3d_scatter.py)。
+3D x-y-t 事件点云可视化，替代原 Temporal Plot（2D x-t/y-t 散点图）。每个事件为 3D 空间中的一个点（X=像素列, Y=像素行, T=时间轴/深度），支持极性着色（ON=红/OFF=绿）或事件年龄渐变（蓝→绿→红）。底层为 `gui/display/space_time_display.h`（VBO+GLSL），严格对齐 jAER `SpaceTimeRollingEventDisplayMethod`。
 
-**参数与合法范围**：`time_window_ms`：float，`[10, 10000]`，默认 `1000`（显示最近 N ms 事件）；`color_mode`：枚举（Polarity / Age），默认 `Polarity`；`point_size`：float，`[0.5, 10]`，默认 `2.5`；`auto_rotate`：bool，默认 `false`；`depth_shade`：bool，默认 `false`
+**坐标系**（对齐 jAER）：X=像素列（水平），Y=像素行（垂直，不翻转），T=时间（深度轴， newest 在前/靠近相机，oldest 在后/远离相机）。空间轴按 `smax = max(sensor_w, sensor_h)` 归一化，保持传感器宽高比（例如 640×480 → X∈[0,1.0], Y∈[0,0.75]）；时间轴按 `time_aspect_ratio`（默认 4，匹配 jAER）缩放。模型矩阵 `scale(sw, sh, time_aspect_ratio)` 一次性应用所有比例，着色器和标签投影使用同一 MVP，避免双重缩放。
+
+**3D 包围盒与标签**（对齐 jAER `maybeRegenerateAxesDisplayList()`）：绘制 12 条边的 3D 长方体线框（非 3 条穿过原点的轴线）。前截面（z=1, newest）= 蓝色，后截面（z=0, oldest）= 暗红色，深度边 = 蓝→暗红渐变。标签位置匹配 jAER 角点：`x=sx` 在 (1.05, 0, 1) 蓝色，`y=sy` 在 (0, 1.05, 1) 绿色，`t=0` 在 (-0.05, 0, 1) 蓝色，`t=-Xms` 在 (1.05, 0, 0) 红色。使用独立 GLSL line shader 渲染 GL_LINES + QPainter 2D 文字叠加。左上角显示事件数、时间窗、着色模式等信息。
+
+**着色**（对齐 jAER fragment shader）：Age 模式下，`colorize()` 仅产生原始 r/g/b 分量（不乘亮度），亮度由 fragment shader 统一应用 `brightness = 0.75*tn + 0.25`（tn=1 newest → 亮度 1.0，tn=0 oldest → 亮度 0.25），避免双重亮度。颜色公式：`f=1-tn`，`b=max(1-2f,0)`，`r=max(2(f-0.5),0)`，`g=f if f≤0.5 else 1-f`。点大小 `gl_PointSize = pointSize*tn + 1`（新事件更大）。
+
+**tn 归一化**（对齐 jAER 动态窗口行为）：`render()` 使用缓冲区中事件的**实际时间跨度**（`buffer_.front().t` → `latest_t_`）归一化 tn 到 [0,1]，而非理论 `time_window_ms`。jAER 根据帧率动态设置时间窗口使事件始终填满窗口；我们使用固定窗口，若按理论窗口归一化，当事件实际跨度远小于窗口（如 1ms 事件 vs 50ms 窗口）时所有 tn≈1.0（全蓝、全在前平面、呈平面状）。按实际范围归一化确保 tn 始终跨越 [0,1]，无论事件密度如何。GUI `time_window_us` 参数（默认 1000000us=1s）通过 `on_open_xyt_view()` 初始同步和事件推送回调持续同步到 `SpaceTimeDisplay::set_time_window_ms()`，确保用户在 AlgoWindow 中的参数修改实时生效。
+
+**渲染性能**（对齐 jAER 流畅度）：事件推送间隔 16ms（≈60 FPS），每批最多 5000 事件（降采样），配合 `kMaxBuffer=200000` 硬上限可保留约 40 批 ≈ 640ms 的时间跨度，确保点云时间连续。`SpaceTimeDisplay` 内置 60 FPS `QTimer` 渲染定时器，将渲染节奏与事件推送解耦——即使事件以突发方式到达，显示仍保持稳定 60 FPS。`render()` 接受预分配 `std::vector<XYTPoint>&` 输出参数（避免每帧堆分配），`rebuild_vbo()` 复用成员 `vbo_data_` 缓冲区（避免每帧 vector 分配），确保大数据量下无卡顿。
+
+**参数与合法范围**：`time_window_ms`：float，`[10, 10000]`，默认 `1000`（显示最近 N ms 事件）；`color_mode`：枚举（Polarity / Age），默认 `Age`（匹配 jAER shader 着色）；`point_size`：float，`[0.5, 10]`，默认 `2.5`；`auto_rotate`：bool，默认 `false`；`depth_shade`：bool，默认 `true`（匹配 jAER 始终启用的 shader 亮度）
 
 **ROI 处理区**（默认启用，详见 §5.6.6）：`roi_enabled`：bool，默认 `true`；`roi_x`/`roi_y`：int，`-1` 表示自动居中，默认 `-1`；`roi_w`/`roi_h`：int，`0` 表示全幅，默认 `128`（即默认 128×128 中心区域）。启用时仅向 3D 点云推送 ROI 内事件，主显示帧同步绘制黄色 ROI 边框。
 
@@ -1459,9 +1469,10 @@ openEB 未提供光流算法，需自研。结果以箭头/颜色图叠加到主
 
 | 显示模式 | 说明 | 代表算法 | 行为 |
 |----------|------|----------|------|
-| **叠加型 (Overlay)** | 结果叠加到主显示帧上 | 光流、团块检测、目标跟踪、角点、计数、噪声过滤 | 不开新窗口，直接绘制在主显示区 |
-| **主显示替换型 (Replace)** | 替换主显示区内容 | 超高速回放 | 占用主显示区 |
-| **独立窗口型 (Standalone)** | 在新窗口独立显示 | Time Surface、XYT 可视化、事件重建（EventToVideo）、频率检测（FreqDetector）、ISI 直方图（ISI Analyzer） | 弹出独立子窗口 |
+| **被动型 (Passive)** | 原地过滤事件，不绘制叠加层 | 噪声过滤、热像素过滤、超高速回放、带通滤波 | 不开新窗口，仅修改事件流；AlgoWindow 打开时显示状态文字 |
+| **叠加型 (Overlay)** | 结果叠加到主显示帧上 | 朝向/方向滤波、光流、团块检测、目标跟踪、角点、计数、霍夫直线/圆、EIS（电子稳定） | 不开新窗口，直接绘制在主显示区 |
+| **主显示替换型 (Replace)** | 替换主显示区内容 | 事件重建（EventToVideo） | 占用主显示区 |
+| **独立窗口型 (Standalone)** | 在新窗口独立显示 | Time Surface、XYT 3D 可视化、频率检测（FreqDetector）、ISI 直方图（ISI Analyzer） | 弹出独立子窗口 |
 
 #### 5.6.2 多窗口布局行为
 
