@@ -46,7 +46,7 @@ GUI-for-openEB/
 │   │   ├── target_labeler.h / .cpp   🆕 数据集标注工具（参考 jAER TargetLabeler）
 │   │   ├── pixel_probe.h / .cpp      🆕 像素探针（点击查看事件序列/ISI/极性）
 │   │   ├── mouse_adaptor.h / .cpp    🆕 鼠标交互（多矩形 ROI 绘制）
-│   │   ├── algo_window.h / .cpp      🆕 算法参数+显示窗口（§5.6.6，全算法支持）
+│   │   ├── algo_window.h / .cpp      🆕 算法显示窗口（§5.6.6，仅输出；参数统一在侧栏调节）
 │   │   └── multiline_text.h / .cpp   🆕 多行文本渲染（计数/统计 HUD）
 │   ├── panels/                  # 设置面板（Biases/ROI/ESP/Trigger 等）
 │   │   ├── biases_panel.h / .cpp
@@ -1494,7 +1494,7 @@ openEB 未提供光流算法，需自研。结果以箭头/颜色图叠加到主
 | 功能 | 描述 |
 |------|------|
 | 窗口标题 | 每个子窗口显示其算法名 + 参数摘要（如 "Time Surface (decay=100ms)"） |
-| 独立参数面板 | 每个独立窗口可在其侧边/底部展开自己的参数调整区 |
+| 统一参数面板 | 所有算法参数仅在侧栏（AlgorithmsPanel）调节，显示窗口只展示算法输出，避免两处参数面板不同步的歧义 |
 | 独立启停 | 每个子窗口可独立启停，不影响主显示与其他窗口 |
 | 共享事件源 | 所有窗口共享同一事件流（实时相机或回放文件），各自独立处理 |
 | 窗口列表 | View 菜单显示当前所有打开的子窗口，可勾选显示/隐藏 |
@@ -1534,7 +1534,7 @@ openEB 未提供光流算法，需自研。结果以箭头/颜色图叠加到主
 
 #### 5.6.6 🆕 算法 ROI 处理区（全算法支持，128×128 中心默认）
 
-**核心需求**：全部自研算法（22 个 CV + 7 个 Analytics，共 29 个）均支持"算法 ROI"处理区。GUI 默认启用 ROI 且默认区域为中心 128×128 内侧，使算法只处理 ROI 内事件、GUI 只渲染 ROI 区域的输出。用户可在 Algorithm 菜单的每个算法子菜单中勾选"算法ROI"开关，并通过"Configure..."打开的 AlgoWindow 调节 ROI 坐标/尺寸及全部算法参数。
+**核心需求**：全部自研算法（22 个 CV + 7 个 Analytics，共 29 个）均支持"算法 ROI"处理区。GUI 默认启用 ROI 且默认区域为中心 128×128 内侧，使算法只处理 ROI 内事件、GUI 只渲染 ROI 区域的输出。用户可在侧栏"算法模块"面板顶部的全局 ROI 选择器中调节 ROI 坐标/尺寸，并在每个算法的展开参数编辑器中调节全部算法参数（AlgoWindow 显示窗口仅展示输出，不含参数控件）。
 
 **适用算法**：全部 29 个自研算法（包括 Overlay / Replace / Standalone / Passive 四种显示模式）。每个算法在 `algo_bridge.cpp` 注册时由 `add()` lambda 自动追加 5 个 ROI 参数；每个 `AlgoBackend` 通过 `RoiFilter` helper（或等价的 `ProcessRegion` 成员）实现事件过滤。
 
@@ -1568,18 +1568,18 @@ openEB 未提供光流算法，需自研。结果以箭头/颜色图叠加到主
 2. **使用 `triggered(bool)` 信号**（非 `toggled`）避免程序化 `setChecked` 触发重入
 3. **AlgoWindow**（`gui/widgets/algo_window.h`，继承 `QDockWidget`）：
    - 停靠在主窗口左侧，多个算法窗口标签页叠加；用户可拖拽至任意边缘、浮出或重新排列
-   - 内部 content widget 顶部为滚动参数面板，自动从 `AlgoParamSpec` 生成控件（QSpinBox/QDoubleSpinBox/QComboBox/QLineEdit），ROI 参数分组置顶
-   - 底部为显示区域：Standalone 帧类算法（`time_surface`/`event_to_video`/`isi_analyzer`/`background_mask`）安装 `EventDisplayWidget` 显示算法输出帧；**自研 Overlay 算法也安装 `EventDisplayWidget`，作为 ROI 放大视图**（见下文）；其余算法使用 `QLabel` 显示状态文本
-   - `xyt_visualizer` 额外维护独立的 `SpaceTimeDisplay`（QOpenGLWidget 3D 渲染），AlgoWindow 仅提供参数控制
+   - 内部 content widget 仅为显示区域，**不含参数控件**——所有参数调节统一在侧栏 AlgorithmsPanel 完成，避免两处独立参数面板不同步导致用户无法确认算法实际使用的参数值
+   - Standalone 帧类算法（`time_surface`/`event_to_video`/`isi_analyzer`/`background_mask`）安装 `EventDisplayWidget` 显示算法输出帧；**自研 Overlay 算法也安装 `EventDisplayWidget`，作为 ROI 放大视图**（见下文）；其余算法使用 `QLabel` 显示状态文本
+   - `xyt_visualizer` 额外维护独立的 `SpaceTimeDisplay`（QOpenGLWidget 3D 渲染），AlgoWindow 仅显示状态标签，参数在侧栏调节
    - 关闭 AlgoWindow → `closeEvent` 显式 accept → 触发 `closing` 信号 → `set_enabled(false)` + 侧边栏算法面板取消勾选 + `WA_DeleteOnClose` 自动回收
 4. **主显示帧 ROI 叠加**：`process_algo_results()` 中调用 `draw_roi_overlays()`，遍历所有启用的自研算法（`source == "self"`），对每个 `roi_enabled=true` 的算法在主显示帧上绘制黄色矩形框 + 算法名标注
 5. **ROI 放大视图**（Overlay 算法）：`process_algo_results()` 的 Overlay 分支在主帧上绘制完算法图元（boxes/lines/points/circles/texts）后，若该算法 `roi_enabled=true` 且其 AlgoWindow 已开，则从已标注的主帧裁剪 ROI 区域（`QImage::copy(QRect)`）并推送到 AlgoWindow 的 `EventDisplayWidget`。该窗口以 ROI 尺寸独立显示"放大后的算法结果"，便于用户在小 ROI 区域内观察细节；ROI 未启用时不推送（保持 `QLabel` 等待状态）。
-6. **参数面板**：AlgoWindow 与 Algorithms 面板均可调节参数，参数变更即时同步到 AlgoInstance
+6. **参数面板**：所有算法参数仅在侧栏 AlgorithmsPanel 调节（含全局 ROI 选择器 + 每个算法的展开参数编辑器），参数变更即时同步到 AlgoInstance。AlgoWindow 显示窗口不含参数控件。
 
 **手动停用方式**：
 - 侧边栏"算法模块"面板 → 取消勾选算法的 "Enable" 复选框
 - 关闭对应 AlgoWindow（dock 标签页 X 按钮）
-- 取消勾选 "算法ROI"（保留全幅处理）或在 AlgoWindow 中调整 ROI 尺寸为 `0`（全幅）
+- 取消勾选 "算法ROI"（保留全幅处理）或在侧栏全局 ROI 选择器中调整 ROI 尺寸为 `0`（全幅）
 
 ---
 

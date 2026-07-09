@@ -1176,7 +1176,7 @@ void MainWindow::install_algo_callback() {
                     QMetaObject::invokeMethod(this, [this, copy]() {
                         if (xyt_display_) {
                             // Sync time_window from algo parameter in case
-                            // the user changed it in the AlgoWindow.
+                            // the user changed it in the sidebar.
                             if (xyt_algo_) {
                                 const auto tw = xyt_algo_->get_param("time_window_us");
                                 if (!tw.empty()) {
@@ -1776,8 +1776,9 @@ void MainWindow::on_open_algo_window(const std::string& algo_name) {
     }
 
     // For xyt_visualizer, also open the dedicated SpaceTimeDisplay window
-    // (the AlgoWindow provides parameter control only — the 3D rendering is
-    // handled by SpaceTimeDisplay's own QOpenGLWidget).
+    // (the AlgoWindow shows only the status label — the 3D rendering is
+    // handled by SpaceTimeDisplay's own QOpenGLWidget, and parameters are
+    // adjusted in the sidebar).
     if (algo_name == "xyt_visualizer") {
         on_open_xyt_view();
     }

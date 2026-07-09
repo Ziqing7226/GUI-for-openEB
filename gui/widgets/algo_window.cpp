@@ -1,23 +1,14 @@
-// gui/widgets/algo_window.cpp — generic algorithm parameter + display window.
+// gui/widgets/algo_window.cpp — algorithm display window (output only).
 //
-// See algo_window.h for the design rationale. The parameter panel reuses the
-// same widget-generation pattern as AlgorithmsPanel (auto-build QSpinBox /
-// QDoubleSpinBox / QComboBox / QLineEdit from AlgoParamSpec), so any new
-// algorithm parameter registered in algo_bridge.cpp automatically appears
-// here without code changes.
+// See algo_window.h for the design rationale. The window hosts only the
+// algorithm output (status label or a custom display widget such as
+// EventDisplayWidget). All parameter adjustment is handled exclusively by
+// the sidebar (AlgorithmsPanel).
 
 #include "algo_window.h"
 
-#include <QCheckBox>
-#include <QComboBox>
 #include <QCloseEvent>
-#include <QDoubleSpinBox>
-#include <QFormLayout>
-#include <QGroupBox>
 #include <QLabel>
-#include <QLineEdit>
-#include <QScrollArea>
-#include <QSpinBox>
 #include <QVBoxLayout>
 
 #include "display/event_display_widget.h"
@@ -55,9 +46,6 @@ AlgoWindow::AlgoWindow(AlgoBridge* bridge, const std::string& algo_name,
     outer->setContentsMargins(4, 4, 4, 4);
     outer->setSpacing(4);
 
-    // Parameter panel (scrollable so large param sets remain usable).
-    build_param_panel(outer);
-
     // Display area: defaults to a status QLabel; Standalone frame algos
     // install an EventDisplayWidget via set_display_widget() after construction.
     display_layout_ = new QVBoxLayout();
@@ -74,210 +62,6 @@ AlgoWindow::AlgoWindow(AlgoBridge* bridge, const std::string& algo_name,
     outer->addLayout(display_layout_, 1);
 
     setWidget(content_);
-}
-
-void AlgoWindow::build_param_panel(QVBoxLayout* outer) {
-    // Group parameters: ROI params first (so the user can quickly toggle/resize
-    // the region), then the algorithm-specific params.
-    std::vector<AlgoParamSpec> roi_params, algo_params;
-    for (const auto& p : info_.params) {
-        if (p.key.find("roi_") == 0) roi_params.push_back(p);
-        else algo_params.push_back(p);
-    }
-
-    param_scroll_ = new QScrollArea(content_);
-    param_scroll_->setWidgetResizable(true);
-    param_scroll_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    // Cap the parameter panel height so the display area stays visible.
-    param_scroll_->setMaximumHeight(280);
-
-    auto* host = new QWidget(param_scroll_);
-    auto* host_layout = new QVBoxLayout(host);
-    host_layout->setContentsMargins(4, 4, 4, 4);
-    host_layout->setSpacing(6);
-
-    auto build_group = [&](const QString& title,
-                           const std::vector<AlgoParamSpec>& params) {
-        if (params.empty()) return;
-        auto* gb = new QGroupBox(title, host);
-        auto* form = new QFormLayout(gb);
-        form->setContentsMargins(6, 6, 6, 6);
-
-        for (const auto& p : params) {
-            auto* lbl = new QLabel(QString::fromStdString(p.display_name), gb);
-            const std::string param_key = p.key;
-            QWidget* w = nullptr;
-            if (p.type == "enum") {
-                auto* cmb = new QComboBox(gb);
-                for (const auto& v : p.enum_values) cmb->addItem(QString::fromStdString(v));
-                // Sync initial value from the live instance (if any), falling
-                // back to the default. Entries may be "N=Label" — match on
-                // the "N" prefix.
-                std::string cur = p.default_value;
-                if (instance_) {
-                    const std::string v = instance_->get_param(param_key);
-                    if (!v.empty()) cur = v;
-                }
-                for (size_t i = 0; i < p.enum_values.size(); ++i) {
-                    const auto& ev = p.enum_values[i];
-                    const auto eq = ev.find('=');
-                    const std::string token = (eq == std::string::npos)
-                        ? ev : ev.substr(0, eq);
-                    if (token == cur) { cmb->setCurrentIndex(static_cast<int>(i)); break; }
-                }
-                w = cmb;
-                // The "mode" enum drives per-mode parameter visibility. On
-                // change, apply the param and refresh which rows show.
-                if (p.key == "mode") {
-                    mode_combo_ = cmb;
-                    connect(cmb, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
-                            [this, cmb](int) {
-                                apply_param("mode", cmb->currentText().toStdString());
-                                refresh_mode_visibility();
-                            });
-                } else {
-                    connect(cmb, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
-                            [this, param_key, cmb](int) {
-                                apply_param(param_key, cmb->currentText().toStdString());
-                            });
-                }
-            } else if (p.type == "bool") {
-                auto* cmb = new QComboBox(gb);
-                cmb->addItem("false"); cmb->addItem("true");
-                w = cmb;
-                // Sync initial value from the live instance (if any).
-                if (instance_) {
-                    const std::string v = instance_->get_param(param_key);
-                    cmb->setCurrentIndex(v == "true" || v == "1" ? 1 : 0);
-                }
-                connect(cmb, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
-                        [this, param_key, cmb](int) {
-                            apply_param(param_key, cmb->currentText().toStdString());
-                        });
-            } else if (p.type == "int") {
-                auto* sp = new QSpinBox(gb);
-                bool oklo = false, okhi = false;
-                int lo = QString::fromStdString(p.min_value).toInt(&oklo);
-                int hi = QString::fromStdString(p.max_value).toInt(&okhi);
-                sp->setRange(oklo ? lo : -100000000, okhi ? hi : 100000000);
-                int init_val = QString::fromStdString(p.default_value).toInt();
-                if (instance_) {
-                    const std::string v = instance_->get_param(param_key);
-                    if (!v.empty()) init_val = QString::fromStdString(v).toInt();
-                }
-                sp->setValue(init_val);
-                w = sp;
-                connect(sp, QOverload<int>::of(&QSpinBox::valueChanged), this,
-                        [this, param_key](int v) {
-                            apply_param(param_key, std::to_string(v));
-                        });
-            } else if (p.type == "float") {
-                auto* sp = new QDoubleSpinBox(gb);
-                sp->setRange(-1e9, 1e9);
-                sp->setDecimals(6);
-                double init_val = QString::fromStdString(p.default_value).toDouble();
-                if (instance_) {
-                    const std::string v = instance_->get_param(param_key);
-                    if (!v.empty()) init_val = QString::fromStdString(v).toDouble();
-                }
-                sp->setValue(init_val);
-                w = sp;
-                connect(sp, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this,
-                        [this, param_key](double v) {
-                            apply_param(param_key, std::to_string(v));
-                        });
-            } else {
-                auto* le = new QLineEdit(QString::fromStdString(p.default_value), gb);
-                if (instance_) {
-                    const std::string v = instance_->get_param(param_key);
-                    if (!v.empty()) le->setText(QString::fromStdString(v));
-                }
-                w = le;
-                connect(le, &QLineEdit::textChanged, this,
-                        [this, param_key](const QString& v) {
-                            apply_param(param_key, v.toStdString());
-                        });
-            }
-            form->addRow(lbl, w);
-            param_rows_.push_back({lbl, w, p.mode_filter, p.key});
-        }
-        host_layout->addWidget(gb);
-    };
-
-    build_group(tr("Algorithm ROI"), roi_params);
-    build_group(tr("Parameters"), algo_params);
-
-    // Apply initial per-mode visibility (hides params that don't apply to the
-    // current mode, e.g. E2VID params when mode=BardowVariational).
-    refresh_mode_visibility();
-
-    host_layout->addStretch(1);
-    param_scroll_->setWidget(host);
-    outer->addWidget(param_scroll_);
-}
-
-void AlgoWindow::apply_param(const std::string& key, const std::string& value) {
-    if (!instance_) return;
-    instance_->set_param(key, value);
-}
-
-void AlgoWindow::refresh_mode_visibility() {
-    if (!mode_combo_) return;  // algo has no "mode" enum
-    const int idx = mode_combo_->currentIndex();
-    const std::string idx_str = std::to_string(idx);
-    for (auto& row : param_rows_) {
-        if (row.mode_filter.empty()) continue;  // common param: always visible
-        // mode_filter is a comma-separated list of mode indices ("0", "1,2").
-        bool visible = false;
-        std::size_t pos = 0;
-        while (pos < row.mode_filter.size()) {
-            const auto comma = row.mode_filter.find(',', pos);
-            const std::string token = (comma == std::string::npos)
-                ? row.mode_filter.substr(pos)
-                : row.mode_filter.substr(pos, comma - pos);
-            if (token == idx_str) { visible = true; break; }
-            if (comma == std::string::npos) break;
-            pos = comma + 1;
-        }
-        if (row.label) row.label->setVisible(visible);
-        if (row.field) row.field->setVisible(visible);
-    }
-
-    // Auto-set mode-appropriate ROI and output_fps on every mode switch
-    // (design §4.4.2): all three event_to_video modes default to a 128×128
-    // center ROI with 1/4 downsample enabled (effective reconstruction at
-    // 64×64). E2VID runs NN inference at this resolution; BardowVariational
-    // and InteractingMaps also downsample for the same throughput benefit
-    // (the output is upsampled back to the ROI size for display). 24 fps is
-    // a comfortable target across all modes.
-    // Only event_to_video has a "mode" enum, so this code only runs for it.
-    const int target_w  = 128;
-    const int target_h  = 128;
-    const int target_fps = 24;
-
-    for (auto& row : param_rows_) {
-        if (row.key == "roi_enabled") {
-            auto* cmb = qobject_cast<QComboBox*>(row.field);
-            if (cmb) { QSignalBlocker b(cmb); cmb->setCurrentIndex(1); }
-        } else if (row.key == "roi_x" || row.key == "roi_y") {
-            auto* sp = qobject_cast<QSpinBox*>(row.field);
-            if (sp) { QSignalBlocker b(sp); sp->setValue(-1); }
-        } else if (row.key == "roi_w" || row.key == "roi_h") {
-            auto* sp = qobject_cast<QSpinBox*>(row.field);
-            if (sp) { QSignalBlocker b(sp); sp->setValue(128); }
-        } else if (row.key == "output_fps") {
-            auto* sp = qobject_cast<QSpinBox*>(row.field);
-            if (sp) { QSignalBlocker b(sp); sp->setValue(target_fps); }
-        }
-    }
-    // Apply the new params to the live instance (signals were blocked above,
-    // so the per-widget connect lambdas did not fire).
-    apply_param("roi_enabled", "true");
-    apply_param("roi_x", "-1");
-    apply_param("roi_y", "-1");
-    apply_param("roi_w", std::to_string(target_w));
-    apply_param("roi_h", std::to_string(target_h));
-    apply_param("output_fps", std::to_string(target_fps));
 }
 
 EventDisplayWidget* AlgoWindow::frame_display() const {

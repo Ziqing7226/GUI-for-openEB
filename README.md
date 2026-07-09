@@ -9,9 +9,9 @@ Real-time visualization · camera control · recording · playback · calibratio
 ![License](https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-blue)
 ![Language](https://img.shields.io/badge/C%2B%2B17-Qt%206-orange)
 ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey)
-![Version](https://img.shields.io/badge/version-0.9.7-blue)
+![Version](https://img.shields.io/badge/version-1.0.0-blue)
 
-![Main Window](pic/0.9.7.png)
+![Main Window](pic/1.0.0.png)
 
 </div>
 
@@ -81,7 +81,7 @@ That's it. The launcher handles Wayland compatibility, HAL plugin paths, and Ope
 | **Analytics** | Frequency detector, flow statistics, ISI analyzer |
 | **Calibration** | Intrinsic (chessboard), extrinsic |
 
-Algorithms are **mutually exclusive** — enabling one disables the previous. Each algorithm supports a **global ROI** (default: center 256×256) to bound computational cost.
+Algorithms are **mutually exclusive** — enabling one disables the previous. Each algorithm supports a **global ROI** (default: center 256×256) to bound computational cost. All algorithm parameters are adjusted exclusively in the **sidebar** (AlgorithmsPanel); the algorithm display windows show only the algorithm title and output, preventing parameter drift between two independent control panels.
 
 #### E2VID Neural Network Reconstruction (Default Mode)
 

@@ -1,13 +1,17 @@
-// gui/widgets/algo_window.h — generic algorithm parameter + display dock.
+// gui/widgets/algo_window.h — algorithm display dock (output only).
 //
 // Design §5.6.6: every self-developed algorithm exposes an AlgoWindow after
-// being enabled. The window auto-generates a parameter panel from the
-// algorithm's AlgoParamSpec list (including the 5 ROI parameters) so the user
-// can tune any algorithm at runtime. For Standalone algorithms the window
-// also hosts the result display widget (EventDisplayWidget for frame
-// producers, QLabel for text producers); for Overlay/Replace/Passive
-// algorithms the display area shows the algorithm's status string and the
-// visual output remains on the main display frame.
+// being enabled. The window shows only the algorithm title (window title) and
+// its output: for Standalone algorithms it hosts the result display widget
+// (EventDisplayWidget for frame producers, QLabel for text producers); for
+// Overlay/Replace/Passive algorithms the display area shows the algorithm's
+// status string and the visual output remains on the main display frame.
+//
+// All algorithm parameter adjustment is handled exclusively by the sidebar
+// (AlgorithmsPanel). Keeping parameters in a single location avoids the
+// synchronization problem where two independent parameter panels (sidebar +
+// display window) could drift out of sync, misleading the user about which
+// values the algorithm actually uses.
 //
 // AlgoWindow is a QDockWidget so it docks into the MainWindow (default:
 // left edge), can be dragged to any edge, floated, or tabbed with other
@@ -30,8 +34,6 @@
 
 #include "algo_bridge/algo_bridge.h"
 
-class QComboBox;
-class QScrollArea;
 class QVBoxLayout;
 
 namespace gui {
@@ -80,47 +82,15 @@ protected:
     void closeEvent(QCloseEvent* event) override;
 
 private:
-    /// Builds the auto-generated parameter panel (same widget pattern as
-    /// AlgorithmsPanel). Parameters are sorted with the 5 ROI params at the
-    /// top so the user can quickly toggle/resize the ROI region.
-    void build_param_panel(QVBoxLayout* outer);
-
-    /// Forwards a parameter edit to the live AlgoInstance.
-    void apply_param(const std::string& key, const std::string& value);
-
-    /// Shows/hides mode-scoped parameter rows based on the currently selected
-    /// index of the "mode" enum combobox (mirrors AlgorithmsPanel). Params
-    /// whose AlgoParamSpec::mode_filter does not contain the current mode
-    /// index are hidden; common params (empty mode_filter) stay visible.
-    void refresh_mode_visibility();
-
-    /// One label + field widget pair for a parameter row, plus the
-    /// mode_filter that decides whether the row is visible for the current
-    /// mode (empty = always visible).
-    struct ParamRow {
-        QLabel* label{nullptr};
-        QWidget* field{nullptr};
-        std::string mode_filter;
-        std::string key;  ///< Parameter key (e.g. "roi_w") — used to locate
-                          ///< specific rows programmatically (e.g. auto-ROI
-                          ///< when switching to E2VID mode).
-    };
-
     AlgoBridge* bridge_;
     std::string algo_name_;
     AlgoInfo info_;
     std::shared_ptr<AlgoInstance> instance_;
 
     QWidget* content_{nullptr};  ///< Inner widget set via QDockWidget::setWidget.
-    QScrollArea* param_scroll_{nullptr};
     QLabel* status_label_{nullptr};
     QWidget* display_widget_{nullptr};
     QVBoxLayout* display_layout_{nullptr};
-
-    /// Mode-scoped parameter visibility state (only used by algos that expose
-    /// a "mode" enum, e.g. event_to_video — design §4.4.2).
-    QComboBox* mode_combo_{nullptr};
-    std::vector<ParamRow> param_rows_;
 };
 
 } // namespace gui
