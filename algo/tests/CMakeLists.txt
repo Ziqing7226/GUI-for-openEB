@@ -81,6 +81,20 @@ target_link_libraries(test_raw_playback PRIVATE
     MetavisionSDK::stream
 )
 
+# Standalone diagnostic: simulate GUI file-playback path for EventToVideo.
+# Feeds events in small batches with scaled timestamps and reports frame
+# statistics (min/max/mean) to diagnose black/flicker output during playback.
+add_executable(test_playback_e2v
+    test_playback_e2v.cpp
+)
+target_link_libraries(test_playback_e2v PRIVATE
+    gui_algo
+    MetavisionSDK::base
+    MetavisionSDK::core
+    MetavisionSDK::stream
+    ${OpenCV_LIBS}
+)
+
 # Standalone diagnostic: verify FileFrameGenerator produces frames at the
 # correct playback rate (fps * window / 1e6). Tests slow-motion, real-time,
 # fast-forward, EOF, and loop behavior.

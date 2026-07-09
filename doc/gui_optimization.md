@@ -1023,6 +1023,47 @@ if (xyt_display_) {
 
 `EventToVideo::reset()` 重置 `current_t_=0`、`last_frame_t_=0`、`log_intensity_`、E2VID 管线、intensity rescaler。所有 31 个自研算法后端均实现了 `reset()`。
 
+#### 8.8.7 传感器尺寸更新：ROI 重计算
+
+**问题**：切换文件或重连相机时，InteractingMaps 仍然输出黑屏。
+
+**根因**：`AlgoInstance` 在创建时传入 `sensor_w_`/`sensor_h_`，但 `AlgoBridge::set_sensor_dimensions()` 只更新桥接器的尺寸用于**未来创建**的实例，不更新**已存在**的实例。`reset()` 只清除算法状态，不重算 ROI。
+
+当用户先打开文件 A（如 1280×720），启用 EventToVideo（实例创建时 sensor=1280×720），再打开文件 B（如 640×480）时：
+- ROI 按 1280×720 计算：中心 (512, 232)，范围 [512, 768) × [232, 488)
+- 事件来自 640×480 传感器：x ∈ [0, 640)
+- 只有 x ∈ [512, 640) 的事件通过 ROI（约 20% 宽度）
+- 大部分事件被过滤 → `log_intensity_` 几乎为 0 → 输出黑屏
+
+**解决方案**：
+1. 在 `AlgoBackend` 基类添加 `virtual void set_sensor_dimensions(int, int)`（默认空实现）
+2. 在所有 ROI 型后端（EventToVideo、TimeSurface、ISIAnalyzer、HoughLine、HoughCircle、FreqDetector、XYTVisualizer）重写此方法：更新 `sensor_w_`/`sensor_h_`，重算 `roi_.compute()`，调用 `rebuild()` 重建算法实例
+3. 在 `AlgoInstance` 添加 `set_sensor_dimensions()` 转发到后端
+4. 在 `connected` 信号处理器中，对每个 live 实例调用 `set_sensor_dimensions(info.width, info.height)` 后再 `reset()`
+
+```cpp
+for (auto& inst : algo_bridge_.list_live()) {
+    inst->set_sensor_dimensions(info.width, info.height);
+    inst->reset();
+}
+```
+
+#### 8.8.8 XYT 时间窗口默认值：1000ms → 200ms
+
+**问题**：XYT 修复后"和正常情况相比还有点奇怪"。
+
+**根因**：`time_window_us` 默认值为 1000000（1 秒）。对于短文件（如 sparklers.raw，96ms），事件仅占 Z 轴的 9.6%（tn ∈ [0.904, 1.0]），点云在前方聚集成一个平面，看起来"奇怪"。
+
+1 秒窗口适用于实时相机的连续事件流（640ms 时间跨度，2.5% Z 轴移动/帧），但对文件回放（尤其是慢速回放）来说太大了。
+
+**解决方案**：将默认值从 1000000μs（1s）改为 200000μs（200ms）：
+- 短文件（96ms）：事件占 Z 轴 48% — 自然展开
+- 实时相机：200ms 历史，8% Z 轴移动/帧 — 可接受
+- 长文件：事件自然填充窗口
+- 用户可在 GUI 中调整（范围 10000–10000000μs）
+
+同时更新 `XYTVisualizerBackend` 构造函数中的 `XYTVisualizer` 默认参数从 1000.0f 改为 200.0f，保持一致。
+
 ---
 
 *本文档与 [design.md](file:///home/justin/GUI-for-openEB/doc/design.md) 配合使用，design.md 定义"做什么"，本文档定义"怎么做得更好"。*

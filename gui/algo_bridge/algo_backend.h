@@ -114,6 +114,12 @@ public:
 
     /// @brief 重置内部状态。
     virtual void reset() = 0;
+
+    /// @brief Updates the sensor dimensions and recomputes the ROI.
+    /// Called when a new camera/file connects with different dimensions.
+    /// Backends that don't use sensor dimensions (overlay detectors, etc.)
+    /// can use the default no-op implementation.
+    virtual void set_sensor_dimensions(int /*width*/, int /*height*/) {}
 };
 
 /// @brief 工厂：按算法名字创建具体后端。

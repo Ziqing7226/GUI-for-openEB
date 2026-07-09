@@ -905,6 +905,10 @@ public:
         if (algo_) algo_->reset();
         passthrough_.clear(); roi_events_.clear(); last_.clear();
     }
+    void set_sensor_dimensions(int w, int h) override {
+        sensor_w_ = w; sensor_h_ = h;
+        roi_.compute(sensor_w_, sensor_h_); rebuild();
+    }
 };
 
 /// HoughCircleTracker backend — detected circles as overlay circles.
@@ -1047,6 +1051,10 @@ public:
     void reset() override {
         if (algo_) algo_->reset();
         passthrough_.clear(); roi_events_.clear(); last_.clear();
+    }
+    void set_sensor_dimensions(int w, int h) override {
+        sensor_w_ = w; sensor_h_ = h;
+        roi_.compute(sensor_w_, sensor_h_); rebuild();
     }
 };
 
@@ -1272,6 +1280,10 @@ public:
         passthrough_.clear();
         roi_events_.clear();
     }
+    void set_sensor_dimensions(int w, int h) override {
+        sensor_w_ = w; sensor_h_ = h;
+        roi_.compute(sensor_w_, sensor_h_); rebuild();
+    }
 };
 
 /// EventToVideo backend — produces reconstructed intensity frame.
@@ -1482,6 +1494,12 @@ public:
         passthrough_.clear();
         roi_events_.clear();
     }
+    void set_sensor_dimensions(int w, int h) override {
+        sensor_w_ = w;
+        sensor_h_ = h;
+        roi_.compute(sensor_w_, sensor_h_);
+        rebuild();
+    }
 };
 
 /// FlowStatistics backend — requires ground-truth flow samples (not available
@@ -1586,6 +1604,10 @@ public:
         passthrough_.clear();
         roi_events_.clear();
     }
+    void set_sensor_dimensions(int w, int h) override {
+        sensor_w_ = w; sensor_h_ = h;
+        roi_.compute(sensor_w_, sensor_h_); rebuild();
+    }
 };
 
 // ===========================================================================
@@ -1656,6 +1678,10 @@ public:
         return r;
     }
     void reset() override { algo_.reset(); passthrough_.clear(); roi_events_.clear(); last_.clear(); }
+    void set_sensor_dimensions(int w, int h) override {
+        sensor_w_ = w; sensor_h_ = h;
+        roi_.compute(sensor_w_, sensor_h_);
+    }
 };
 
 /// ActiveMarker backend — detected markers as overlay circles + text.
@@ -1931,7 +1957,7 @@ class XYTVisualizerBackend final : public AlgoBackend {
 public:
     XYTVisualizerBackend(int w, int h)
         : sensor_w_(w), sensor_h_(h),
-          algo_(1000.0f,
+          algo_(200.0f,
                 gui_algo::XYTVisualizer::ColorMode::Age,
                 2.5f,
                 false,
@@ -1980,6 +2006,10 @@ public:
         return r;
     }
     void reset() override { algo_.clear(); passthrough_.clear(); roi_events_.clear(); }
+    void set_sensor_dimensions(int w, int h) override {
+        sensor_w_ = w; sensor_h_ = h;
+        roi_.compute(sensor_w_, sensor_h_);
+    }
 };
 
 // ===========================================================================

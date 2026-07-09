@@ -94,6 +94,11 @@ public:
     /// Reset the underlying backend.
     void reset();
 
+    /// Updates sensor dimensions on the underlying backend and recomputes
+    /// the ROI. Called when a new camera/file connects with different
+    /// dimensions than the instance was originally created with.
+    void set_sensor_dimensions(int width, int height);
+
 private:
     AlgoInfo info_;
     int width_;

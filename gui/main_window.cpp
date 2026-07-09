@@ -631,7 +631,14 @@ void MainWindow::wire_signals() {
         // current_t_ is still at the previous file's end time → no new
         // events would update current_t_ (e.t > current_t_ is false) → the
         // algorithm freezes on stale output. See doc/gui_optimization.md §8.
+        //
+        // Also update sensor dimensions on existing instances: when a new
+        // file/camera connects with different dimensions, the ROI must be
+        // recomputed at the new sensor size. Without this, the ROI stays at
+        // the old sensor's center, filtering out most events and producing
+        // dark/black output from frame-producing algorithms.
         for (auto& inst : algo_bridge_.list_live()) {
+            inst->set_sensor_dimensions(info.width, info.height);
             inst->reset();
         }
         // Clear the XYT 3D display buffer so stale events from the previous

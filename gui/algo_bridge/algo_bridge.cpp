@@ -122,6 +122,15 @@ void AlgoInstance::reset() {
     }
 }
 
+void AlgoInstance::set_sensor_dimensions(int width, int height) {
+    std::lock_guard<std::mutex> lk(mutex_);
+    width_ = width;
+    height_ = height;
+    if (backend_) {
+        backend_->set_sensor_dimensions(width, height);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Small spec helpers
 // ---------------------------------------------------------------------------
@@ -645,7 +654,7 @@ void AlgoBridge::register_self_cv() {
     // §4.3.25 XYT Visualizer
     add({"xyt_visualizer", "XYT 3D Visualizer", "cv", "self",
          AlgoDisplayMode::Standalone,
-         {pint("time_window_us", "Time window (us)", "1000000", "10000", "10000000"),
+         {pint("time_window_us", "Time window (us)", "200000", "10000", "10000000"),
           pint("max_points", "Max points", "50000", "1000", "500000")}});
 
     // §4.3.26 Overlay
