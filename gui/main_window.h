@@ -45,6 +45,7 @@
 #include "config/config_manager.h"
 #include "config/layout_manager.h"
 #include "display/event_display_widget.h"
+#include "algo/common/performance_meter.h"
 #include "display/frame_annotator.h"
 #include "exporter/exporter_controller.h"
 #include "panels/settings_panel.h"
@@ -232,6 +233,14 @@ private:
     std::atomic<Metavision::timestamp> algo_last_xyt_post_us_{0};
     FrameAnnotator annotator_;
     Metavision::timestamp prev_frame_ts_{0};
+
+    /// Performance profiler: measures end-to-end latency (event arrival →
+    /// frame display), total events/frames, and drop count. Fed from the
+    /// SDK CD callback (tick_events) and the frame_ready signal (tick_frame).
+    /// Throughput is derived from the SDK RateEstimator's rate × sizeof(EventCD).
+    gui_algo::PerformanceMeter perf_meter_;
+    QTimer* perf_timer_{nullptr};       ///< 10 Hz flush to InformationPanel
+    double last_rate_eps_{0.0};         ///< Cached from StatisticsController::rate_updated
 
     /// Saved sidebar dock width before content was hidden via the toggle
     /// button. Used to restore the width when content is shown again

@@ -492,6 +492,34 @@ void MainWindow::build_status_bar() {
     rec_blink_timer_ = new QTimer(this);
     rec_blink_timer_->setInterval(500);
     connect(rec_blink_timer_, &QTimer::timeout, this, &MainWindow::on_rec_blink);
+
+    // Performance metrics flush timer (10 Hz). Queries PerformanceMeter and
+    // AlgoBridge, updates the InformationPanel with live latency, throughput,
+    // and algorithm overload status. All metrics are derived from the
+    // Metavision SDK's own RateEstimator and actual wall-clock measurements
+    // — not a jAER port. Latency = SDK CD callback arrival → frame_ready
+    // signal; throughput = SDK rate × sizeof(EventCD); algo status = actual
+    // flood-guard state from AlgoInstance::is_overloaded().
+    perf_timer_ = new QTimer(this);
+    perf_timer_->setInterval(100);
+    connect(perf_timer_, &QTimer::timeout, this, [this]() {
+        if (!camera_.is_connected()) return;
+        const double latency_ms = perf_meter_.latency_us() * 1.0e-3;
+        // Throughput: SDK rate (events/s) × event struct size (bytes) → MB/s.
+        constexpr double event_size = sizeof(Metavision::EventCD);
+        const double throughput_mbs = last_rate_eps_ * event_size / 1.0e6;
+        settings_->information_panel()->set_performance(latency_ms, throughput_mbs);
+        // Algorithm overload status from AlgoBridge.
+        int active = 0, overloaded = 0;
+        for (const auto& inst : algo_bridge_.list_live()) {
+            if (inst->is_overloaded())
+                ++overloaded;
+            else if (inst->is_enabled())
+                ++active;
+        }
+        settings_->information_panel()->set_algo_status(active, overloaded);
+    });
+    perf_timer_->start();
 }
 
 void MainWindow::set_conn_connected(bool connected) {
@@ -703,6 +731,8 @@ void MainWindow::wire_signals() {
         // members are destroyed.
         remove_algo_callback();
         prev_frame_ts_ = 0;
+        perf_meter_.reset();
+        last_rate_eps_ = 0.0;
         settings_->information_panel()->clear();
         settings_->statistics_panel()->clear();
         settings_->devices_panel()->set_connected(false);
@@ -772,6 +802,7 @@ void MainWindow::wire_signals() {
                     settings_->statistics_panel()->set_fps(fps);
                 }
                 prev_frame_ts_ = ts;
+                perf_meter_.tick_frame();
             });
 
     // File playback: feed the events in each accumulation window to algorithm
@@ -788,6 +819,7 @@ void MainWindow::wire_signals() {
     connect(camera_.statistics(), &StatisticsController::rate_updated, this,
             [this](double rate, double peak, Metavision::timestamp t) {
                 settings_->statistics_panel()->set_rate(rate, peak, t);
+                last_rate_eps_ = rate;
                 if (rate >= 1.0e6) {
                     status_rate_->setText(QStringLiteral("%1 Mev/s")
                                               .arg(rate / 1.0e6, 0, 'f', 2));
@@ -1221,6 +1253,8 @@ void MainWindow::install_algo_callback() {
                         }
                     }
                 } catch (...) {}
+                // Feed the performance profiler for live-camera latency measurement.
+                perf_meter_.tick_events(static_cast<std::size_t>(e - b), (e - 1)->t);
             }
 
             // Throttled, downsampled feed to the XYT 3D window. The
@@ -1360,6 +1394,11 @@ void MainWindow::on_events_window_ready(std::shared_ptr<std::vector<Metavision::
             }
         }
     } catch (...) {}
+
+    // Feed the performance profiler (file playback path). For file mode the
+    // latency measured here → frame_ready is near-zero (both on GUI thread),
+    // which correctly reflects that file playback has no real-time backlog.
+    perf_meter_.tick_events(events->size(), ts);
 
     // Feed the XYT 3D display with REAL (unscaled) timestamps — the Z axis
     // must show the actual event time, not the scaled playback time.

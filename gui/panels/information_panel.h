@@ -1,4 +1,4 @@
-// gui/panels/information_panel.h — sensor metadata display.
+// gui/panels/information_panel.h — sensor metadata + live performance display.
 
 #ifndef GUI_PANELS_INFORMATION_PANEL_H
 #define GUI_PANELS_INFORMATION_PANEL_H
@@ -23,6 +23,12 @@ public:
 
     public slots:
     void set_info(const SensorInfo& info);
+    /// @brief Updates live performance metrics.
+    /// @param latency_ms  End-to-end processing latency (event arrival → frame display).
+    /// @param throughput_mbs  Data throughput in MB/s (from SDK RateEstimator × event size).
+    void set_performance(double latency_ms, double throughput_mbs);
+    /// @brief Updates algorithm overload status.
+    void set_algo_status(int active, int overloaded);
     void clear();
 
 private:
@@ -34,6 +40,10 @@ private:
     QLabel* value_encoding_{nullptr};
     QLabel* value_firmware_{nullptr};
     QLabel* value_source_{nullptr};
+    // Live performance metrics.
+    QLabel* value_latency_{nullptr};
+    QLabel* value_throughput_{nullptr};
+    QLabel* value_algo_status_{nullptr};
 };
 
 } // namespace gui
