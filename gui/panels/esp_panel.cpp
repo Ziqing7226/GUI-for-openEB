@@ -270,7 +270,10 @@ void EspPanel::populate() {
         hint_label_->setProperty("class", "hint");
     }
     restyle(hint_label_);
-    set_all_enabled(true);
+    // Note: do NOT call set_all_enabled(true) here — each populate_* function
+    // already enables its group if the facility exists and disables it if
+    // not. Calling set_all_enabled(true) afterwards would override the
+    // disable, re-enabling groups whose facility is missing (BUG-2: N8).
 }
 
 void EspPanel::populate_antiflicker() {
@@ -417,9 +420,11 @@ void EspPanel::populate_erc() {
 }
 
 void EspPanel::set_all_enabled(bool on) {
-    // When disabling (no camera), turn off all groups. When enabling,
-    // turn on all groups — populate_* will individually disable any whose
-    // facility is missing (N8: the previous on=true branch was a no-op).
+    // Used to disable all groups (on=false) when no camera is connected.
+    // The on=true case is intentionally NOT called from populate() — each
+    // populate_* function manages its own group's enable state based on
+    // facility availability (BUG-2: N8 fix caused set_all_enabled(true) to
+    // override populate_*'s facility-missing disables).
     af_group_->setEnabled(on);
     tf_group_->setEnabled(on);
     erc_group_->setEnabled(on);

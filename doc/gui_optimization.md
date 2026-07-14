@@ -51,6 +51,8 @@
 
 ### 2.1 代码规模
 
+> **历史快照**：本表反映 v1.0.9 重构前的状态，保留作历史参照。重构后 `algo_backend.cpp` 已拆分为 11 个 `backends/*.cpp`；`main_window.cpp` 实际 1706 行；`algo_bridge.cpp` 实际 937 行；`gui/` 总计约 21152 行；`gui/tests/` 已有 5 个测试文件。
+
 | 文件 | 行数 | 问题 |
 |------|------|------|
 | [algo_backend.cpp](file:///home/justin/GUI-for-openEB/gui/algo_bridge/algo_backend.cpp) | 2897 | 50 个 `*Backend` 子类挤在一个文件 |
@@ -88,6 +90,8 @@ settings_->preprocessing_panel()->on_camera_connected(&camera_);
 [main_window.cpp:1032-1121](file:///home/justin/GUI-for-openEB/gui/main_window.cpp#L1032-L1121) 用 `if (mode == Overlay)... else if (mode == Replace)...` 分支处理 4 种显示模式。增加新模式要改 MainWindow。
 
 #### 问题 E：GUI 零测试
+
+> **历史快照**：此问题已在 v1.0.9 后解决。`gui/tests/` 现有 5 个测试文件（test_algo_bridge/test_config_manager/test_display_strategy/test_layout_manager/test_theme_tokens），共 40 个 TEST() 宏。
 
 `gui/**/test*` 返回空。16324 行 GUI 代码无单元测试。
 
@@ -433,6 +437,8 @@ void MainWindow::process_algo_results(QImage& frame) {
 
 ### 3.7 面板可折叠分组
 
+> **更新（v1.0.9 后续）**：`collapsible_section.h` / `.cpp` 文件已从代码库中彻底删除。v1.0.9 重构将其从 SettingsPanel 移除后，该组件不再有任何代码引用，属于死代码。§3.7 保留为历史记录。
+
 #### 3.7.1 回归 design.md §5.1
 
 [design.md §5.1](file:///home/justin/GUI-for-openEB/doc/design.md) 的布局图是**垂直堆叠**面板，实现变成了两个 tab。改为 VSCode 风格的可折叠 Section，回归原始设计：
@@ -645,7 +651,7 @@ gui/tests/
 | 任务 | 改动范围 | 依赖 |
 |------|----------|------|
 | 3.3 Panel 基类 + 事件解耦 | 新增 abstract_panel.h + 12 panel 改继承 + SettingsPanel 注册式 | 无 |
-| 3.4 algo_backend 拆分 | 2897 行拆成 7 文件 + CMakeLists 更新 | 无 |
+| 3.4 algo_backend 拆分 | 2897 行拆成 11 文件 + CMakeLists 更新 | 无 |
 | 3.5 显示策略多态化 | 新增 display_strategy.h + 4 策略 + process_algo_results 简化 | 无 |
 
 **验收标准**：
@@ -707,7 +713,7 @@ gui/tests/
 |------|------|------|
 | 令牌迁移工作量 | ~15 处裸 hex + theme_controller 重构 | 分批替换，每改一个 panel 验证 10 个主题变体 |
 | Panel 基类引入 | 12 个 panel 改继承，Q_OBJECT 宏需重新 moc | 清理构建目录后重新 cmake |
-| algo_backend 拆分 | 50 个类移文件，CMakeLists 同步 | 保持头文件不变，只拆 .cpp；先拆再编译验证 |
+| algo_backend 拆分 | 48 个类移文件，CMakeLists 同步 | 保持头文件不变，只拆 .cpp；先拆再编译验证 |
 | 标题栏重做 | frameless 窗口拖拽/缩放在 Wayland 下行为 | 保留 ResizeGrip 方案，Wayland 下用 startSystemMove/Resize |
 | 事件总线引入 | 信号槽从直接调用改为 panel 自订阅 | 相机连接逻辑先加日志验证，确保所有 panel 仍收到事件 |
 
@@ -736,8 +742,8 @@ WCAG AA 标准要求文字对比度 ≥ 4.5:1。当前 `#888` 在各暗色背景
 - `gui/app/icon_provider.h` / `.cpp`
 - `gui/panels/abstract_panel.h`
 - `gui/display/display_strategy.h` / `.cpp`
-- `gui/widgets/collapsible_section.h` / `.cpp`
-- `gui/algo_bridge/backends/*.cpp`（7 个）
+- `gui/widgets/collapsible_section.h` / `.cpp`（**已删除**，见 §3.7）
+- `gui/algo_bridge/backends/*.cpp`（11 个）
 - `gui/tests/*.cpp`（5 个）+ `gui/tests/CMakeLists.txt`
 
 **修改文件**：
@@ -1143,6 +1149,7 @@ for (auto& inst : algo_bridge_.list_live()) {
 - **描述**：代码注释和测试名引用 v1.1.0，但实际发布版本是 1.0.9
 - **影响**：无功能影响，文档/测试名误导
 - **修复建议**：更新注释为 v1.0.9，测试名改为 `NoiseFilterRemovedInV1_0_9`
+- **状态**：已修复。测试名已改为 `NoiseFilterRemovedInV1_0_9`，`algo_bridge.cpp` 注释已改为 v1.0.9，`test_algo_bridge.cpp` 注释也已改为 v1.0.9。
 
 #### BUG-10：窗口控制按钮（min/max/close）无 hover 效果
 
@@ -1244,6 +1251,8 @@ VSCode 侧栏布局：
 - **Tooltip**：鼠标悬停图标显示功能描述
 
 ### 10.3 优化方案
+
+> **历史注记**：本节方案中的 CollapsibleSection 组件已在 v1.0.9 重构后从代码库删除（见 §3.7 更新说明）。ActivityBar 的分组切换已完全替代 CollapsibleSection 的折叠功能。本节保留作历史记录。
 
 #### 10.3.1 布局重构
 
@@ -1354,6 +1363,7 @@ std::string get_param(const std::string& k) const {
 
 > 日期：2026-07-13
 > 状态：**已实现**
+> **历史注记**：本节中涉及的 CollapsibleSection 组件已在后续重构中删除（见 §3.7）。ActivityBar 分组切换取代了 group 内部的折叠需求。本节保留作历史记录。
 
 ### 11.1 背景
 

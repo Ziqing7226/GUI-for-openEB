@@ -121,11 +121,6 @@ public:
     }
 };
 
-/// EventToVideo backend — produces reconstructed intensity frame.
-/// Complex algorithm (design §4.4.2): defaults to the center 128×128 ROI to
-/// bound computational cost. The ROI, output fps, window and theta params
-/// are exposed in the Algorithms panel and this backend.
-
 class UltraSlowMotionBackend final : public AlgoBackend {
     gui_algo::UltraSlowMotion algo_;
     std::vector<Metavision::EventCD> last_out_;

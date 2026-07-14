@@ -39,8 +39,8 @@ std::vector<EventCD> make_events(std::size_t n, int w = 1280, int h = 720) {
 } // namespace
 
 // ---------------------------------------------------------------------------
-// Registry completeness (§3.11.2: 31 self + 30 openEB). noise_filter was
-// removed in v1.1.0 (now a stackable preprocessing stage), so the live
+// Registry completeness (§3.11.2: 30 self + 30 openEB). noise_filter was
+// removed in v1.0.9 (now a stackable preprocessing stage), so the live
 // registry holds 29 self-developed + 30 OpenEB-wrapped = 59 entries.
 // ---------------------------------------------------------------------------
 TEST(AlgoBridgeRegistry, ListsAllRegisteredAlgos) {

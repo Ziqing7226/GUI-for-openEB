@@ -199,8 +199,8 @@ void OverlayStrategy::apply(QImage& frame, AlgoResult& r,
         }
         int rx = parse_int(ctx.instance->get_param("roi_x"), -1);
         int ry = parse_int(ctx.instance->get_param("roi_y"), -1);
-        int rw = parse_int(ctx.instance->get_param("roi_w"), 256);
-        int rh = parse_int(ctx.instance->get_param("roi_h"), 256);
+        int rw = parse_int(ctx.instance->get_param("roi_w"), 128);
+        int rh = parse_int(ctx.instance->get_param("roi_h"), 128);
         int aw = (rw <= 0) ? sw : std::min(rw, sw);
         int ah = (rh <= 0) ? sh : std::min(rh, sh);
         int ax = (rx < 0) ? (sw - aw) / 2

@@ -81,7 +81,7 @@ That's it. The launcher handles Wayland compatibility, HAL plugin paths, and Ope
 | **Analytics** | Frequency detector, flow statistics, ISI analyzer |
 | **Calibration** | Intrinsic (chessboard), extrinsic |
 
-Algorithms are **mutually exclusive** — enabling one disables the previous. Each algorithm supports a **global ROI** (default: center 256×256) to bound computational cost. All algorithm parameters are adjusted exclusively in the **sidebar** (AlgorithmsPanel); the algorithm display windows show only the algorithm title and output, preventing parameter drift between two independent control panels.
+Algorithms are **mutually exclusive** — enabling one disables the previous. Each algorithm supports a **global ROI** (default: center 128×128) to bound computational cost. All algorithm parameters are adjusted exclusively in the **sidebar** (AlgorithmsPanel); the algorithm display windows show only the algorithm title and output, preventing parameter drift between two independent control panels.
 
 #### E2VID Neural Network Reconstruction (Default Mode)
 

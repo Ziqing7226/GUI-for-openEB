@@ -7,7 +7,7 @@
 // The bridge真正实例化并调用 algo/cv 与 algo/analytics 的真实算法类。
 // AlgoInstance 持有一个 AlgoBackend，push_events 时零拷贝 reinterpret_cast
 // EventCD→gui_algo::Event 后调用真实 process()/filter()，pull_result 返回
-// 过滤事件 + 叠加层 + 帧。注册表列出全部 31 个自研模块 + 30 个 openEB 能力。
+// 过滤事件 + 叠加层 + 帧。注册表列出全部 29 个自研模块 + 30 个 openEB 能力。
 
 #ifndef GUI_ALGO_BRIDGE_ALGO_BRIDGE_H
 #define GUI_ALGO_BRIDGE_ALGO_BRIDGE_H

@@ -63,18 +63,19 @@ void AlgoInstance::set_param(const std::string& key, const std::string& value) {
     if (known) param_values_[key] = value;
     if (backend_) {
         backend_->set_param(key, value);
-        // BUG-G2: after setting model_path on an E2VID backend, the real
-        // num_bins is dictated by the loaded ONNX model's input channel
-        // count (backend updates e2vid_num_bins_ internally). Sync that
-        // authoritative value back into param_values_ so the subsequent
-        // get_param("num_bins") call from AlgorithmsPanel::apply_param
-        // returns the model-determined value, not the stale registry
-        // default ("5"). We intentionally do NOT delegate get_param to
-        // the backend in general — that would change the string format
-        // of every param (backend uses std::to_string(double), producing
-        // "5.500000" instead of the registry's "5.5") and break
+        // BUG-G2/N11: after setting model_path (or num_bins itself) on an
+        // E2VID backend, the real num_bins is dictated by the loaded ONNX
+        // model's input channel count — the algo ignores the caller's value
+        // when a model is loaded (e2vid_inference.h set_num_bins). The
+        // backend re-syncs e2vid_num_bins_ from the algo; sync that
+        // authoritative value back into param_values_ so get_param("num_bins")
+        // returns the model-determined value, not the stale registry default
+        // ("5") or a stale cached value. We intentionally do NOT delegate
+        // get_param to the backend in general — that would change the string
+        // format of every param (backend uses std::to_string(double),
+        // producing "5.500000" instead of the registry's "5.5") and break
         // ParamRoundTrip tests. This targeted sync keeps the fix minimal.
-        if (key == "model_path") {
+        if (key == "model_path" || key == "num_bins") {
             std::string nb = backend_->get_param("num_bins");
             if (!nb.empty()) param_values_["num_bins"] = nb;
         }
@@ -92,16 +93,16 @@ void AlgoInstance::set_enabled(bool e) {
     enabled_ = e;
     if (e) {
         // Re-enabling clears any prior overload state and resets the strike
-        // counter so the algo gets a fresh start.
+        // counter so the algo gets a fresh start. The backend's internal
+        // state (buffers/accumulators) is intentionally NOT reset here —
+        // this preserves the pause-resume workflow where the user temporarily
+        // disables an algorithm and later resumes with its accumulated state
+        // intact (e.g. E2VID log_intensity_, InteractingMaps I_map_). Full
+        // reset is performed separately by the caller when starting a new
+        // session (e.g. MainWindow::on_camera_connected calls inst->reset()
+        // for every live instance).
         overloaded_ = false;
         flood_strikes_ = 0;
-        // BUG-G5: reset the backend's internal state (buffers/accumulators)
-        // so stale data from the previous enabled session doesn't bleed into
-        // the new one. Parameter values are preserved (stored in param_values_
-        // and the backend's own members, not touched by reset()). We call
-        // backend_->reset() directly (not this->reset()) because we already
-        // hold mutex_ — reset() would re-lock and deadlock.
-        if (backend_) backend_->reset();
     }
 }
 
@@ -324,11 +325,22 @@ std::shared_ptr<AlgoInstance> AlgoBridge::create(const std::string& name) {
     {
         std::lock_guard<std::mutex> lk(live_mutex_);
         live_instances_[name] = inst;
-        // Replay cached global params so new instances inherit the current
-        // shared state (BUG-R4 for preproc, N3 for ROI). Without this,
-        // instances created by other code paths (ConfigManager, calibration
-        // wizard) would miss the shared preproc_*/roi_* settings. Skip
-        // calibration algos (BUG-R8: they don't use preproc/roi params).
+        // Replay per-algorithm cached params (N1) FIRST: values loaded from
+        // a config file for an algorithm that had no live instance. These
+        // include preproc_*/roi_* keys (because capture_algo_state saves
+        // all info.params). Then replay the global preproc_cache_/roi_cache_
+        // SECOND so they override the config's preproc_*/roi_* values —
+        // the user's latest global modifications take precedence over stale
+        // config values (BUG-1: N1+N6 interaction). Per-algo params like
+        // model_path/mode are unaffected since the global caches don't
+        // contain those keys. Skip calibration algos (BUG-R8).
+        auto pit = algo_param_cache_.find(name);
+        if (pit != algo_param_cache_.end()) {
+            for (const auto& [k, v] : pit->second) {
+                inst->set_param(k, v);
+            }
+            algo_param_cache_.erase(pit);
+        }
         if (it->second.source == "self" &&
             it->second.category != "calibration") {
             for (const auto& [k, v] : preproc_cache_) {
@@ -337,17 +349,6 @@ std::shared_ptr<AlgoInstance> AlgoBridge::create(const std::string& name) {
             for (const auto& [k, v] : roi_cache_) {
                 inst->set_param(k, v);
             }
-        }
-        // Replay per-algorithm cached params (N1): values loaded from a
-        // config file for an algorithm that had no live instance are
-        // replayed here so they are not lost.
-        auto pit = algo_param_cache_.find(name);
-        if (pit != algo_param_cache_.end()) {
-            for (const auto& [k, v] : pit->second) {
-                inst->set_param(k, v);
-            }
-            // Clear the cache — the instance now holds the values directly.
-            algo_param_cache_.erase(pit);
         }
     }
     return inst;
@@ -650,7 +651,7 @@ void AlgoBridge::register_openeb_utils() {
 
 // ---------------------------------------------------------------------------
 // Self-developed CV algorithms (design §4.3.5 - §4.3.27)
-// 23 modules, all with real algo_backend wiring.
+// 21 modules, all with real algo_backend wiring.
 // ---------------------------------------------------------------------------
 
 void AlgoBridge::register_self_cv() {
@@ -766,19 +767,35 @@ void AlgoBridge::register_self_cv() {
     // §4.3.17 Orientation Cluster
     add({"orientation_cluster", "Orientation Cluster", "cv", "self",
          AlgoDisplayMode::Overlay,
-         {pint("min_events", "Min events", "20", "5", "500")}});
+         {pint("min_events", "Min events", "20", "5", "500"),
+          pfloat("dt", "dt (us)", "10000", "100", "1000000"),
+          pfloat("factor", "Factor", "1000", "1", "100000"),
+          pint("rf_width", "RF width", "1", "1", "64"),
+          pint("rf_height", "RF height", "1", "1", "64"),
+          pfloat("tolerance", "Tolerance (deg)", "10", "0", "180"),
+          pfloat("ori", "Ori (deg)", "45", "0", "180"),
+          pfloat("neighbor_thr", "Neighbor thr", "10", "0", "1000"),
+          pfloat("thr_gradient", "Thr gradient", "0", "0", "100"),
+          pfloat("history_factor", "History factor", "1", "0", "10"),
+          pbool("use_opposite_polarity", "Use opposite polarity", "true"),
+          pbool("ori_history_enabled", "Ori history enabled", "false"),
+          pint("display_length", "Display length", "10", "1", "500")}});
 
     // §4.3.18 Cluster LIF
     add({"cluster_lif", "Cluster LIF", "cv", "self",
          AlgoDisplayMode::Overlay,
          {pfloat("tau_ms", "Tau (ms)", "10", "1", "1000"),
-          pfloat("threshold", "Threshold", "1.0", "0.1", "10.0")}});
+          pfloat("threshold", "Threshold", "1.0", "0.1", "10.0"),
+          pint("receptive_field_size_pixels", "Receptive field (px)", "8", "2", "128"),
+          pfloat("initial_potential_percent", "Initial potential (%)", "50", "0", "100"),
+          pfloat("jump_after_firing_percent", "Jump after firing (%)", "10", "0", "100")}});
 
     // §4.3.19 Background Mask Filter
     add({"background_mask", "Background Mask Filter", "cv", "self",
          AlgoDisplayMode::Replace,
          {pfloat("learning_rate", "Learning rate", "0.05", "0.001", "1.0"),
-          pfloat("threshold", "Threshold", "10", "1", "100")}});
+          pfloat("threshold", "Threshold", "10", "1", "100"),
+          pint("erosion_size", "Erosion size", "0", "0", "20")}});
 
     // §4.3.20 Perspective Undistort
     add({"perspective_undistort", "Perspective Undistort", "cv", "self",
@@ -789,7 +806,9 @@ void AlgoBridge::register_self_cv() {
     // §4.3.21 Trigger Synced Filter
     add({"trigger_synced", "Trigger Synced Filter", "cv", "self",
          AlgoDisplayMode::Passive,
-         {pint("window_us", "Window (us)", "10000", "1000", "1000000")}});
+         {pint("window_us", "Window (us)", "10000", "1000", "1000000"),
+          pint("t0_us", "T0 delay (us)", "500", "0", "1000"),
+          pint("trigger_channel", "Trigger channel", "0", "0", "7")}});
 
     // §4.3.22 Bandpass Filter
     add({"bandpass_filter", "Bandpass Filter", "cv", "self",

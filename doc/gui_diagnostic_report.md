@@ -1,14 +1,23 @@
 # GUI 诊断报告
 
-> 版本：2.2（修复版 + 修复验证）
+> 版本：2.3（修复验证 + 误诊复核）
 > 日期：2026-07-14
 > 范围：`develop` 分支相对 `main` 分支（`7d5fde6`，v1.0.0）的回归审查 + GUI 全量静态代码分析
 > 焦点：是否引入 BUG 或 GUI 到算法的参数传递缺失 + 通用 GUI 缺陷
 > 方法：git diff 静态审查 + 关键文件逐行核对 + 341 个测试结果交叉验证 + GUI 源码全量扫描
 >
-> **修复状态**：BUG-R1~R9、BUG-G1~G12 共 21 项全部已修复（BUG-R10 经分析确认为设计行为，非 BUG，未修复）。341/341 测试通过。
+> **修复状态**：BUG-R1~R9、BUG-G1~G4、BUG-G6~G12 共 20 项已修复（BUG-R10、BUG-G5 经分析确认为设计行为，非 BUG）。341/341 测试通过。
 >
 > **v2.2 更新**：对提交 `a67014a` 的 21 项修复进行逐项验证，发现 BUG-G2 修复无效（`AlgoInstance::get_param` 不委托 backend，num_bins 回读返回 `param_values_` 陈旧值），已在同提交 amend 中改为 `set_param("model_path")` 后从 backend 回读 num_bins 并同步到 `param_values_` 的精准方案。同时补齐 `apply_global_roi` 对 calibration 类别的过滤，与 `apply_global_preproc` 保持一致。
+>
+> **v2.3 更新**：对提交 `d0741d9` 的 28 项修复（21 项诊断 + 7 项系统性 N1-N8）进行逐项复核，发现：
+> - **BUG-G5 误诊**：`set_enabled(true)` 不调用 `reset()` 是有意设计（支持 pause-resume 工作流），新会话 reset 由 `main_window.cpp:658-661` 相机重连时单独负责。已回退 `backend_->reset()` 调用。
+> - **N2+R2 交互缺陷**：N2 的 rebuild-skip 优化仅比较 ROI 维度，但 R2 的 `downsample` 旧键转发通过此检查时会被错误跳过（`rebuild()` 使用 `aw/f, ah/f`，preproc factor 变化需要 rebuild）。已改为直接调用 `rebuild()` 并返回。
+> - **BUG-G4 修复不完整**：原修复仅将信号发射移入 `if (inst)` 但未在失败时回退复选框。已补充 `else` 分支用 `QSignalBlocker` 回退状态并报错。
+>
+> **v2.4 更新**：对提交 `ea65262` 后的代码进行系统分析，发现并修复 2 个 N1-N8 修复的交互副作用：
+> - **BUG-1 (MEDIUM): N1+N6 交互 — preproc 配置缓存覆盖全局修改**。`create()` 中 `algo_param_cache_`（含配置文件的 `preproc_*`）回放顺序在 `preproc_cache_` 之后，覆盖用户后续修改的全局 preproc 值。N6 移除了 toggled handler 中的 `apply_global_preproc` 调用，无补救路径（ROI 因 `apply_global_roi()` 补救而不受影响）。修复：交换回放顺序为 `algo_param_cache_` 先 → `preproc_cache_`/`roi_cache_` 后，使全局当前值覆盖配置旧值。
+> - **BUG-2 (LOW-MEDIUM): N8 — set_all_enabled(true) 覆盖 populate_* 的 facility disable**。`populate()` 先调用 `populate_antiflicker/trail/erc`（缺失 facility 时 disable 对应 group），后调用 `set_all_enabled(true)` 启用全部 group，覆盖前者的 disable。修复：移除 `set_all_enabled(true)` 调用，各 `populate_*` 自行管理 enable 状态。
 
 ---
 
@@ -315,26 +324,16 @@ main 注册 60 个算法 → develop 注册 59 个（移除 `noise_filter`，转
 
 ### 4.2 中严重度
 
-#### BUG-G5 — 重新启用算法未调用 `reset()` 清理陈旧状态【新发现】
+#### BUG-G5 — 重新启用算法未调用 `reset()` 清理陈旧状态【非BUG，设计行为】
 
-- **位置**：[algo_bridge.cpp:66-75](file:///home/justin/GUI-for-openEB/gui/algo_bridge/algo_bridge.cpp#L66-L75)
-  ```cpp
-  void AlgoInstance::set_enabled(bool e) {
-      std::lock_guard<std::mutex> lk(mutex_);
-      enabled_ = e;
-      if (e) {
-          overloaded_ = false;
-          flood_strikes_ = 0;
-      }
-  }
-  ```
-- **现象**：仅清理过载状态，**不调用** `backend_->reset()`。算法被禁用-再启用后，`EventToVideo` 的 `log_intensity_`、`current_t_`、`InteractingMaps` 的 `I_map_` 等内部状态保留旧值
-- **后果**：
-  - 跨会话残影（InteractingMaps 虽每帧从 Vc 重初始化 I_map_，但 Vc 自身可能含陈旧累积）
-  - 基于旧 `current_t_` 的错误 decay 计算
-- **对比**：相机重连时 [main_window.cpp:654-657](file:///home/justin/GUI-for-openEB/gui/main_window.cpp#L654-L657) 正确调用 `inst->reset()`
-- **注意**：此行为对某些场景（用户临时禁用后恢复，期望继续重建）可能是期望的；建议提供 `reset_on_reenable` 选项或让用户手动 Reset
-- **建议修复**：至少在算法被禁用超过一定时间后再启用时调用 `reset()`；或在 GUI 提供 "Reset" 按钮
+- **位置**：[algo_bridge.cpp:90-106](file:///home/justin/GUI-for-openEB/gui/algo_bridge/algo_bridge.cpp#L90-L106)
+- **原始诊断**：`set_enabled(true)` 仅清理过载状态，不调用 `backend_->reset()`，认为会导致跨会话残影和错误 decay 计算
+- **复核结论**：**误诊**。原始行为是有意设计，用于支持 pause-resume 工作流：
+  1. 用户临时禁用算法后重新启用，期望保留已累积的状态（如 E2VID `log_intensity_`、InteractingMaps `I_map_`）以继续重建
+  2. 新会话的完整 reset 由调用方负责：[main_window.cpp:658-661](file:///home/justin/GUI-for-openEB/gui/main_window.cpp#L658-L661) 在相机重连时对每个 live 实例单独调用 `inst->reset()`
+  3. 原始代码注释明确说明"only clears overload state"，与 `reset()` 的职责分离一致
+- **修复回退**：提交 `d0741d9` 中新增的 `backend_->reset()` 调用已回退，恢复原始设计行为
+- **状态**：非 BUG，无需修复
 
 #### BUG-G6 — `EspPanel::populate_antiflicker` 在连接期间弹出模态对话框【新发现】
 
@@ -444,7 +443,7 @@ main 注册 60 个算法 → develop 注册 59 个（移除 `noise_filter`，转
 | BUG-G2 (num_bins GUI 未回读) | **新发现** | 旧文档 §3.3 标注 ✓ 但实际 GUI 侧存在同步缺口 |
 | BUG-G3 (断开未停录) | **新发现** | 旧文档未覆盖 `on_disconnect` 路径 |
 | BUG-G4 (find_or_create null 仍发信号) | **新发现** | 旧文档未覆盖 |
-| BUG-G5 (重新启用未 reset) | **新发现** | 旧文档未覆盖 `set_enabled` 路径 |
+| BUG-G5 (重新启用未 reset) | **新发现（误诊）** | 旧文档未覆盖 `set_enabled` 路径；经复核确认为设计行为 |
 | BUG-G6 (ESP 模态对话框) | **新发现** | 旧文档未覆盖 panel 层 |
 | BUG-G7 (af_preset 未恢复) | **新发现** | 旧文档未覆盖 panel 层 |
 | BUG-G8 (converter_ null) | **新发现** | 旧文档未覆盖 |
@@ -471,7 +470,7 @@ main 注册 60 个算法 → develop 注册 59 个（移除 `noise_filter`，转
 | **BUG-G2 num_bins GUI 未回读** | `e67a858` | 否 | **是**（GUI 显示不一致） |
 | BUG-G3 断开未停录 | `551fa7e` | 否 | 否（影响录制完整性） |
 | BUG-G4 null 仍发信号 | `c8d3f15` | 否 | 否 |
-| BUG-G5 重新启用未 reset | 长期遗留 | 否 | 否（影响算法状态） |
+| BUG-G5 重新启用未 reset | 长期遗留 | 否 | 否（设计行为，非BUG） |
 | BUG-G6 ESP 模态对话框 | `c8d3f15` | 否 | 否 |
 | BUG-G7 af_preset 未恢复 | `c8d3f15` | 否 | 否 |
 | BUG-G8 converter_ null | `c8d3f15` | 否 | 否 |
@@ -494,7 +493,7 @@ main 注册 60 个算法 → develop 注册 59 个（移除 `noise_filter`，转
 | **P1（建议）** | BUG-R2 | `EventToVideoBackend::set_param` 收到 `downsample` 时转发到 `preproc_downsample` | 小 | ✅ 已修复 |
 | **P1（建议）** | BUG-G2 | `apply_param` 处理 `model_path` 后通知 GUI 刷新 num_bins | 小 | ✅ 已修复 |
 | **P1（建议）** | BUG-G4 | `find_or_create` 返回 null 时不发信号 | 极小 | ✅ 已修复 |
-| **P2（可选）** | BUG-G5 | `set_enabled(true)` 时调用 `backend_->reset()` 清除旧状态 | 小 | ✅ 已修复 |
+| **P2（可选）** | BUG-G5 | ~~`set_enabled(true)` 时调用 `backend_->reset()` 清除旧状态~~ | 小 | ❌ 非BUG，设计行为（已回退） |
 | **P2（可选）** | BUG-R5 | 删除 `annotated_frame_ready` 信号发射及声明 | 极小 | ✅ 已修复 |
 | **P2（可选）** | BUG-R6 | 给 `drag_check_` / `btn_record_` 补 `setShortcut` | 极小 | ✅ 已修复 |
 | **P2（可选）** | BUG-G6 | ESP populate 错误改为 `info_message`（非模态状态栏） | 小 | ✅ 已修复 |
@@ -610,9 +609,94 @@ git show --stat 551fa7e
 
 ---
 
-## 第九部分：版本历史
+## 第九部分：算法实现参数完整性审查
+
+> 焦点：AlgoParamSpec（GUI 暴露的参数）与 AlgoBackend 的 `set_param`/`get_param`
+> 及算法类的实际 API 之间的三方一致性。违反约束 *"All algorithm parameters
+> must have both set_param and get_param implementations to ensure GUI can
+> read/write values"*。
+
+### 9.1 审查方法
+
+对全部 self-developed 算法的 AlgoParamSpec → Backend set_param → Backend
+get_param → 算法类 getter/setter 四层逐一交叉核对。OpenEB 算法因无自定义
+参数无需审查。
+
+### 9.2 发现的问题
+
+#### ALG-1 — OrientationCluster 缺少 11 个真实参数【已修复 ✅】
+
+- **现象**：`algo_bridge.cpp` 中 `orientation_cluster` 的 AlgoParamSpec 仅
+  暴露 `min_events`（文档注释确认这是 no-op 兼容垫片， *"the value is stored
+  but has no effect on filtering"*）。但后端 `OrientationClusterBackend::set_param`
+  实际处理 12 个参数（dt, factor, rf_width, rf_height, tolerance, ori,
+  neighbor_thr, thr_gradient, history_factor, use_opposite_polarity,
+  ori_history_enabled, display_length），而 `get_param` 仅返回 `min_events`。
+- **根因**：AlgoParamSpec 与后端 set_param/get_param 不同步——spec 只有 1 个
+  参数，set_param 有 13 个，get_param 有 1 个。算法类 `OrientationCluster`
+  已实现全部 12 个 getter（[orientation_cluster.h:249-283](file:///home/justin/GUI-for-openEB/algo/cv/orientation_cluster.h#L249-L283)）。
+- **影响**：用户无法在 GUI 调节 OrientationCluster 的任何真实过滤参数；
+  GUI 写入这些参数（若通过 JSON 配置加载）后无法回读。
+- **修复**：在 spec 中添加 11 个参数；在 get_param 中添加 11 个对应 handler。
+
+#### ALG-2 — ClusterLIF 缺少 3 个参数【已修复 ✅】
+
+- **现象**：`cluster_lif` 的 AlgoParamSpec 仅暴露 `tau_ms` 和 `threshold`，
+  但后端 `ClusterLifBackend::set_param` 实际处理 5 个参数（额外含
+  receptive_field_size_pixels, initial_potential_percent,
+  jump_after_firing_percent），`get_param` 仅返回前 2 个。
+- **根因**：同 ALG-1，spec 与后端不同步。算法类 `ClusterLIF` 已实现全部
+  getter（[cluster_lif.h:217-231](file:///home/justin/GUI-for-openEB/algo/cv/cluster_lif.h#L217-L231)）。
+- **影响**：用户无法在 GUI 调节 LIF 神经元网格的关键参数（感受野大小、
+  初始膜电位、发放后跳变量），影响 jAER BlurringTunnelFilter 的忠实复现。
+- **修复**：在 spec 中添加 3 个参数；在 get_param 中添加 3 个 handler。
+
+#### ALG-3 — TriggerSynced 缺少 t0_us 和 trigger_channel【已修复 ✅】
+
+- **现象**：`trigger_synced` 的 AlgoParamSpec 仅暴露 `window_us`，但后端
+  `TriggerSyncedBackend::set_param` 实际处理 4 个参数（额外含 t0_us, t1_us,
+  trigger_channel），`get_param` 仅返回 `window_us`。
+- **根因**：spec 与后端不同步。注意 `t1_us` 与 `window_us` 冗余（两者都映射
+  到 `t1_`，因 `trigger_window_us()` 返回 `t1_`），故仅添加 `t0_us` 和
+  `trigger_channel`。算法类已实现 `t0()` 和 `trigger_channel()` getter
+  （[trigger_synced_filter.h:121-136](file:///home/justin/GUI-for-openEB/algo/cv/trigger_synced_filter.h#L121-L136)）。
+- **影响**：用户无法在 GUI 调节激光延迟（t0）和触发通道选择。
+- **修复**：在 spec 中添加 t0_us 和 trigger_channel；在 get_param 中添加
+  对应 handler。
+
+#### ALG-4 — BackgroundMask 缺少 erosion_size 参数【已修复 ✅】
+
+- **现象**：`background_mask` 的 AlgoParamSpec 仅暴露 `learning_rate` 和
+  `threshold`，但后端 `BackgroundMaskBackend::set_param` 实际处理 3 个参数
+  （额外含 erosion_size），`get_param` 未返回 erosion_size。
+- **根因**：spec 缺少 erosion_size；算法类已实现 `erosion_size()` getter
+  （[background_mask_filter.h:121](file:///home/justin/GUI-for-openEB/algo/cv/background_mask_filter.h#L121)）。
+- **影响**：用户无法在 GUI 调节形态学腐蚀核大小（jAER `erosionSize`）。
+- **修复**：在 spec 中添加 erosion_size；在 get_param 中添加 handler。
+
+### 9.3 排除的问题
+
+| 编号 | 描述 | 裁定 |
+|------|------|------|
+| ALG-5 | TriggerSynced 缺少 t1_us get_param | ❌ 非BUG：`t1_us` 与 `window_us` 冗余（均映射到 `t1_`），spec 已有 `window_us` |
+| ALG-6 | EventToVideo `im_Mat_[9]` 死代码 | ❌ 非BUG：属代码清理而非实现错误/GUI不对应；`build_calibration_map()` 预计算 `sum(I-C·C^T)` 但 `reconstruct_interacting()` 使用不同的 Jacobian 公式 `sum(A_i^T A_i)`，二者非同一矩阵 |
+| ALG-7 | EventToVideo `decay_tau_ms_{0.0f}` 默认值与 spec `"500"` 不一致 | ❌ 非BUG：AlgoInstance 构造时自动应用 spec 默认值，硬编码默认值对用户不可见 |
+
+### 9.4 修复状态总表
+
+| 编号 | 严重度 | 算法 | 缺失参数数 | 状态 |
+|------|--------|------|------------|------|
+| ALG-1 | 高 | OrientationCluster | 11 | ✅ 已修复 |
+| ALG-2 | 高 | ClusterLIF | 3 | ✅ 已修复 |
+| ALG-3 | 高 | TriggerSynced | 2 | ✅ 已修复 |
+| ALG-4 | 中 | BackgroundMask | 1 | ✅ 已修复 |
+
+---
+
+## 第十部分：版本历史
 
 | 版本 | 日期 | 作者 | 变更 |
 |------|------|------|------|
 | 1.0 | 2026-07-13 | Justin | 初始版本，基于 develop `551fa7e` vs main `7d5fde6` 审查（原名 `develop_vs_main_diagnostic.md`） |
 | 2.0 | 2026-07-14 | Justin | 重命名为 `gui_diagnostic_report.md`；整合 GUI 全量静态分析（+12 项新发现）；对旧文档 10 项诊断全部验证确认；新增 decay_tau_ms 默认值违规（BUG-G1）；更新修复优先级总表 |
+| 3.0 | 2026-07-14 | Justin | 新增第九部分：算法实现参数完整性审查（ALG-1~ALG-7）；修复 4 个参数缺失问题（ALG-1~ALG-4）；排除 3 个非BUG（ALG-5~ALG-7） |

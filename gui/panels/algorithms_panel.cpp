@@ -96,6 +96,7 @@ void AlgorithmsPanel::build_ui() {
             params_host->setVisible(false);
 
             const std::string algo_name = a->name;
+            algo_panel_state_[algo_name].params_host = params_host;
             // Match a default value to an enum_values entry. Entries may be
             // "N=Label" (match on the "N" prefix) or plain values.
             auto match_enum_index = [](const std::vector<std::string>& vals,
@@ -206,11 +207,15 @@ void AlgorithmsPanel::build_ui() {
                         if (!other_cb || !other_cb->isChecked()) continue;
                         QSignalBlocker b(other_cb);
                         other_cb->setChecked(false);
-                        // Hide the other algo's parameter editor.
-                        // (The editor is the row immediately following the
-                        // checkbox in the same QFormLayout; we can find it
-                        // by re-using the params_host pattern: just hide via
-                        // the live_instances_ map's enable flag.)
+                        // Hide the other algo's parameter editor. Because
+                        // QSignalBlocker suppresses the toggled signal, the
+                        // other algo's toggled handler (which would normally
+                        // hide its params_host) never runs. We must hide it
+                        // explicitly here (BUG-M2).
+                        auto st = algo_panel_state_.find(other_name);
+                        if (st != algo_panel_state_.end() && st->second.params_host) {
+                            st->second.params_host->setVisible(false);
+                        }
                         auto it = live_instances_.find(other_name);
                         if (it != live_instances_.end() && it->second) {
                             it->second->set_enabled(false);
@@ -236,18 +241,30 @@ void AlgorithmsPanel::build_ui() {
                         // algorithms have a display and Overlay algorithms get
                         // their ROI zoom view. Without this the sidebar-enabled
                         // algorithm produces no visible output.
-                        // BUG-G4: only emit when inst is non-null — otherwise
-                        // MainWindow would open a window for an algo with no
-                        // live instance (no data, no display).
                         emit open_algo_window_requested(algo_name);
+                        emit algorithm_toggled(QString::fromStdString(a->name), true);
+                    } else {
+                        // find_or_create should never fail for registered
+                        // algorithms, but revert the checkbox defensively so
+                        // the UI stays consistent if it ever does.
+                        QSignalBlocker b(cb);
+                        cb->setChecked(false);
+                        emit error_message(tr("Failed to create algorithm: %1")
+                                               .arg(QString::fromStdString(a->display_name)));
+                        // Don't emit algorithm_toggled(name, true): the algo
+                        // was never enabled and the checkbox was reverted.
+                        // Emitting true would mislead MainWindow into showing
+                        // "enabled" in the status bar (BUG-G15). Don't emit
+                        // false either: open_algo_window_requested was never
+                        // emitted, so there is no AlgoWindow to close.
                     }
                 } else {
                     auto it = live_instances_.find(algo_name);
                     if (it != live_instances_.end() && it->second) {
                         it->second->set_enabled(false);
                     }
+                    emit algorithm_toggled(QString::fromStdString(a->name), false);
                 }
-                emit algorithm_toggled(QString::fromStdString(a->name), on);
             });
         }
         layout->addWidget(gb);
@@ -265,7 +282,7 @@ void AlgorithmsPanel::build_roi_selector(QVBoxLayout* parent_layout) {
     auto* form = new QFormLayout(gb);
     form->setContentsMargins(6, 6, 6, 6);
 
-    roi_enabled_cb_ = new QCheckBox(tr("Enabled (center 256×256 default)"), gb);
+    roi_enabled_cb_ = new QCheckBox(tr("Enabled (center 128×128 default)"), gb);
     roi_enabled_cb_->setChecked(true);
     form->addRow(roi_enabled_cb_);
 
@@ -283,13 +300,13 @@ void AlgorithmsPanel::build_roi_selector(QVBoxLayout* parent_layout) {
 
     roi_w_sp_ = new QSpinBox(gb);
     roi_w_sp_->setRange(0, 100000);
-    roi_w_sp_->setValue(256);
+    roi_w_sp_->setValue(128);
     roi_w_sp_->setSpecialValueText(tr("full"));
     form->addRow(tr("W"), roi_w_sp_);
 
     roi_h_sp_ = new QSpinBox(gb);
     roi_h_sp_->setRange(0, 100000);
-    roi_h_sp_->setValue(256);
+    roi_h_sp_->setValue(128);
     roi_h_sp_->setSpecialValueText(tr("full"));
     form->addRow(tr("H"), roi_h_sp_);
 
@@ -603,6 +620,14 @@ void AlgorithmsPanel::set_algo_enabled(const std::string& name, bool on) {
     QSignalBlocker b(it->second);
     it->second->setChecked(on);
 
+    // Show/hide the target's parameter editor to match the new checkbox
+    // state. QSignalBlocker suppressed the toggled handler which would
+    // normally do this (BUG-M2).
+    auto st = algo_panel_state_.find(name);
+    if (st != algo_panel_state_.end() && st->second.params_host) {
+        st->second.params_host->setVisible(on);
+    }
+
     // Algorithm mutex: when turning an algo on programmatically (e.g. from
     // on_open_algo_window), uncheck every other algo so only one is live at
     // a time. The toggled-handler path enforces mutex itself; this covers
@@ -613,6 +638,12 @@ void AlgorithmsPanel::set_algo_enabled(const std::string& name, bool on) {
             if (!other_cb || !other_cb->isChecked()) continue;
             QSignalBlocker ob(other_cb);
             other_cb->setChecked(false);
+            // Hide the other algo's parameter editor (BUG-M2: QSignalBlocker
+            // suppresses the toggled handler that would normally hide it).
+            auto ost = algo_panel_state_.find(other_name);
+            if (ost != algo_panel_state_.end() && ost->second.params_host) {
+                ost->second.params_host->setVisible(false);
+            }
             auto oi = live_instances_.find(other_name);
             if (oi != live_instances_.end() && oi->second) {
                 oi->second->set_enabled(false);

@@ -118,8 +118,6 @@ public:
     }
 };
 
-/// EventsIntegrationAlgorithm backend — integrates events into a grayscale
-
 
 // --- Per-category factory (called by create_algo_backend in backend_factory.cpp)
 std::unique_ptr<AlgoBackend> create_openeb_filter_backend(const std::string& name,

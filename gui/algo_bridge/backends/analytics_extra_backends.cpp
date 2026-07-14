@@ -136,6 +136,8 @@ public:
     std::string get_param(const std::string& k) const override {
         auto r = roi_.get_param(k); if (!r.empty()) return r;
         if (k == "window_us") return from_i(static_cast<int>(algo_.trigger_window_us()));
+        if (k == "t0_us") return from_i(static_cast<int>(algo_.t0()));
+        if (k == "trigger_channel") return from_i(algo_.trigger_channel());
         return {};
     }
     void push_events(const Metavision::EventCD* b, const Metavision::EventCD* e) override {
@@ -154,8 +156,6 @@ public:
     }
     void reset() override { algo_.reset(); last_out_.clear(); roi_buf_.clear(); }
 };
-
-/// UltraSlowMotion backend — outputs time-dilated event vector.
 
 
 // ===========================================================================
@@ -275,10 +275,6 @@ public:
     }
     void reset() override { algo_.reset(); passthrough_.clear(); roi_buf_.clear(); last_.clear(); }
 };
-
-/// ParticleCounter backend — count as overlay text.
-/// Supports ROI (design §5.6.6): processes only ROI events. Throttled:
-
 
 
 // --- Per-category factory (called by create_algo_backend in backend_factory.cpp)

@@ -86,6 +86,12 @@ public:
         // the model IS loaded here in rebuild(), not deferred).
         if (!model_path_.empty()) algo_->set_model_path(model_path_);
         algo_->set_e2vid_num_bins(e2vid_num_bins_);
+        // Re-sync from the algo: when a model is loaded, set_num_bins ignores
+        // the caller's value and uses model_num_bins_ (e2vid_inference.h).
+        // Without this re-sync, e2vid_num_bins_ would stay at the stale
+        // default/user value and get_param("num_bins") would return the
+        // wrong value (BUG-N11).
+        e2vid_num_bins_ = algo_->e2vid_num_bins();
         algo_->set_e2vid_auto_hdr(e2vid_auto_hdr_);
         // 1/4 downsample is handled by the shared Preprocessor (which halves
         // event coordinates before they reach the algo). The algo's internal
@@ -165,7 +171,15 @@ public:
             }
         } else if (k == "num_bins") {
             e2vid_num_bins_ = to_i(v);
-            if (algo_) algo_->set_e2vid_num_bins(e2vid_num_bins_);
+            if (algo_) {
+                algo_->set_e2vid_num_bins(e2vid_num_bins_);
+                // Re-sync: the algo ignores the caller's value when a model
+                // is loaded (model_num_bins_ takes precedence). Without this,
+                // e2vid_num_bins_ would retain the stale user/cache value
+                // and get_param("num_bins") would return the wrong value
+                // (BUG-N11).
+                e2vid_num_bins_ = algo_->e2vid_num_bins();
+            }
         } else if (k == "auto_hdr") {
             e2vid_auto_hdr_ = to_b(v);
             if (algo_) algo_->set_e2vid_auto_hdr(e2vid_auto_hdr_);
@@ -181,9 +195,14 @@ public:
         } else if (k == "downsample") {
             // Backward compat: the old per-algo "downsample" key is forwarded
             // to the shared preproc stage (preproc_downsample). The per-algo
-            // flag stays OFF to avoid double-halving (BUG-R2).
+            // flag stays OFF to avoid double-halving (BUG-R2). Must rebuild
+            // directly (not via need_rebuild + N2 dimension check) because
+            // the preproc factor change affects algorithm dimensions (aw/f,
+            // ah/f in rebuild()) regardless of ROI dimensions — the N2 check
+            // only compares ROI dims and would falsely skip the rebuild.
             preproc_.set_param("preproc_downsample", v);
-            need_rebuild = true;
+            rebuild();
+            return;
         } else if (k == "roi_enabled") { roi_.enabled = to_b(v); need_rebuild = true; }
         else if (k == "roi_x") { roi_.x = to_i(v); need_rebuild = true; }
         else if (k == "roi_y") { roi_.y = to_i(v); need_rebuild = true; }

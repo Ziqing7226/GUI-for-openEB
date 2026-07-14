@@ -320,9 +320,8 @@ void MainWindow::build_menus() {
     // Phase 3 (§3.6.1/§3.6.3): menus live as dropdown buttons inside the
     // custom title bar (no top-level QMenuBar). Each addMenu() call adds a
     // QPushButton to the title bar that pops up the returned QMenu. The 5
-    // dropdowns are File | View | Camera | Tools | Help; the former Theme
-    // menu folds into View, and the former Calibration menu folds into Tools
-    // (design §3.6.3). All existing actions are preserved.
+    // dropdowns are File | View | Theme | Tools | Help; the former Calibration
+    // menu folds into Tools (design §3.6.3). All existing actions are preserved.
     auto* mb = title_bar_;
 
     // File
@@ -589,7 +588,15 @@ void MainWindow::wire_signals() {
     connect(dp, &DevicesPanel::refresh_requested, this, &MainWindow::on_refresh_devices);
     connect(dp, &DevicesPanel::connect_first_requested, this, &MainWindow::on_connect_first);
     connect(dp, &DevicesPanel::connect_serial_requested, this,
-            [this](const QString& serial) { camera_.connect_serial(serial.toStdString()); });
+            [this](const QString& serial) {
+                // Stop the recorder before switching sources so it can close
+                // the output file cleanly while the old camera is still alive.
+                // connect_serial() calls teardown() which destroys the old
+                // camera — after that, recorder_.stop() can no longer call
+                // stop_log_raw_data() and the file is left without a footer.
+                if (recorder_.is_recording()) recorder_.stop();
+                camera_.connect_serial(serial.toStdString());
+            });
     connect(dp, &DevicesPanel::disconnect_requested, this, &MainWindow::on_disconnect);
 
     // Phase 2 (§3.3.2): bind every registered panel to the camera so each
@@ -666,6 +673,15 @@ void MainWindow::wire_signals() {
         if (xyt_display_) {
             xyt_display_->clear();
         }
+        // Reset any stale algo_cd_cb_id_ from a previous camera. The
+        // connect_*() paths (connect_file/serial/first_available) call
+        // teardown() which destroys the old camera — and with it the old CD
+        // callback — but never emits disconnected(), so remove_algo_callback()
+        // (which lives in the disconnected handler) never ran. Without this
+        // reset, install_algo_callback() short-circuits on the stale ID and
+        // the new camera's CD callback is never installed (algorithms
+        // receive no events after a source switch).
+        algo_cd_cb_id_.reset();
         install_algo_callback();
         camera_.start();
         // Sync UI to FramePipeline's current (persisted) values so the
@@ -718,12 +734,24 @@ void MainWindow::wire_signals() {
         stop_rec_blink();
     });
     connect(&camera_, &CameraController::stopped, this, [this]() {
-        if (!recorder_.is_recording()) {
+        // Auto-stop the recorder when the camera stops (user stop, file EOF,
+        // runtime error). Without this, the recorder keeps running with a
+        // dead camera — the flush timer ticks but get_latest_raw_data()
+        // returns nothing, and the output file is left without a clean
+        // footer because stop_log_raw_data() is never called.
+        if (recorder_.is_recording()) {
+            recorder_.stop();
+        } else {
             status_rec_->setText(tr("Idle"));
             stop_rec_blink();
         }
     });
     connect(&camera_, &CameraController::error, this, [this](const QString& msg) {
+        // Auto-stop the recorder on camera error for the same reason as
+        // stopped(). The error handler runs before stopped() (both are
+        // queued from the error callback), so stop here to ensure the
+        // file is closed while the camera handle is still valid.
+        if (recorder_.is_recording()) recorder_.stop();
         QMessageBox::warning(this, tr("Camera error"), msg);
     });
     connect(&camera_, &CameraController::runtime_warning, this, [this](const QString& msg) {
@@ -963,6 +991,11 @@ void MainWindow::on_open_file() {
 }
 
 void MainWindow::on_file_opened_for_playback(const QString& path) {
+    // Stop the recorder before switching sources. open_file() calls
+    // connect_file() → teardown() which destroys the old camera — after that,
+    // recorder_.stop() can no longer call stop_log_raw_data() and the file is
+    // left without a clean footer (BUG-S2).
+    if (recorder_.is_recording()) recorder_.stop();
     // Route through the playback controller so it can capture duration and
     // start the position probe timer.
     if (!playback_.open_file(path)) {
@@ -1025,6 +1058,11 @@ void MainWindow::on_open_recent_file(const QString& path) {
 }
 
 void MainWindow::on_connect_first() {
+    // Stop the recorder before switching sources. connect_first_available()
+    // calls teardown() which destroys the old camera — after that,
+    // recorder_.stop() can no longer call stop_log_raw_data() and the file is
+    // left without a clean footer (BUG-S2).
+    if (recorder_.is_recording()) recorder_.stop();
     if (!camera_.connect_first_available()) {
         QMessageBox::information(this, tr("Connect"),
                                  tr("No live camera available."));
@@ -1539,7 +1577,7 @@ void MainWindow::on_about() {
            "Bias / ROI / ESP / Trigger panels, recording & playback, HDF5 / AVI "
            "export, JSON config with presets, OpenEB filter-chain preprocessing, "
            "file conversion tools, calibration wizard, "
-           "30 self-developed CV/analytics algorithms with overlay/replace/"
+           "29 self-developed CV/analytics algorithms with overlay/replace/"
            "standalone display modes, XYT 3D point cloud, and more.</p>"));
 }
 

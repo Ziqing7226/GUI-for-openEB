@@ -155,7 +155,7 @@ public:
                                 ev.y = static_cast<std::int16_t>(H - ev.y); break; }
                     case 270: { std::int16_t nx = ev.y;
                                 std::int16_t ny = static_cast<std::int16_t>(W - ev.x);
-                                if (nx < 0 || ny < 0 || ny > W) continue;
+                                if (nx < 0 || nx > H || ny < 0 || ny > W) continue;
                                 ev.x = nx; ev.y = ny; break; }
                     default: break; // 0° = identity
                 }

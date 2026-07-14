@@ -385,6 +385,18 @@ public:
     std::string get_param(const std::string& k) const override {
         auto r = roi_.get_param(k); if (!r.empty()) return r;
         if (k == "min_events") return from_i(algo_.min_cluster_size());
+        if (k == "dt") return from_d(algo_.dt());
+        if (k == "factor") return from_d(algo_.factor());
+        if (k == "rf_width") return from_i(algo_.rf_width());
+        if (k == "rf_height") return from_i(algo_.rf_height());
+        if (k == "tolerance") return from_d(algo_.tolerance());
+        if (k == "ori") return from_d(algo_.ori());
+        if (k == "neighbor_thr") return from_d(algo_.neighbor_thr());
+        if (k == "thr_gradient") return from_d(algo_.thr_gradient());
+        if (k == "history_factor") return from_d(algo_.history_factor());
+        if (k == "use_opposite_polarity") return from_b(algo_.use_opposite_polarity());
+        if (k == "ori_history_enabled") return from_b(algo_.ori_history_enabled());
+        if (k == "display_length") return from_i(algo_.display_length());
         return {};
     }
     void push_events(const Metavision::EventCD* b, const Metavision::EventCD* e) override {
@@ -431,6 +443,9 @@ public:
         auto r = roi_.get_param(k); if (!r.empty()) return r;
         if (k == "tau_ms") return from_d(algo_.tau_ms());
         if (k == "threshold") return from_d(algo_.threshold());
+        if (k == "receptive_field_size_pixels") return from_i(algo_.receptive_field_size_pixels());
+        if (k == "initial_potential_percent") return from_d(algo_.initial_potential_percent());
+        if (k == "jump_after_firing_percent") return from_d(algo_.jump_after_firing_percent());
         return {};
     }
     void push_events(const Metavision::EventCD* b, const Metavision::EventCD* e) override {

@@ -253,6 +253,7 @@ public:
         auto r = roi_.get_param(k); if (!r.empty()) return r;
         if (k == "learning_rate") return from_d(algo_.learning_window_s());
         if (k == "threshold") return from_d(algo_.background_rate_threshold_hz());
+        if (k == "erosion_size") return from_i(algo_.erosion_size());
         return {};
     }
     void push_events(const Metavision::EventCD* b, const Metavision::EventCD* e) override {
@@ -325,9 +326,6 @@ public:
     }
     void reset() override { algo_.reset(); passthrough_.clear(); roi_buf_.clear(); last_t_ = 0; }
 };
-
-/// Overlay backend — pass-through (overlay is drawn by frame_annotator from
-/// other algos). Supports ROI (design §5.6.6): when enabled, only ROI events
 
 
 // --- Per-category factory (called by create_algo_backend in backend_factory.cpp)

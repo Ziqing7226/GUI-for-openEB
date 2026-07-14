@@ -105,6 +105,7 @@ private:
     /// Per-algorithm UI state for mode-scoped parameter visibility.
     struct AlgoPanelState {
         QComboBox* mode_combo{nullptr};
+        QWidget* params_host{nullptr};  ///< Container widget for param rows
         std::vector<ParamRow> rows;
     };
 
