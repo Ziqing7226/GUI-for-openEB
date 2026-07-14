@@ -53,8 +53,8 @@ struct ProcessRegion {
     bool enabled{true};
     int x{-1};   ///< -1 = auto-center on sensor
     int y{-1};
-    int w{256};  ///< 0 = full sensor width
-    int h{256};  ///< 0 = full sensor height
+    int w{128};  ///< 0 = full sensor width
+    int h{128};  ///< 0 = full sensor height
 
     int x0{0}, y0{0}, x1{0}, y1{0};  ///< [x0,x1) × [y0,y1)
     int rw{0}, rh{0};

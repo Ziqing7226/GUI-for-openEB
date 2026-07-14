@@ -249,6 +249,7 @@ void AlgorithmsPanel::build_ui() {
                         // the UI stays consistent if it ever does.
                         QSignalBlocker b(cb);
                         cb->setChecked(false);
+                        params_host->setVisible(false);
                         emit error_message(tr("Failed to create algorithm: %1")
                                                .arg(QString::fromStdString(a->display_name)));
                         // Don't emit algorithm_toggled(name, true): the algo

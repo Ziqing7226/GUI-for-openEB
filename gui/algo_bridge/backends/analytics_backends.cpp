@@ -200,8 +200,11 @@ public:
             // the preproc factor change affects algorithm dimensions (aw/f,
             // ah/f in rebuild()) regardless of ROI dimensions — the N2 check
             // only compares ROI dims and would falsely skip the rebuild.
+            // Skip rebuild if the value didn't change (avoids unnecessary
+            // ONNX reload on duplicate set_param calls).
+            const std::string prev = preproc_.get_param("preproc_downsample");
             preproc_.set_param("preproc_downsample", v);
-            rebuild();
+            if (prev != v) rebuild();
             return;
         } else if (k == "roi_enabled") { roi_.enabled = to_b(v); need_rebuild = true; }
         else if (k == "roi_x") { roi_.x = to_i(v); need_rebuild = true; }
@@ -251,6 +254,10 @@ public:
         if (k == "unsharp_sigma") return from_d(unsharp_sigma_);
         if (k == "bilateral_sigma") return from_d(bilateral_sigma_);
         if (k == "roi_enabled") return from_b(roi_.enabled);
+        if (k == "roi_x") return from_i(roi_.x);
+        if (k == "roi_y") return from_i(roi_.y);
+        if (k == "roi_w") return from_i(roi_.w);
+        if (k == "roi_h") return from_i(roi_.h);
         return {};
     }
     void push_events(const Metavision::EventCD* b, const Metavision::EventCD* e) override {
@@ -303,6 +310,7 @@ public:
         if (algo_) algo_->reset();
         passthrough_.clear();
         roi_events_.clear();
+        filtered_active_ = false;
     }
     void set_sensor_dimensions(int w, int h) override {
         sensor_w_ = w;

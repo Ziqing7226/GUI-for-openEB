@@ -1,7 +1,7 @@
 // gui/algo_bridge/algo_bridge.cpp
 //
 // AlgoInstance 持有真实的 AlgoBackend 实例，真正调用 algo/cv 与 algo/analytics
-// 的算法类。注册表列出全部 31 个自研模块 + 30 个 openEB 能力 = 61 项。
+// 的算法类。注册表列出全部 29 个自研模块 + 30 个 openEB 能力 = 59 项。
 
 #include "algo_bridge.h"
 

@@ -108,6 +108,10 @@ public:
                 break;
             }
         }
+        // Flat ptr<T>() indexing assumes the Mat is continuous (guaranteed
+        // by cv::Mat::create, but asserted defensively against future
+        // refactors that might pass an external ROI Mat).
+        CV_Assert(frame.isContinuous());
         reset();
         return frame;
     }
@@ -150,6 +154,7 @@ public:
                 break;
             }
         }
+        CV_Assert(frame.isContinuous());
         return frame;
     }
 
