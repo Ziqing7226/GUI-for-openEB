@@ -4,7 +4,8 @@
 // rendering/processing throughput:
 //   - FPS (frames per second): IIR-smoothed over frame completions
 //   - Latency (us): time from event batch arrival to frame display
-//   - Event rate (eps/Meps): forwarded from EventRateEstimator (windowed)
+//   - Event rate (eps/Meps): windowed estimation (inlined, formerly
+//     EventRateEstimator)
 //   - Drop rate: fraction of batches dropped due to overload
 //   - Per-filter cost: ns/event, eps, average ± stderr over repeated start/stop
 //     samples (matching jAER EventProcessingPerformanceMeter.start/stop).
@@ -16,12 +17,66 @@
 
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 
-#include "event_rate_estimator.h"
+#include <metavision/sdk/base/utils/timestamp.h>
 
 namespace gui_algo {
+
+/// @brief Windowed event rate estimator (events/second).
+/// Inlined from the former event_rate_estimator.h (jAER EventRateEstimator).
+class EventRateEstimator {
+public:
+    explicit EventRateEstimator(Metavision::timestamp window_us = 10000)
+        : window_us_(window_us) {}
+
+    void add_events(std::size_t n, Metavision::timestamp t) {
+        if (n == 0) return;
+        if (!initialized_) {
+            window_count_ = 0;
+            last_compute_t_ = t;
+            initialized_ = true;
+            return;
+        }
+        const auto dt = t - last_compute_t_;
+        if (dt < 0) {
+            initialized_ = false;
+            return;
+        }
+        window_count_ += n;
+        if (dt >= window_us_) {
+            last_compute_t_ = t;
+            instantaneous_rate_ =
+                static_cast<double>(window_count_) / (static_cast<double>(dt) * 1.0e-6);
+            rate_ = instantaneous_rate_;
+            window_count_ = 0;
+        }
+    }
+
+    double rate_eps() const { return rate_ < 0.0 ? 0.0 : rate_; }
+    double rate_meps() const { return rate_eps() * 1.0e-6; }
+
+    void reset() {
+        rate_ = -1.0;
+        instantaneous_rate_ = -1.0;
+        window_count_ = 0;
+        last_compute_t_ = 0;
+        initialized_ = false;
+    }
+
+    Metavision::timestamp window_us() const { return window_us_; }
+    void set_window_us(Metavision::timestamp w) { window_us_ = w; }
+
+private:
+    Metavision::timestamp window_us_;
+    double rate_{-1.0};
+    double instantaneous_rate_{-1.0};
+    std::size_t window_count_{0};
+    Metavision::timestamp last_compute_t_{0};
+    bool initialized_{false};
+};
 
 /// @brief Performance profiler for the display/processing pipeline.
 class PerformanceMeter {

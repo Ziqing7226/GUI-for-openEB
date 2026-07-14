@@ -16,9 +16,15 @@
 #include <random>
 #include <vector>
 
-#include "kmeans.h"  // Point2D
-
 namespace gui_algo {
+
+/// @brief 2D point used by particle filter, spline, and other utilities.
+struct Point2D {
+    double x{0.0};
+    double y{0.0};
+    Point2D() = default;
+    Point2D(double x_, double y_) : x(x_), y(y_) {}
+};
 
 /// @brief 2D particle filter for single-target tracking.
 class ParticleFilter {

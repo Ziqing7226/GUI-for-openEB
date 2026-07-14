@@ -26,7 +26,6 @@
 #include "algo/cv/optical_gyro.h"
 #include "algo/cv/ultra_slow_motion.h"
 #include "algo/cv/xyt_visualizer.h"
-#include "algo/cv/overlay.h"
 #include "algo/cv/time_surface.h"
 #include "algo/analytics/active_marker.h"
 #include "algo/analytics/event_to_video.h"
@@ -55,7 +54,6 @@ using gui_algo::BandpassFilter;
 using gui_algo::OpticalGyro;
 using gui_algo::UltraSlowMotion;
 using gui_algo::XYTVisualizer;
-using gui_algo::Overlay;
 using gui_algo::TimeSurface;
 using gui_algo::ActiveMarker;
 using gui_algo::EventToVideo;
@@ -377,35 +375,6 @@ TEST(XYTVisualizerTest, Process) {
     XYTVisualizer v;
     auto ev = make_events(32, 32, 50);
     v.process(ev.data(), ev.size());
-    SUCCEED();
-}
-
-// --- 4.3.26 Overlay ---
-TEST(OverlayTest, Construction) {
-    Overlay o;
-    (void)o;
-    SUCCEED();
-}
-TEST(OverlayTest, DrawOnBlankImage) {
-    Overlay o;
-    cv::Mat img(100, 100, CV_8UC3, cv::Scalar(0, 0, 0));
-    std::vector<gui_algo::FlowVector> flows;
-    flows.push_back(gui_algo::FlowVector{10.0f, 10.0f, 5.0f, 0.0f});
-    o.draw_flow_arrows(img, flows);
-    EXPECT_EQ(img.rows, 100);
-}
-TEST(OverlayTest, DrawBboxes) {
-    Overlay o;
-    cv::Mat img(100, 100, CV_8UC3, cv::Scalar(0, 0, 0));
-    std::vector<gui_algo::TrackedObject> objs;
-    gui_algo::TrackedObject obj;
-    obj.id = 1;
-    obj.x = 10.0f;
-    obj.y = 10.0f;
-    obj.w = 30.0f;
-    obj.h = 30.0f;
-    objs.push_back(obj);
-    o.draw_bboxes(img, objs);
     SUCCEED();
 }
 

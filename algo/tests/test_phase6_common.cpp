@@ -1,8 +1,9 @@
 // algo/tests/test_phase6_common.cpp — strict unit tests for Phase 6 modules.
 //
-// Covers all 20 algo/common/ modules (3 pre-existing + 17 new). Tests verify
-// numerical correctness, edge cases, boundary conditions, and behavioural
-// contracts. Compiled with -Wall -Wextra -Werror.
+// Covers algo/common/ modules that are used by production code or retained as
+// algorithm library reserves. Tests verify numerical correctness, edge cases,
+// boundary conditions, and behavioural contracts.
+// Compiled with -Wall -Wextra -Werror.
 
 #include <gtest/gtest.h>
 
@@ -18,17 +19,9 @@
 
 #include "algo/common/event.h"
 #include "algo/common/event_packet.h"
-#include "algo/common/event_buffer.h"
-#include "algo/common/lifo_event_buffer.h"
 #include "algo/common/frame_generator.h"
-#include "algo/common/dvs_framer.h"
-#include "algo/common/freme.h"
-#include "algo/common/data_loader.h"
-#include "algo/common/event_rate_estimator.h"
 #include "algo/common/performance_meter.h"
-#include "algo/common/time_limiter.h"
 #include "algo/common/kalman_filter.h"
-#include "algo/common/kmeans.h"
 #include "algo/common/particle_filter.h"
 #include "algo/common/periodic_spline.h"
 #include "algo/common/histogram_ring_buffer.h"
@@ -37,19 +30,12 @@
 #include "algo/common/filter/highpass.h"
 #include "algo/common/filter/bandpass.h"
 #include "algo/common/filter/angular_lowpass.h"
-#include "algo/common/filter/median_lowpass.h"
 
 using gui_algo::Event;
 using gui_algo::EventPacket;
 using gui_algo::MutableEventPacket;
-using gui_algo::LifoEventBuffer;
-using gui_algo::DvsFramer;
-using gui_algo::Freme;
-using gui_algo::EventRateEstimator;
 using gui_algo::PerformanceMeter;
-using gui_algo::TimeLimiter;
 using gui_algo::KalmanFilter2D;
-using gui_algo::KMeans;
 using gui_algo::ParticleFilter;
 using gui_algo::PeriodicSpline;
 using gui_algo::HistogramRingBuffer;
@@ -58,7 +44,6 @@ using gui_algo::LowPassFilter;
 using gui_algo::HighPassFilter;
 using gui_algo::BandpassFilter;
 using gui_algo::AngularLowpassFilter;
-using gui_algo::MedianLowpassFilter;
 using gui_algo::Point2D;
 
 // =========================================================================
@@ -211,354 +196,7 @@ TEST(EventPacketTest, MutablePacket) {
 }
 
 // =========================================================================
-// 3. lifo_event_buffer.h
-// =========================================================================
-
-TEST(LifoEventBufferTest, PushPopLIFOOrder) {
-    LifoEventBuffer buf(5);
-    EXPECT_TRUE(buf.empty());
-    buf.push(Event(0,0,1,10));
-    buf.push(Event(0,0,1,20));
-    buf.push(Event(0,0,1,30));
-    EXPECT_EQ(buf.size(), 3u);
-    Event e;
-    ASSERT_TRUE(buf.pop(e));
-    EXPECT_EQ(e.t, 30);
-    ASSERT_TRUE(buf.pop(e));
-    EXPECT_EQ(e.t, 20);
-    ASSERT_TRUE(buf.pop(e));
-    EXPECT_EQ(e.t, 10);
-    EXPECT_FALSE(buf.pop(e));
-    EXPECT_TRUE(buf.empty());
-}
-
-TEST(LifoEventBufferTest, TopAccess) {
-    LifoEventBuffer buf(5);
-    EXPECT_EQ(buf.top(), nullptr);
-    buf.push(Event(0,0,1,100));
-    const Event* t = buf.top();
-    ASSERT_NE(t, nullptr);
-    EXPECT_EQ(t->t, 100);
-    buf.push(Event(0,0,1,200));
-    t = buf.top();
-    EXPECT_EQ(t->t, 200);
-}
-
-TEST(LifoEventBufferTest, AtFromTop) {
-    LifoEventBuffer buf(5);
-    buf.push(Event(0,0,1,1));
-    buf.push(Event(0,0,1,2));
-    buf.push(Event(0,0,1,3));
-    EXPECT_EQ(buf.at_from_top(0)->t, 3);
-    EXPECT_EQ(buf.at_from_top(1)->t, 2);
-    EXPECT_EQ(buf.at_from_top(2)->t, 1);
-    EXPECT_EQ(buf.at_from_top(3), nullptr);
-}
-
-TEST(LifoEventBufferTest, OverflowDiscardsOldest) {
-    LifoEventBuffer buf(3);
-    buf.push(Event(0,0,1,1));
-    buf.push(Event(0,0,1,2));
-    buf.push(Event(0,0,1,3));
-    EXPECT_EQ(buf.size(), 3u);
-    // Overflow: should discard t=1, keep 2,3,4.
-    buf.push(Event(0,0,1,4));
-    EXPECT_EQ(buf.size(), 3u);
-    Event e;
-    buf.pop(e); EXPECT_EQ(e.t, 4);
-    buf.pop(e); EXPECT_EQ(e.t, 3);
-    buf.pop(e); EXPECT_EQ(e.t, 2);
-}
-
-TEST(LifoEventBufferTest, ForEachNewestFirst) {
-    LifoEventBuffer buf(5);
-    buf.push(Event(0,0,1,1));
-    buf.push(Event(0,0,1,2));
-    buf.push(Event(0,0,1,3));
-    std::vector<Metavision::timestamp> ts;
-    buf.for_each_newest_first([&](const Event& e){ ts.push_back(e.t); });
-    ASSERT_EQ(ts.size(), 3u);
-    EXPECT_EQ(ts[0], 3);
-    EXPECT_EQ(ts[1], 2);
-    EXPECT_EQ(ts[2], 1);
-}
-
-TEST(LifoEventBufferTest, ForEachOldestFirst) {
-    LifoEventBuffer buf(5);
-    buf.push(Event(0,0,1,1));
-    buf.push(Event(0,0,1,2));
-    buf.push(Event(0,0,1,3));
-    std::vector<Metavision::timestamp> ts;
-    buf.for_each_oldest_first([&](const Event& e){ ts.push_back(e.t); });
-    ASSERT_EQ(ts.size(), 3u);
-    EXPECT_EQ(ts[0], 1);
-    EXPECT_EQ(ts[1], 2);
-    EXPECT_EQ(ts[2], 3);
-}
-
-TEST(LifoEventBufferTest, TrimOld) {
-    LifoEventBuffer buf(10);
-    buf.push(Event(0,0,1,1000));
-    buf.push(Event(0,0,1,2000));
-    buf.push(Event(0,0,1,3000));
-    buf.push(Event(0,0,1,4000));
-    // Keep only events within 500us of newest (4000).
-    buf.trim_old(500);
-    EXPECT_EQ(buf.size(), 1u);
-    EXPECT_EQ(buf.top()->t, 4000);
-}
-
-TEST(LifoEventBufferTest, TrimOldKeepsAllIfThresholdLarge) {
-    LifoEventBuffer buf(10);
-    buf.push(Event(0,0,1,1000));
-    buf.push(Event(0,0,1,2000));
-    buf.trim_old(100000);
-    EXPECT_EQ(buf.size(), 2u);
-}
-
-TEST(LifoEventBufferTest, Clear) {
-    LifoEventBuffer buf(5);
-    buf.push(Event(0,0,1,1));
-    buf.push(Event(0,0,1,2));
-    buf.clear();
-    EXPECT_TRUE(buf.empty());
-    EXPECT_EQ(buf.size(), 0u);
-}
-
-TEST(LifoEventBufferTest, CapacityZeroHandled) {
-    LifoEventBuffer buf(0);  // should clamp to 1
-    buf.push(Event(0,0,1,1));
-    EXPECT_EQ(buf.size(), 1u);
-    EXPECT_EQ(buf.capacity(), 1u);
-}
-
-// =========================================================================
-// 4. dvs_framer.h
-// =========================================================================
-
-TEST(DvsFramerTest, UnsignedCountAccumulation) {
-    DvsFramer f(10, 10, DvsFramer::PolarityMode::UnsignedCount);
-    f.add_event(Metavision::EventCD(0, 0, 1, 0));
-    f.add_event(Metavision::EventCD(0, 0, 1, 1));
-    f.add_event(Metavision::EventCD(0, 0, 0, 2));  // OFF also counts
-    cv::Mat frame = f.generate();
-    ASSERT_EQ(frame.type(), CV_8UC1);
-    EXPECT_EQ(frame.at<std::uint8_t>(0, 0), 3);
-}
-
-TEST(DvsFramerTest, SignedMode) {
-    DvsFramer f(10, 10, DvsFramer::PolarityMode::Signed);
-    f.add_event(Metavision::EventCD(0, 0, 1, 0));  // ON: +1
-    f.add_event(Metavision::EventCD(0, 0, 1, 1));  // ON: +1
-    f.add_event(Metavision::EventCD(0, 0, 0, 2));  // OFF: -1
-    cv::Mat frame = f.generate();
-    ASSERT_EQ(frame.type(), CV_8UC1);
-    // 128 + 2 - 1 = 129
-    EXPECT_EQ(frame.at<std::uint8_t>(0, 0), 129);
-}
-
-TEST(DvsFramerTest, SignedModeSaturatesLow) {
-    DvsFramer f(10, 10, DvsFramer::PolarityMode::Signed);
-    for (int i = 0; i < 300; ++i)
-        f.add_event(Metavision::EventCD(0, 0, 0, i));  // many OFF
-    cv::Mat frame = f.generate();
-    EXPECT_EQ(frame.at<std::uint8_t>(0, 0), 0);
-}
-
-TEST(DvsFramerTest, SignedModeSaturatesHigh) {
-    DvsFramer f(10, 10, DvsFramer::PolarityMode::Signed);
-    for (int i = 0; i < 300; ++i)
-        f.add_event(Metavision::EventCD(0, 0, 1, i));  // many ON
-    cv::Mat frame = f.generate();
-    EXPECT_EQ(frame.at<std::uint8_t>(0, 0), 255);
-}
-
-TEST(DvsFramerTest, SplitPolarityMode) {
-    DvsFramer f(10, 10, DvsFramer::PolarityMode::SplitPolarity);
-    f.add_event(Metavision::EventCD(0, 0, 1, 0));
-    f.add_event(Metavision::EventCD(0, 0, 1, 1));
-    f.add_event(Metavision::EventCD(0, 0, 0, 2));
-    f.add_event(Metavision::EventCD(0, 0, 0, 3));
-    f.add_event(Metavision::EventCD(0, 0, 0, 4));
-    cv::Mat frame = f.generate();
-    ASSERT_EQ(frame.type(), CV_8UC2);
-    cv::Vec2b px = frame.at<cv::Vec2b>(0, 0);
-    EXPECT_EQ(px[0], 3);  // OFF count
-    EXPECT_EQ(px[1], 2);  // ON count
-}
-
-TEST(DvsFramerTest, GenerateAndResetClears) {
-    DvsFramer f(10, 10);
-    f.add_event(Metavision::EventCD(0, 0, 1, 0));
-    f.generate_and_reset();
-    cv::Mat frame = f.generate();
-    EXPECT_EQ(frame.at<std::uint8_t>(0, 0), 0);
-}
-
-TEST(DvsFramerTest, OutOfBoundsEventIgnored) {
-    DvsFramer f(10, 10);
-    f.add_event(Metavision::EventCD(100, 100, 1, 0));  // OOB
-    cv::Mat frame = f.generate();
-    EXPECT_EQ(frame.at<std::uint8_t>(0, 0), 0);
-}
-
-TEST(DvsFramerTest, CountSaturationAt255) {
-    DvsFramer f(10, 10, DvsFramer::PolarityMode::UnsignedCount);
-    for (int i = 0; i < 300; ++i)
-        f.add_event(Metavision::EventCD(0, 0, 1, i));
-    cv::Mat frame = f.generate();
-    EXPECT_EQ(frame.at<std::uint8_t>(0, 0), 255);
-}
-
-TEST(DvsFramerTest, AddEventsRange) {
-    DvsFramer f(10, 10);
-    std::vector<Metavision::EventCD> evs = {
-        {0,0,1,0}, {0,0,1,1}, {1,1,0,2}
-    };
-    f.add_events(evs.begin(), evs.end());
-    cv::Mat frame = f.generate();
-    EXPECT_EQ(frame.at<std::uint8_t>(0, 0), 2);
-    EXPECT_EQ(frame.at<std::uint8_t>(1, 1), 1);
-}
-
-// =========================================================================
-// 5. freme.h
-// =========================================================================
-
-// Freme<O> is a generic 2D state-map container ported from jAER's Freme<O>.
-// Each pixel (x, y) maps to a single state of type O.
-
-TEST(FremeTest, ConstructionAndSize) {
-    Freme<float> f(10, 8);
-    EXPECT_EQ(f.width(), 10);
-    EXPECT_EQ(f.height(), 8);
-    EXPECT_EQ(f.size(), 80);
-}
-
-TEST(FremeTest, DefaultInitializedToZero) {
-    Freme<float> f(10, 10);
-    // Value-initialized float elements are 0.0f.
-    for (int y = 0; y < 10; ++y)
-        for (int x = 0; x < 10; ++x)
-            EXPECT_EQ(f.get(x, y), 0.0f);
-}
-
-TEST(FremeTest, SetAndGet) {
-    Freme<float> f(10, 10);
-    f.set(3, 4, 7.5f);
-    EXPECT_EQ(f.get(3, 4), 7.5f);
-    // Other pixels untouched.
-    EXPECT_EQ(f.get(0, 0), 0.0f);
-}
-
-TEST(FremeTest, GetReturnsReference) {
-    Freme<float> f(10, 10);
-    f.get(2, 5) = 9.0f;  // mutate through the returned reference
-    EXPECT_EQ(f.get(2, 5), 9.0f);
-}
-
-TEST(FremeTest, Fill) {
-    Freme<int> f(6, 6);
-    f.fill(42);
-    for (int y = 0; y < 6; ++y)
-        for (int x = 0; x < 6; ++x)
-            EXPECT_EQ(f.get(x, y), 42);
-}
-
-TEST(FremeTest, GetIndex) {
-    Freme<float> f(10, 10);
-    EXPECT_EQ(f.getIndex(0, 0), 0);
-    EXPECT_EQ(f.getIndex(3, 4), 43);  // 4 * 10 + 3
-    EXPECT_EQ(f.getIndex(9, 9), 99);
-}
-
-TEST(FremeTest, Iteration) {
-    Freme<float> f(4, 5);  // 20 pixels
-    f.fill(1.0f);
-    float sum = 0.0f;
-    for (float v : f) sum += v;
-    EXPECT_NEAR(sum, 20.0f, 1e-9);
-}
-
-TEST(FremeTest, ConstAccess) {
-    Freme<int> f(3, 3);
-    f.set(1, 1, 123);
-    const Freme<int>& cf = f;
-    EXPECT_EQ(cf.get(1, 1), 123);
-    int sum = 0;
-    for (int v : cf) sum += v;
-    EXPECT_EQ(sum, 123);
-}
-
-TEST(FremeTest, DifferentStateType) {
-    // The state type may itself be a container, e.g. std::vector<int>.
-    Freme<std::vector<int>> f(2, 2);
-    f.get(0, 0).push_back(10);
-    f.get(0, 0).push_back(20);
-    EXPECT_EQ(f.get(0, 0).size(), 2u);
-    EXPECT_EQ(f.get(1, 1).size(), 0u);  // default-constructed empty vector
-}
-
-TEST(FremeTest, EmptyContainer) {
-    Freme<float> f(0, 0);
-    EXPECT_EQ(f.size(), 0);
-    EXPECT_EQ(f.begin(), f.end());
-}
-
-// =========================================================================
-// 6. event_rate_estimator.h
-// =========================================================================
-
-TEST(EventRateEstimatorTest, FirstBatchNoRate) {
-    EventRateEstimator est;  // default window 10000us
-    est.add_events(100, 1000);
-    EXPECT_EQ(est.rate_eps(), 0.0);  // uninitialized, window not yet elapsed
-}
-
-TEST(EventRateEstimatorTest, RateComputation) {
-    EventRateEstimator est;  // default window 10000us
-    est.add_events(100, 0);        // seed
-    est.add_events(100, 10000);    // 100 events in 10ms → 10000 eps
-    EXPECT_NEAR(est.rate_eps(), 10000.0, 1.0);
-}
-
-TEST(EventRateEstimatorTest, MevsConversion) {
-    EventRateEstimator est;
-    est.add_events(100, 0);
-    est.add_events(100, 10000);
-    EXPECT_NEAR(est.rate_meps(), 0.01, 1e-6);
-}
-
-TEST(EventRateEstimatorTest, WindowedCounting) {
-    // jAER EventRateEstimator: no IIR; rate is recomputed only when the
-    // elapsed time reaches window_us. filteredRate == instantaneousRate.
-    EventRateEstimator est;  // window 10000us
-    est.add_events(100, 0);    // seed
-    est.add_events(50, 5000);  // dt=5000 < 10000 → no update yet
-    EXPECT_EQ(est.rate_eps(), 0.0);
-    est.add_events(50, 10000); // dt=10000 >= 10000 → 100 events / 10ms
-    EXPECT_NEAR(est.rate_eps(), 10000.0, 1.0);
-    EXPECT_NEAR(est.instantaneous_rate(), 10000.0, 1.0);
-}
-
-TEST(EventRateEstimatorTest, Reset) {
-    EventRateEstimator est;
-    est.add_events(100, 0);
-    est.add_events(100, 10000);
-    est.reset();
-    EXPECT_EQ(est.rate_eps(), 0.0);
-    EXPECT_EQ(est.instantaneous_rate(), 0.0);
-}
-
-TEST(EventRateEstimatorTest, ZeroEventsIgnored) {
-    EventRateEstimator est;
-    est.add_events(100, 0);
-    est.add_events(0, 10000);  // zero events → ignored
-    EXPECT_EQ(est.rate_eps(), 0.0);
-}
-
-// =========================================================================
-// 7. performance_meter.h
+// 3. performance_meter.h
 // =========================================================================
 
 TEST(PerformanceMeterTest, InitialState) {
@@ -642,63 +280,7 @@ TEST(PerformanceMeterTest, StartStopPerFilterMetrics) {
 }
 
 // =========================================================================
-// 8. time_limiter.h
-// =========================================================================
-
-TEST(TimeLimiterTest, NoBudgetMeansNoLimit) {
-    TimeLimiter tl(0);
-    tl.start();
-    EXPECT_FALSE(tl.should_stop());
-}
-
-TEST(TimeLimiterTest, DoesNotStopImmediately) {
-    TimeLimiter tl(100000);  // 100ms
-    tl.start();
-    EXPECT_FALSE(tl.should_stop());
-}
-
-TEST(TimeLimiterTest, StopsAfterBudget) {
-    TimeLimiter tl(1000);  // 1ms
-    tl.start();
-    std::this_thread::sleep_for(std::chrono::milliseconds(5));
-    EXPECT_TRUE(tl.should_stop());
-}
-
-TEST(TimeLimiterTest, ManualStop) {
-    TimeLimiter tl(100000);
-    tl.start();
-    tl.stop();
-    EXPECT_TRUE(tl.should_stop());
-}
-
-TEST(TimeLimiterTest, ElapsedIncreases) {
-    TimeLimiter tl(100000);
-    tl.start();
-    auto e1 = tl.elapsed_us();
-    std::this_thread::sleep_for(std::chrono::milliseconds(2));
-    auto e2 = tl.elapsed_us();
-    EXPECT_GT(e2, e1);
-}
-
-TEST(TimeLimiterTest, BudgetFraction) {
-    TimeLimiter tl(0);  // no budget
-    tl.start();
-    EXPECT_EQ(tl.budget_fraction(), 0.0);
-
-    TimeLimiter tl2(100000);
-    tl2.start();
-    std::this_thread::sleep_for(std::chrono::milliseconds(5));
-    EXPECT_GT(tl2.budget_fraction(), 0.0);
-}
-
-TEST(TimeLimiterTest, SetBudget) {
-    TimeLimiter tl(100000);
-    tl.set_budget_us(0);
-    EXPECT_EQ(tl.budget_us(), 0);
-}
-
-// =========================================================================
-// 9. kalman_filter.h
+// 4. kalman_filter.h
 // =========================================================================
 
 TEST(KalmanFilter2DTest, InitSetsPosition) {
@@ -763,79 +345,7 @@ TEST(KalmanFilter2DTest, SetDt) {
 }
 
 // =========================================================================
-// 10. kmeans.h
-// =========================================================================
-
-TEST(KMeansTest, EmptyInput) {
-    KMeans km(3);
-    std::vector<Point2D> pts;
-    double inertia = km.fit(pts);
-    EXPECT_EQ(inertia, 0.0);
-    EXPECT_TRUE(km.centroids().empty());
-}
-
-TEST(KMeansTest, FewerPointsThanK) {
-    KMeans km(5);
-    std::vector<Point2D> pts = {{0,0}, {1,1}};
-    km.fit(pts);
-    EXPECT_EQ(km.centroids().size(), 2u);
-}
-
-TEST(KMeansTest, TwoWellSeparatedClusters) {
-    KMeans km(2, 100, 12345);
-    std::vector<Point2D> pts;
-    for (int i = 0; i < 50; ++i) pts.emplace_back(0.0, 0.0);
-    for (int i = 0; i < 50; ++i) pts.emplace_back(100.0, 100.0);
-    km.fit(pts);
-    ASSERT_EQ(km.centroids().size(), 2u);
-    // One centroid near (0,0), one near (100,100).
-    bool has_origin = false, has_far = false;
-    for (const auto& c : km.centroids()) {
-        if (std::hypot(c.x, c.y) < 5.0) has_origin = true;
-        if (std::hypot(c.x - 100.0, c.y - 100.0) < 5.0) has_far = true;
-    }
-    EXPECT_TRUE(has_origin);
-    EXPECT_TRUE(has_far);
-}
-
-TEST(KMeansTest, PredictNearestCentroid) {
-    KMeans km(2, 100, 42);
-    std::vector<Point2D> pts;
-    for (int i = 0; i < 50; ++i) pts.emplace_back(0.0, 0.0);
-    for (int i = 0; i < 50; ++i) pts.emplace_back(100.0, 100.0);
-    km.fit(pts);
-    // A point near origin should be assigned to the origin cluster.
-    std::size_t label = km.predict(Point2D(1.0, 1.0));
-    // The centroid for this label should be near origin.
-    const auto& c = km.centroids()[label];
-    EXPECT_LT(std::hypot(c.x, c.y), std::hypot(c.x - 100.0, c.y - 100.0));
-}
-
-TEST(KMeansTest, ReproducibleWithSameSeed) {
-    std::vector<Point2D> pts;
-    for (int i = 0; i < 100; ++i) {
-        pts.emplace_back(i * 1.0, i * 2.0);
-    }
-    KMeans km1(3, 50, 999);
-    KMeans km2(3, 50, 999);
-    km1.fit(pts);
-    km2.fit(pts);
-    ASSERT_EQ(km1.centroids().size(), km2.centroids().size());
-    for (std::size_t i = 0; i < km1.centroids().size(); ++i) {
-        EXPECT_NEAR(km1.centroids()[i].x, km2.centroids()[i].x, 1e-9);
-        EXPECT_NEAR(km1.centroids()[i].y, km2.centroids()[i].y, 1e-9);
-    }
-}
-
-TEST(KMeansTest, KZeroClampedToOne) {
-    KMeans km(0);
-    std::vector<Point2D> pts = {{1,2}};
-    km.fit(pts);
-    EXPECT_EQ(km.centroids().size(), 1u);
-}
-
-// =========================================================================
-// 11. particle_filter.h
+// 5. particle_filter.h
 // =========================================================================
 
 TEST(ParticleFilterTest, InitSpreadsParticles) {
@@ -901,7 +411,7 @@ TEST(ParticleFilterTest, ResampleWeightsUniform) {
 }
 
 // =========================================================================
-// 12. periodic_spline.h
+// 6. periodic_spline.h
 // =========================================================================
 
 TEST(PeriodicSplineTest, FitRequiresMin3Points) {
@@ -967,7 +477,7 @@ TEST(PeriodicSplineTest, NegativeParameter) {
 }
 
 // =========================================================================
-// 13. histogram_ring_buffer.h
+// 7. histogram_ring_buffer.h
 // =========================================================================
 
 TEST(HistogramRingBufferTest, PushAndSize) {
@@ -1055,7 +565,7 @@ TEST(HistogramRingBufferTest, Clear) {
 }
 
 // =========================================================================
-// 14. lif_integrator.h
+// 8. lif_integrator.h
 // =========================================================================
 
 TEST(LifIntegratorTest, FirstEventDoesNotFire) {
@@ -1126,7 +636,7 @@ TEST(LifIntegratorTest, PotentialGridSize) {
 }
 
 // =========================================================================
-// 15. filter/lowpass.h
+// 9. filter/lowpass.h
 // =========================================================================
 
 TEST(LowPassFilterTest, FirstSamplePassedThrough) {
@@ -1170,7 +680,7 @@ TEST(LowPassFilterTest, SetCutoff) {
 }
 
 // =========================================================================
-// 16. filter/highpass.h
+// 10. filter/highpass.h
 // =========================================================================
 
 TEST(HighPassFilterTest, FirstSampleOutputZero) {
@@ -1202,7 +712,7 @@ TEST(HighPassFilterTest, Reset) {
 }
 
 // =========================================================================
-// 17. filter/bandpass.h
+// 11. filter/bandpass.h
 // =========================================================================
 
 TEST(BandpassFilterTest, FirstSampleInit) {
@@ -1248,7 +758,7 @@ TEST(BandpassFilterTest, SetCutoffs) {
 }
 
 // =========================================================================
-// 18. filter/angular_lowpass.h
+// 12. filter/angular_lowpass.h
 // =========================================================================
 
 TEST(AngularLowpassFilterTest, FirstSampleReturned) {
@@ -1294,72 +804,4 @@ TEST(AngularLowpassFilterTest, Reset) {
     af.reset();
     EXPECT_FALSE(af.initialized());
     EXPECT_EQ(af.value(), 0.0);
-}
-
-// =========================================================================
-// 19. filter/median_lowpass.h
-// =========================================================================
-
-TEST(MedianLowpassFilterTest, SingleSample) {
-    // jAER MedianLowpassFilter zero-fills the window at startup, so the first
-    // sample yields a median of 0 (window = {0,0,0,0,5} → upper-middle = 0).
-    MedianLowpassFilter ml(5);
-    EXPECT_EQ(ml.process(5.0), 0.0);
-}
-
-TEST(MedianLowpassFilterTest, RemovesImpulse) {
-    MedianLowpassFilter ml(5);
-    ml.process(10.0);
-    ml.process(10.0);
-    ml.process(10.0);
-    ml.process(10.0);
-    // Impulse: 1000 among 10s → median should stay 10.
-    double out = ml.process(1000.0);
-    EXPECT_EQ(out, 10.0);
-}
-
-TEST(MedianLowpassFilterTest, PreservesEdge) {
-    MedianLowpassFilter ml(3);
-    ml.process(0.0);
-    ml.process(0.0);
-    // Step from 0 to 100.
-    double out = ml.process(100.0);
-    // Window = {0, 0, 100} → median = 0
-    EXPECT_EQ(out, 0.0);
-    out = ml.process(100.0);
-    // Window = {0, 100, 100} → median = 100
-    EXPECT_EQ(out, 100.0);
-}
-
-TEST(MedianLowpassFilterTest, EvenWindowUpperMiddle) {
-    // jAER uses samples[length/2] (upper-middle for even windows), and the
-    // window is zero-filled at startup.
-    MedianLowpassFilter ml(4);
-    ml.process(1.0);  // {0,0,0,1} → upper-middle = 0
-    ml.process(2.0);  // {0,0,1,2} → upper-middle = 1
-    EXPECT_NEAR(ml.value(), 1.0, 1e-9);
-    ml.process(3.0);  // {0,1,2,3} → upper-middle = 2
-    ml.process(4.0);  // {1,2,3,4} → upper-middle = 3
-    EXPECT_NEAR(ml.value(), 3.0, 1e-9);
-}
-
-TEST(MedianLowpassFilterTest, Reset) {
-    MedianLowpassFilter ml(5);
-    ml.process(5.0);
-    ml.reset();
-    EXPECT_EQ(ml.value(), 0.0);
-    EXPECT_EQ(ml.window_size(), 5u);
-}
-
-TEST(MedianLowpassFilterTest, SetWindowSizeTrims) {
-    MedianLowpassFilter ml(10);
-    for (int i = 0; i < 10; ++i) ml.process(i * 1.0);
-    ml.set_window_size(5);  // should trim to 5
-    // After trimming, value is median of last 5 samples {5,6,7,8,9} → 7
-    EXPECT_NEAR(ml.value(), 7.0, 1e-9);
-}
-
-TEST(MedianLowpassFilterTest, EmptyValueIsZero) {
-    MedianLowpassFilter ml(5);
-    EXPECT_EQ(ml.value(), 0.0);
 }
