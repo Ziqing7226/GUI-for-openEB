@@ -716,8 +716,8 @@ void MainWindow::wire_signals() {
         // DisplayPanel and PlaybackControls reflect the actual fps /
         // accumulation / fps_limit after a reconnect or file reopen.
         if (auto* fp = camera_.frame_pipeline()) {
-            settings_->display_panel()->set_accumulation_time_ms(
-                fp->accumulation_time_us() / 1000.0);
+            settings_->display_panel()->set_accumulation_time_us(
+                fp->accumulation_time_us());
             settings_->display_panel()->set_fps(fp->fps());
             settings_->display_panel()->set_fps_limit(fp->fps_limit());
             playback_controls_->on_time_window_changed(fp->accumulation_time_us());
@@ -836,20 +836,6 @@ void MainWindow::wire_signals() {
     // Display panel -> FramePipeline (single source of truth for display params)
     connect(settings_->display_panel(), &DisplayPanel::color_palette_changed, this,
             &MainWindow::update_palettes);
-    connect(settings_->display_panel(), &DisplayPanel::frame_mode_changed, this,
-            [this](int idx) {
-                // Frame modes map to accumulation-time presets (the underlying
-                // CDFrameGenerator only supports accumulation rendering).
-                // 0: Diff Frame (10 ms), 1: Integration (50 ms), 2: Time Decay (30 ms).
-                const int us[] = {10000, 50000, 30000};
-                const int accumulation = (idx >= 0 && idx < 3) ? us[idx] : 10000;
-                camera_.frame_pipeline()->set_accumulation_time_us(accumulation);
-                // No need to manually sync the DisplayPanel — the
-                // accumulation_time_changed signal from FramePipeline updates
-                // both the DisplayPanel and PlaybackControls automatically.
-                statusBar()->showMessage(
-                    tr("Frame mode %1 (accumulation %2 us)").arg(idx).arg(accumulation), 3000);
-            });
     connect(settings_->display_panel(), &DisplayPanel::accumulation_time_changed_us,
             this, [this](int us) {
                 camera_.frame_pipeline()->set_accumulation_time_us(us);
@@ -871,7 +857,7 @@ void MainWindow::wire_signals() {
         connect(fp, &FramePipeline::accumulation_time_changed, this,
                 [this](Metavision::timestamp us) {
                     if (settings_ && settings_->display_panel())
-                        settings_->display_panel()->set_accumulation_time_ms(us / 1000.0);
+                        settings_->display_panel()->set_accumulation_time_us(static_cast<int>(us));
                     if (playback_controls_)
                         playback_controls_->on_time_window_changed(us);
                 });

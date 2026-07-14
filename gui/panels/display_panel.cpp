@@ -3,13 +3,38 @@
 #include "display_panel.h"
 
 #include <QComboBox>
-#include <QDoubleSpinBox>
 #include <QFormLayout>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QSignalBlocker>
 #include <QSlider>
 #include <QSpinBox>
+
+#include <cmath>
+
+namespace {
+// Exponential slider mapping: slider position [0, 1000] → us [10, 100000].
+// The mapping is value = 10 * 10000^(pos/1000), so the slider midpoint (500)
+// yields 1000 us. This gives fine granularity at low values (10-1000 us
+// occupies half the slider) while still reaching 100000 us at the top.
+constexpr double kSliderMinUs  = 10.0;
+constexpr double kSliderMaxUs  = 100000.0;
+constexpr int    kSliderSteps  = 1000;
+
+int slider_pos_to_us(int pos) {
+    const double t = static_cast<double>(pos) / kSliderSteps;
+    return static_cast<int>(std::round(
+        kSliderMinUs * std::pow(kSliderMaxUs / kSliderMinUs, t)));
+}
+
+int us_to_slider_pos(int us) {
+    if (us <= static_cast<int>(kSliderMinUs)) return 0;
+    if (us >= static_cast<int>(kSliderMaxUs)) return kSliderSteps;
+    const double t = std::log(static_cast<double>(us) / kSliderMinUs) /
+                     std::log(kSliderMaxUs / kSliderMinUs);
+    return static_cast<int>(std::round(t * kSliderSteps));
+}
+} // namespace
 
 namespace gui {
 
@@ -18,18 +43,21 @@ DisplayPanel::DisplayPanel(QWidget* parent) : AbstractPanel(parent) {
     form->setContentsMargins(8, 8, 8, 8);
     form->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
 
-    // Accumulation time: 1.0 - 1000.0 ms (design default 33.3 ms).
+    // Accumulation time: spinbox 1-1000000 us, slider uses exponential
+    // mapping [0, 1000] → [10, 100000] us for fine low-end control.
+    // Default 33000 us. The spinbox allows precise values outside the
+    // slider's mapped range; QSlider clamps silently (no feedback).
     auto* accum_row = new QWidget(this);
     auto* accum_layout = new QHBoxLayout(accum_row);
     accum_layout->setContentsMargins(0, 0, 0, 0);
     accum_slider_ = new QSlider(Qt::Horizontal, accum_row);
-    accum_slider_->setRange(10, 10000); // 1.0 - 1000.0 ms in 0.1 ms steps
-    accum_slider_->setValue(330);       // 33.0 ms
-    accum_spin_ = new QDoubleSpinBox(accum_row);
-    accum_spin_->setRange(1.0, 1000.0);
-    accum_spin_->setSingleStep(0.1);
-    accum_spin_->setSuffix(" ms");
-    accum_spin_->setValue(33.0);
+    accum_slider_->setRange(0, kSliderSteps);
+    accum_slider_->setValue(us_to_slider_pos(33000));
+    accum_spin_ = new QSpinBox(accum_row);
+    accum_spin_->setRange(1, 1000000);
+    accum_spin_->setSingleStep(100);
+    accum_spin_->setSuffix(" us");
+    accum_spin_->setValue(33000);
     accum_layout->addWidget(accum_slider_, 1);
     accum_layout->addWidget(accum_spin_, 0);
     form->addRow(tr("Accumulation"), accum_row);
@@ -57,25 +85,16 @@ DisplayPanel::DisplayPanel(QWidget* parent) : AbstractPanel(parent) {
     palette_combo_->addItem(tr("Gray"), 3);
     form->addRow(tr("Color theme"), palette_combo_);
 
-    mode_combo_ = new QComboBox(this);
-    mode_combo_->addItem(tr("Diff Frame"));
-    mode_combo_->addItem(tr("Integration"));
-    mode_combo_->addItem(tr("Time Decay"));
-    mode_combo_->setToolTip(tr("Selects event accumulation mode."));
-    form->addRow(tr("Frame mode"), mode_combo_);
-    connect(mode_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, &DisplayPanel::frame_mode_changed);
-
-    // Wire slider <-> spinbox.
+    // Wire slider <-> spinbox (both integer us).
     connect(accum_slider_, &QSlider::valueChanged, this,
-            [this](int v) { accum_spin_->setValue(v / 10.0); });
-    connect(accum_spin_, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this,
-            [this](double v) {
+            [this](int v) { accum_spin_->setValue(v); });
+    connect(accum_spin_, QOverload<int>::of(&QSpinBox::valueChanged), this,
+            [this](int v) {
                 QSignalBlocker b(accum_slider_);
-                accum_slider_->setValue(static_cast<int>(v * 10));
+                accum_slider_->setValue(v);
             });
-    connect(accum_spin_, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this,
-            [this](double v) { emit accumulation_time_changed_us(static_cast<int>(v * 1000)); });
+    connect(accum_spin_, QOverload<int>::of(&QSpinBox::valueChanged), this,
+            [this](int v) { emit accumulation_time_changed_us(v); });
 
     // FPS spinbox -> signal.
     connect(fps_spin_, QOverload<int>::of(&QSpinBox::valueChanged), this,
@@ -97,15 +116,11 @@ DisplayPanel::DisplayPanel(QWidget* parent) : AbstractPanel(parent) {
 }
 
 int DisplayPanel::accumulation_time_us() const {
-    return static_cast<int>(accum_spin_->value() * 1000.0);
+    return accum_spin_->value();
 }
 
 int DisplayPanel::color_palette_index() const {
     return palette_combo_->currentIndex();
-}
-
-int DisplayPanel::frame_mode_index() const {
-    return mode_combo_->currentIndex();
 }
 
 int DisplayPanel::fps() const {
@@ -116,17 +131,11 @@ int DisplayPanel::fps_limit() const {
     return fps_limit_spin_->value();
 }
 
-void DisplayPanel::set_frame_mode(int index) {
-    if (index >= 0 && index < mode_combo_->count()) {
-        mode_combo_->setCurrentIndex(index);
-    }
-}
-
-void DisplayPanel::set_accumulation_time_ms(double ms) {
+void DisplayPanel::set_accumulation_time_us(int us) {
     QSignalBlocker bs(accum_slider_);
     QSignalBlocker bp(accum_spin_);
-    accum_spin_->setValue(ms);
-    accum_slider_->setValue(static_cast<int>(ms * 10));
+    accum_spin_->setValue(us);
+    accum_slider_->setValue(us_to_slider_pos(us));
 }
 
 void DisplayPanel::set_fps(int fps) {

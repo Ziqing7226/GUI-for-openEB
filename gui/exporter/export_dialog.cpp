@@ -5,7 +5,6 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDialogButtonBox>
-#include <QDoubleSpinBox>
 #include <QFileDialog>
 #include <QFormLayout>
 #include <QHBoxLayout>
@@ -52,10 +51,11 @@ ExportDialog::ExportDialog(ExporterController* controller, QWidget* parent)
     spn_fps_->setValue(30);
     form->addRow(tr("FPS (AVI):"), spn_fps_);
 
-    spn_accum_ = new QDoubleSpinBox(this);
-    spn_accum_->setRange(1.0, 1000.0);
-    spn_accum_->setValue(33.0);
-    spn_accum_->setSuffix(" ms");
+    spn_accum_ = new QSpinBox(this);
+    spn_accum_->setRange(1, 1000000);
+    spn_accum_->setSingleStep(100);
+    spn_accum_->setValue(33000);
+    spn_accum_->setSuffix(" us");
     form->addRow(tr("Accumulation (AVI):"), spn_accum_);
 
     spn_quality_ = new QSpinBox(this);
@@ -147,7 +147,7 @@ void ExportDialog::on_start() {
     p.output_path = edt_output_->text();
     p.format = static_cast<ExportParams::Format>(cmb_format_->currentData().toInt());
     p.fps = spn_fps_->value();
-    p.accumulation_ms = spn_accum_->value();
+    p.accumulation_us = spn_accum_->value();
     p.quality = spn_quality_->value();
     p.color = chk_color_->isChecked();
     progress_->setValue(0);

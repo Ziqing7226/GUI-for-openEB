@@ -43,7 +43,14 @@ std::vector<std::pair<QString, QString>> CameraController::list_online_sources()
 bool CameraController::connect_first_available() {
     teardown();
     try {
-        auto cam = Metavision::Camera::from_first_available();
+        // Use from_serial("") instead of from_first_available(). The latter
+        // internally calls Camera::list_online_sources() (full local + remote
+        // scan) to locate a camera — redundant with the list already shown in
+        // the Devices panel. from_serial("") delegates to
+        // DeviceDiscovery::open("") which opens the first available *local*
+        // camera directly, skipping both the redundant scan and the slow
+        // remote discovery.
+        auto cam = Metavision::Camera::from_serial(std::string());
         setup_camera(std::move(cam), false);
         return true;
     } catch (const Metavision::CameraException& e) {
