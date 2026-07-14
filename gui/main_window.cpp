@@ -724,6 +724,17 @@ void MainWindow::wire_signals() {
             playback_controls_->on_frame_rate_changed(fp->fps());
             playback_controls_->on_fps_limit_changed(fp->fps_limit());
         }
+        // Explicitly refresh facility-dependent panels AFTER camera_.start().
+        // The AbstractPanel::bind_camera signal fires on_camera_connected
+        // BEFORE start() completes, so HAL facilities (biases, ROI, trigger,
+        // ESP) may not be fully available at that point. Calling again here
+        // ensures panels see the live camera's facilities — matching the
+        // pattern used by on_load_config / on_apply_preset. Safe to call
+        // twice: each panel's populate() clears and rebuilds.
+        settings_->biases_panel()->on_camera_connected(&camera_);
+        settings_->roi_panel()->on_camera_connected(&camera_);
+        settings_->esp_panel()->on_camera_connected(&camera_);
+        settings_->trigger_panel()->on_camera_connected(&camera_);
     });
     connect(&camera_, &CameraController::disconnected, this, [this]() {
         // Explicitly remove the CD callback before clearing the ID, so the
@@ -814,6 +825,23 @@ void MainWindow::wire_signals() {
     // (CDFrameGenerator path) and the SDK CD callback feeds algorithms instead.
     connect(camera_.frame_pipeline(), &FramePipeline::events_window_ready,
             this, &MainWindow::on_events_window_ready);
+
+    // File loop: reset all algorithm instances when the cursor wraps to 0.
+    // Stateful algorithms (time_surface current_t_, E2VID log_intensity_,
+    // InteractingMaps I_map_, etc.) only increase their internal timestamps,
+    // so after a loop the new events (t≈0) are less than current_t_ and get
+    // ignored — the output freezes. Resetting clears this stale state so the
+    // second pass renders correctly. The XYT point cloud is also cleared to
+    // avoid mixing old and new timestamps on the Z axis.
+    connect(camera_.frame_pipeline(), &FramePipeline::file_looped,
+            this, [this]() {
+                for (auto& inst : algo_bridge_.list_live()) {
+                    inst->reset();
+                }
+                if (xyt_display_) {
+                    xyt_display_->clear();
+                }
+            });
 
     // Statistics controller -> panel + status bar
     connect(camera_.statistics(), &StatisticsController::rate_updated, this,

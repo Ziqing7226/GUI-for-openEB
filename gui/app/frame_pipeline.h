@@ -65,6 +65,12 @@ public:
     void set_fps_limit(std::uint16_t limit);
     void set_color_palette(Metavision::ColorPalette palette);
 
+    /// @brief Sets the FilterChain for file-mode display filtering. Applied
+    /// per-frame in FileFrameGenerator::render_frame() so flip/rotate/etc.
+    /// take effect immediately during file playback. Must be called before
+    /// start_file() to ensure the pointer is available when rendering begins.
+    void set_file_filter_chain(FilterChain* fc);
+
     // --- File playback control (file mode only) ---
 
     void play_file();
@@ -89,6 +95,10 @@ signals:
     void file_position_changed(Metavision::timestamp pos, Metavision::timestamp dur);
     /// File mode: emitted when playback reaches the end of the buffer.
     void file_eof_reached();
+
+    /// File mode: emitted when the cursor wraps to 0 on loop. Algorithms
+    /// with temporal state must reset to avoid stale-state freezes.
+    void file_looped();
 
     /// File mode: emitted with the events in the current accumulation window
     /// [start, end) so algorithm instances can process them synchronously

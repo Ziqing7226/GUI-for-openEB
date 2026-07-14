@@ -278,7 +278,11 @@ void CameraController::setup_camera(Metavision::Camera&& cam, bool is_file) {
                 if (b != e) {
                     last_ts_.store((e - 1)->t, std::memory_order_relaxed);
                 }
-                if (filter_chain_.has_enabled()) {
+                // File mode: buffer RAW events — FilterChain is applied
+                // per-frame in FileFrameGenerator::render_frame() so that
+                // filter toggles take effect immediately during playback.
+                // Live mode: apply FilterChain here (CD callback) as before.
+                if (!is_file_ && filter_chain_.has_enabled()) {
                     std::vector<Metavision::EventCD> filtered;
                     filter_chain_.process(b, e, filtered);
                     if (!filtered.empty()) {
@@ -312,6 +316,7 @@ void CameraController::setup_camera(Metavision::Camera&& cam, bool is_file) {
     const std::uint16_t fps = frame_pipeline_.fps();
     const Metavision::timestamp acc = frame_pipeline_.accumulation_time_us();
     if (is_file) {
+        frame_pipeline_.set_file_filter_chain(&filter_chain_);
         if (!frame_pipeline_.start_file(w, h, fps, acc)) {
             emit runtime_warning(tr("Failed to start file frame pipeline."));
         }

@@ -14,6 +14,8 @@ FramePipeline::FramePipeline(QObject* parent) : QObject(parent) {
             this, &FramePipeline::file_position_changed);
     connect(&file_generator_, &FileFrameGenerator::eof_reached,
             this, &FramePipeline::file_eof_reached);
+    connect(&file_generator_, &FileFrameGenerator::looped,
+            this, &FramePipeline::file_looped);
     connect(&file_generator_, &FileFrameGenerator::events_window_ready,
             this, &FramePipeline::events_window_ready);
 }
@@ -167,6 +169,10 @@ void FramePipeline::set_color_palette(Metavision::ColorPalette palette) {
     // File mode: forward to FileFrameGenerator so render_frame() uses the
     // palette selected in DisplayPanel (matches CDFrameGenerator behavior).
     file_generator_.set_color_palette(palette);
+}
+
+void FramePipeline::set_file_filter_chain(FilterChain* fc) {
+    file_generator_.set_filter_chain(fc);
 }
 
 // --- File playback control ---

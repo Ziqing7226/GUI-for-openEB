@@ -181,7 +181,7 @@ void BiasesPanel::populate() {
         hl->setSpacing(6);
 
         auto* label = new QLabel(QString::fromStdString(name), row_widget);
-        label->setMinimumWidth(110);
+        label->setMinimumWidth(70);
         label->setToolTip(description.isEmpty()
                               ? tr("No description available.")
                               : description);
