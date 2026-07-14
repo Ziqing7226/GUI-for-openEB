@@ -348,6 +348,7 @@ void FilterChain::process(const Metavision::EventCD* begin,
     // Start from the input; if no stage is enabled, just copy.
     std::vector<Metavision::EventCD> cur(begin, end);
     std::vector<Metavision::EventCD> next;
+    next.reserve(cur.size());
     for (const auto& name : order_) {
         auto* s = stages_[name].get();
         if (!s || !s->enabled()) continue;

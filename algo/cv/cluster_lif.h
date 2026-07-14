@@ -131,7 +131,8 @@ public:
         //    inside/border grouping; we use the equivalent 4-CC).
         const std::size_t n = static_cast<std::size_t>(num_neurons_x_) *
                               num_neurons_y_;
-        std::vector<int> label(n, -1);
+        label_.assign(n, -1);
+        auto& label = label_;
         struct Comp {
             double sx{0.0};   // sum(centre_x * weight)
             double sy{0.0};   // sum(centre_y * weight)
@@ -430,6 +431,7 @@ private:
     Metavision::timestamp stale_us_;
     std::vector<uint8_t> fire_mask_;
     std::vector<int> fire_count_;
+    std::vector<int> label_;  // reused per-packet label buffer (OPT-27)
     std::vector<Track> tracks_;
     int next_track_id_{0};
 };

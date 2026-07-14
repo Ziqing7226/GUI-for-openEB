@@ -51,14 +51,15 @@ public:
 private:
     double median() const {
         if (window_.empty()) return 0.0;
-        std::vector<double> tmp(window_.begin(), window_.end());
-        std::sort(tmp.begin(), tmp.end());
+        sort_buf_.assign(window_.begin(), window_.end());
+        std::nth_element(sort_buf_.begin(), sort_buf_.begin() + sort_buf_.size() / 2, sort_buf_.end());
         // jAER uses samples[length/2] (upper-middle for even length).
-        return tmp[tmp.size() / 2];
+        return sort_buf_[sort_buf_.size() / 2];
     }
 
     std::size_t window_size_;
     std::deque<double> window_;
+    mutable std::vector<double> sort_buf_;
 };
 
 } // namespace gui_algo

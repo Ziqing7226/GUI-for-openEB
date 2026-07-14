@@ -39,7 +39,8 @@ public:
     /// @brief Filters a new sample and returns the smoothed output.
     double process(double x) {
         if (!init_) { y_ = x; init_ = true; return y_; }
-        const double a = use_alpha_ ? alpha_ : compute_alpha();
+        if (alpha_dirty_) { cached_alpha_ = use_alpha_ ? alpha_ : compute_alpha(); alpha_dirty_ = false; }
+        const double a = cached_alpha_;
         y_ = a * x + (1.0 - a) * y_;
         return y_;
     }
@@ -47,8 +48,8 @@ public:
     double value() const { return y_; }
     bool initialized() const { return init_; }
 
-    void set_cutoff_hz(double fc) { rc_ = 1.0 / (2.0 * M_PI * fc); use_alpha_ = false; }
-    void set_sample_dt(double dt) { dt_ = dt; use_alpha_ = false; }
+    void set_cutoff_hz(double fc) { rc_ = 1.0 / (2.0 * M_PI * fc); use_alpha_ = false; alpha_dirty_ = true; }
+    void set_sample_dt(double dt) { dt_ = dt; use_alpha_ = false; alpha_dirty_ = true; }
 
     void reset() { y_ = 0.0; init_ = false; }
 
@@ -64,6 +65,8 @@ private:
     bool use_alpha_{false};
     double y_;
     bool init_;
+    double cached_alpha_{0.0};
+    bool alpha_dirty_{true};
 };
 
 } // namespace gui_algo

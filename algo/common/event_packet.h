@@ -163,7 +163,7 @@ public:
     private:
         void advance_to_valid() {
             while (owner_ != nullptr && idx_ < owner_->size() &&
-                   owner_->is_filtered(idx_)) {
+                   owner_->is_filtered_unchecked(idx_)) {
                 ++idx_;
             }
         }
@@ -179,6 +179,10 @@ public:
     }
 
 private:
+    bool is_filtered_unchecked(std::size_t i) const {
+        return filtered_[i];
+    }
+
     EventPacket packet_;
     std::vector<bool> filtered_;
 };

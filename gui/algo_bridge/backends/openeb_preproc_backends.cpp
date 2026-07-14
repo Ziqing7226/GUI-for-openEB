@@ -133,14 +133,16 @@ public:
         double scale = (clip_ > 0) ? (255.0 / clip_) : 255.0;
         // Channel 0 = negative, channel 1 = positive (CHW: c-plane; HWC: interleaved).
         for (int y = 0; y < h_; ++y) {
+            cv::Vec3b* row = r.frame.ptr<cv::Vec3b>(y);
+            const int row_base = y * w_;
             for (int x = 0; x < w_; ++x) {
-                const int idx = y * w_ + x;
+                const int idx = row_base + x;
                 float neg, pos;
                 if (use_chw_) { neg = d[idx]; pos = d[idx + plane]; }
                 else { neg = d[idx * 2]; pos = d[idx * 2 + 1]; }
-                r.frame.at<cv::Vec3b>(y, x)[0] = static_cast<uint8_t>(
+                row[x][0] = static_cast<uint8_t>(
                     std::min(255.0, std::max(0.0, neg * scale)));
-                r.frame.at<cv::Vec3b>(y, x)[2] = static_cast<uint8_t>(
+                row[x][2] = static_cast<uint8_t>(
                     std::min(255.0, std::max(0.0, pos * scale)));
             }
         }
@@ -260,9 +262,12 @@ public:
         // Project the cube across channels into a single HxW plane.
         cv::Mat acc = cv::Mat::zeros(h_, w_, CV_32F);
         for (int ch = 0; ch < c; ++ch) {
+            const float* dch = d + ch * plane;
             for (int y = 0; y < h_; ++y) {
+                float* row = acc.ptr<float>(y);
+                const int row_base = y * w_;
                 for (int x = 0; x < w_; ++x) {
-                    acc.at<float>(y, x) += d[ch * plane + y * w_ + x];
+                    row[x] += dch[row_base + x];
                 }
             }
         }

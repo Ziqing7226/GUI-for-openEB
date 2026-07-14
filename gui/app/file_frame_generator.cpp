@@ -205,8 +205,9 @@ void FileFrameGenerator::render_frame(Metavision::timestamp start_us,
             const int w = static_cast<int>(width_);
             for (auto it = begin_it; it != end_it; ++it) {
                 if (it->x >= w || it->y >= h) continue;
-                frame_.at<cv::Vec3b>(static_cast<int>(it->y),
-                                     static_cast<int>(it->x)) = it->p ? on : off;
+                // ptr<>() avoids the per-pixel bounds check that at<>() does;
+                // bounds are already validated above.
+                frame_.ptr<cv::Vec3b>(static_cast<int>(it->y))[it->x] = it->p ? on : off;
             }
             window_events->assign(begin_it, end_it);
         }

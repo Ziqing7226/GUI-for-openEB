@@ -247,6 +247,10 @@ public:
         AlgoResult r;
         r.filtered_events = passthrough_;
         const auto& objs = algo_.objects();
+        r.boxes.reserve(objs.size());
+        r.lines.reserve(objs.size());
+        r.texts.reserve(objs.size());
+        r.trajectories.reserve(objs.size());
         for (const auto& o : objs) {
             if (!o.visible) continue;
             OverlayBox box;
@@ -420,12 +424,14 @@ public:
             cp.y = f.y;
             // Direction -> hue (atan2 returns -pi..pi, map to 0..1).
             const float angle_rad = std::atan2(f.vy, f.vx);
-            float hue = (angle_rad + static_cast<float>(M_PI)) / (2.0f * static_cast<float>(M_PI));
+            static constexpr float kInv2Pi = 1.0F / (2.0F * static_cast<float>(M_PI));
+            float hue = (angle_rad + static_cast<float>(M_PI)) * kInv2Pi;
             if (hue < 0.0f) hue = 0.0f;
             if (hue > 1.0f) hue = 1.0f;
             // Magnitude -> value (normalize against a typical px/s reference).
             const float mag = std::sqrt(f.vx * f.vx + f.vy * f.vy);
-            const float val = std::min(1.0f, mag / 1000.0f);  // 1000 px/s -> full brightness
+            static constexpr float kInv1000 = 1.0F / 1000.0F;
+            const float val = std::min(1.0f, mag * kInv1000);  // 1000 px/s -> full brightness
             hsv_to_rgb(hue, 1.0f, val, cp.r, cp.g, cp.b);
             r.colored_points.push_back(cp);
         }

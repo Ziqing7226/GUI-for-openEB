@@ -65,8 +65,9 @@ public:
         if (packet.empty()) return result;
 
         const int num_bins = num_orientations_;
-        std::vector<std::vector<cv::Point2f>> buckets(
-            static_cast<std::size_t>(num_bins));
+        if (buckets_.size() != static_cast<std::size_t>(num_bins)) buckets_.resize(num_bins);
+        for (auto& b : buckets_) b.clear();
+        auto& buckets = buckets_;
 
         for (const Event& e : packet) {
             if (e.x >= width_ || e.y >= height_) continue;
@@ -288,6 +289,7 @@ private:
     int num_orientations_{kDefaultNumOrientations};
     std::vector<Metavision::timestamp> on_ts_;
     std::vector<Metavision::timestamp> off_ts_;
+    std::vector<std::vector<cv::Point2f>> buckets_;  // reused per-packet (OPT-28)
     std::vector<Track> tracks_;
     int next_track_id_{0};
 };

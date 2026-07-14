@@ -90,7 +90,7 @@ private:
         if (n < 3) { m.assign(n, 0.0); return; }
         const double step = 2.0 * M_PI / static_cast<double>(n);
         // RHS: d[i] = 3*(y[i+1]-y[i-1])/step  (indices mod n).
-        std::vector<double> d(n);
+        spd_.resize(n); auto& d = spd_;
         for (std::size_t i = 0; i < n; ++i) {
             d[i] = 3.0 * (y[(i + 1) % n] - y[(i - 1 + n) % n]) / step;
         }
@@ -100,14 +100,14 @@ private:
         // the corner contributions folded into the end diagonals
         // (b'[0] = 4 - beta = 3, b'[n-1] = 4 - alpha = 3), and
         // u = (beta, 0, ..., 0, alpha), v = (1, 0, ..., 0, 1).
-        std::vector<double> a(n, 1.0), b(n, 4.0), c(n, 1.0);
+        spa_.assign(n, 1.0); spb_.assign(n, 4.0); spc_.assign(n, 1.0); auto& a = spa_; auto& b = spb_; auto& c = spc_;
         b[0] = 3.0;
         b[n - 1] = 3.0;
-        std::vector<double> u(n, 0.0);
+        spu_.assign(n, 0.0); auto& u = spu_;
         u[0] = 1.0;       // beta
         u[n - 1] = 1.0;   // alpha
         // Solve T' * ysol = d  and  T' * zsol = u (Thomas algorithm).
-        std::vector<double> ysol, zsol;
+        auto& ysol = spysol_; auto& zsol = spzsol_;
         thomas(a, b, c, d, ysol);
         thomas(a, b, c, u, zsol);
         // x = ysol - zsol * (v·ysol) / (1 + v·zsol), with v = (1,0,...,0,1).
@@ -128,7 +128,7 @@ private:
                 std::vector<double>& x) const {
         const std::size_t n = b.size();
         x.assign(n, 0.0);
-        std::vector<double> cp(n), dp(n);
+        spcp_.resize(n); spdp_.resize(n); auto& cp = spcp_; auto& dp = spdp_;
         cp[0] = c[0] / b[0];
         dp[0] = r[0] / b[0];
         for (std::size_t i = 1; i < n; ++i) {
@@ -143,6 +143,7 @@ private:
     }
 
     std::vector<double> ts_, xs_, ys_, cx_, cy_;
+    mutable std::vector<double> spd_, spa_, spb_, spc_, spu_, spysol_, spzsol_, spcp_, spdp_;
 };
 
 } // namespace gui_algo

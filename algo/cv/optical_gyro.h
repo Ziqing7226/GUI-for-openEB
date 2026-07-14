@@ -202,7 +202,7 @@ private:
         std::vector<GyroCluster> kept;
         kept.reserve(clusters_.size());
         for (auto& c : clusters_) {
-            if (t - c.last_t <= cluster_time_us_ * 4) kept.push_back(c);
+            if (t - c.last_t <= cluster_time_us_ * 4) kept.push_back(std::move(c));
         }
         clusters_.swap(kept);
 

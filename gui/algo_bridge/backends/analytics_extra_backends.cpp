@@ -62,7 +62,7 @@ public:
                    std::string(roi_.region.enabled ? " (ROI)" : "");
         return r;
     }
-    void reset() override { algo_.reset(); passthrough_.clear(); roi_buf_.clear(); last_t_ = 0; }
+    void reset() override { algo_.reset(); passthrough_.clear(); roi_buf_.clear(); last_t_ = 0; last_detect_t_ = 0; }
 };
 
 /// AutoBiasController backend — bias command as overlay text.
@@ -109,7 +109,7 @@ public:
                    std::string(roi_.region.enabled ? " (ROI)" : "");
         return r;
     }
-    void reset() override { algo_.reset(); passthrough_.clear(); roi_buf_.clear(); last_t_ = 0; }
+    void reset() override { algo_.reset(); passthrough_.clear(); roi_buf_.clear(); last_t_ = 0; last_cmd_ = {}; }
 };
 
 // ===========================================================================
@@ -122,6 +122,7 @@ public:
 class TriggerSyncedBackend final : public AlgoBackend {
     gui_algo::TriggerSyncedFilter algo_;
     std::vector<Metavision::EventCD> last_out_;
+    std::vector<Metavision::EventCD> passthrough_;
     RoiFilter roi_;
     std::vector<gui_algo::Event> roi_buf_;
 public:
@@ -141,8 +142,8 @@ public:
         return {};
     }
     void push_events(const Metavision::EventCD* b, const Metavision::EventCD* e) override {
-        std::vector<Metavision::EventCD> inp(b, e);
-        auto [ev, n] = roi_.apply(as_events(inp.data()), inp.size(), roi_buf_);
+        passthrough_.assign(b, e);
+        auto [ev, n] = roi_.apply(as_events(passthrough_.data()), passthrough_.size(), roi_buf_);
         gui_algo::EventPacket pkt(ev, n);
         auto out = algo_.process(pkt);
         last_out_.assign(out.begin(), out.end());
@@ -154,7 +155,7 @@ public:
                    std::string(roi_.region.enabled ? " (ROI)" : "");
         return r;
     }
-    void reset() override { algo_.reset(); last_out_.clear(); roi_buf_.clear(); }
+    void reset() override { algo_.reset(); last_out_.clear(); passthrough_.clear(); roi_buf_.clear(); }
 };
 
 
@@ -273,7 +274,7 @@ public:
                    std::string(roi_.region.enabled ? " (ROI)" : "");
         return r;
     }
-    void reset() override { algo_.reset(); passthrough_.clear(); roi_buf_.clear(); last_.clear(); }
+    void reset() override { algo_.reset(); passthrough_.clear(); roi_buf_.clear(); last_.clear(); last_analyze_t_ = 0; }
 };
 
 

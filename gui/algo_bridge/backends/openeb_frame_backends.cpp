@@ -158,10 +158,12 @@ public:
         if (channels == 2) {
             const int plane = w_ * h_;
             for (int y = 0; y < h_; ++y) {
+                cv::Vec3b* row = r.frame.ptr<cv::Vec3b>(y);
+                const int row_base = y * w_;
                 for (int x = 0; x < w_; ++x) {
-                    const int idx = y * w_ + x;
-                    r.frame.at<cv::Vec3b>(y, x)[0] = data[idx];          // B = neg
-                    r.frame.at<cv::Vec3b>(y, x)[2] = data[idx + plane];  // R = pos
+                    const int idx = row_base + x;
+                    row[x][0] = data[idx];          // B = neg
+                    row[x][2] = data[idx + plane];  // R = pos
                 }
             }
         } else {

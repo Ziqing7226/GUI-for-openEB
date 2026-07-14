@@ -33,7 +33,8 @@ public:
     double process(double x) {
         if (!init_) { prev_x_ = x; y_ = 0.0; init_ = true; return y_; }
         // HP = x - LP(x); direct-form coefficient is 1 - fac (fac = dt/tau).
-        const double alpha = 1.0 - std::clamp(dt_ / rc_, 0.0, 1.0);
+        if (alpha_dirty_) { cached_alpha_ = 1.0 - std::clamp(dt_ / rc_, 0.0, 1.0); alpha_dirty_ = false; }
+        const double alpha = cached_alpha_;
         y_ = alpha * (y_ + x - prev_x_);
         prev_x_ = x;
         return y_;
@@ -42,8 +43,8 @@ public:
     double value() const { return y_; }
     bool initialized() const { return init_; }
 
-    void set_cutoff_hz(double fc) { rc_ = 1.0 / (2.0 * M_PI * fc); }
-    void set_sample_dt(double dt) { dt_ = dt; }
+    void set_cutoff_hz(double fc) { rc_ = 1.0 / (2.0 * M_PI * fc); alpha_dirty_ = true; }
+    void set_sample_dt(double dt) { dt_ = dt; alpha_dirty_ = true; }
 
     void reset() { prev_x_ = 0.0; y_ = 0.0; init_ = false; }
 
@@ -53,6 +54,8 @@ private:
     double prev_x_;
     double y_;
     bool init_;
+    double cached_alpha_{0.0};
+    bool alpha_dirty_{true};
 };
 
 } // namespace gui_algo

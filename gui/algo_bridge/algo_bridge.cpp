@@ -219,16 +219,16 @@ AlgoParamSpec pstring(const std::string& k, const std::string& disp,
 }
 
 /// Returns the 5 ROI parameters (design §5.6.6) shared by all self-developed
-/// algorithms. Defaults: enabled, center 256×256 (x/y=-1 = auto-center,
-/// w/h=256). When enabled the algorithm only processes events inside the
+/// algorithms. Defaults: enabled, center 128×128 (x/y=-1 = auto-center,
+/// w/h=128). When enabled the algorithm only processes events inside the
 /// ROI region; the main display frame draws a yellow ROI rectangle.
 std::vector<AlgoParamSpec> roi_params() {
     return {
         pbool("roi_enabled", "ROI enable", "true"),
         pint("roi_x", "ROI x (-1=center)", "-1", "-1", ""),
         pint("roi_y", "ROI y (-1=center)", "-1", "-1", ""),
-        pint("roi_w", "ROI w (0=full)", "256", "0", ""),
-        pint("roi_h", "ROI h (0=full)", "256", "0", ""),
+        pint("roi_w", "ROI w (0=full)", "128", "0", ""),
+        pint("roi_h", "ROI h (0=full)", "128", "0", ""),
     };
 }
 

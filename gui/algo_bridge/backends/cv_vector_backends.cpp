@@ -82,6 +82,10 @@ public:
     std::string get_param(const std::string& k) const override {
         auto pp = preproc_.get_param(k); if (!pp.empty()) return pp;
         if (k == "roi_enabled") return from_b(roi_.enabled);
+        if (k == "roi_x") return from_i(roi_.x);
+        if (k == "roi_y") return from_i(roi_.y);
+        if (k == "roi_w") return from_i(roi_.w);
+        if (k == "roi_h") return from_i(roi_.h);
         if (k == "threshold" && algo_) return from_i(algo_->threshold());
         if (k == "num_theta_bins") return from_i(num_theta_bins_);
         if (k == "num_rho_bins") return from_i(num_rho_bins_);
@@ -94,7 +98,7 @@ public:
         const auto* ev = as_events(passthrough_.data());
         std::size_t n = passthrough_.size();
         if (roi_.enabled && roi_.rw > 0 && roi_.rh > 0) {
-            roi_events_ = crop_to_roi(ev, n, roi_, &preproc_);
+            crop_to_roi(ev, n, roi_, &preproc_, roi_events_);
             ev = roi_events_.data();
             n = roi_events_.size();
         } else if (preproc_.active() && n > 0) {
@@ -229,6 +233,10 @@ public:
     std::string get_param(const std::string& k) const override {
         auto pp = preproc_.get_param(k); if (!pp.empty()) return pp;
         if (k == "roi_enabled") return from_b(roi_.enabled);
+        if (k == "roi_x") return from_i(roi_.x);
+        if (k == "roi_y") return from_i(roi_.y);
+        if (k == "roi_w") return from_i(roi_.w);
+        if (k == "roi_h") return from_i(roi_.h);
         if (k == "min_radius") return from_i(min_radius_);
         if (k == "max_radius") return from_i(max_radius_);
         if (k == "threshold") return from_i(threshold_);
@@ -255,7 +263,7 @@ public:
         const auto* ev = as_events(passthrough_.data());
         std::size_t n = passthrough_.size();
         if (roi_.enabled && roi_.rw > 0 && roi_.rh > 0) {
-            roi_events_ = crop_to_roi(ev, n, roi_, &preproc_);
+            crop_to_roi(ev, n, roi_, &preproc_, roi_events_);
             ev = roi_events_.data();
             n = roi_events_.size();
         } else if (preproc_.active() && n > 0) {
@@ -308,6 +316,7 @@ public:
     void reset() override {
         if (algo_) algo_->reset();
         passthrough_.clear(); roi_events_.clear(); last_.clear();
+        last_process_t_ = 0;
     }
     void set_sensor_dimensions(int w, int h) override {
         sensor_w_ = w; sensor_h_ = h;

@@ -238,14 +238,21 @@ struct Preprocessor {
                 p = buf_.data();
             }
             std::size_t kept = 0;
-            for (std::size_t i = 0; i < m; ++i) {
-                if ((buf_[i].x & 1) == 0 && (buf_[i].y & 1) == 0) {
-                    buf_[kept] = buf_[i];
-                    if (halve_coords_) {
+            if (halve_coords_) {
+                for (std::size_t i = 0; i < m; ++i) {
+                    if ((buf_[i].x & 1) == 0 && (buf_[i].y & 1) == 0) {
+                        buf_[kept] = buf_[i];
                         buf_[kept].x = static_cast<std::uint16_t>(buf_[i].x >> 1);
                         buf_[kept].y = static_cast<std::uint16_t>(buf_[i].y >> 1);
+                        ++kept;
                     }
-                    ++kept;
+                }
+            } else {
+                for (std::size_t i = 0; i < m; ++i) {
+                    if ((buf_[i].x & 1) == 0 && (buf_[i].y & 1) == 0) {
+                        buf_[kept] = buf_[i];
+                        ++kept;
+                    }
                 }
             }
             m = kept;
@@ -255,11 +262,10 @@ struct Preprocessor {
 };
 
 /// @brief Filters events to ROI and subtracts ROI origin (ROI-relative coords).
-inline std::vector<gui_algo::Event> crop_to_roi(const gui_algo::Event* src,
-                                          std::size_t n,
-                                          const ProcessRegion& roi,
-                                          Preprocessor* preproc = nullptr) {
-    std::vector<gui_algo::Event> out;
+inline void crop_to_roi(const gui_algo::Event* src, std::size_t n,
+                        const ProcessRegion& roi, Preprocessor* preproc,
+                        std::vector<gui_algo::Event>& out) {
+    out.clear();
     out.reserve(n);
     for (std::size_t i = 0; i < n; ++i) {
         if (roi.contains(src[i].x, src[i].y)) {
@@ -273,7 +279,6 @@ inline std::vector<gui_algo::Event> crop_to_roi(const gui_algo::Event* src,
         auto [p, m] = preproc->apply(out.data(), out.size());
         out.assign(p, p + m);
     }
-    return out;
 }
 
 /// @brief ROI helper for backends that keep sensor-scale coordinates.

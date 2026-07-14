@@ -72,6 +72,10 @@ public:
     std::string get_param(const std::string& k) const override {
         auto pp = preproc_.get_param(k); if (!pp.empty()) return pp;
         if (k == "roi_enabled") return from_b(roi_.enabled);
+        if (k == "roi_x") return from_i(roi_.x);
+        if (k == "roi_y") return from_i(roi_.y);
+        if (k == "roi_w") return from_i(roi_.w);
+        if (k == "roi_h") return from_i(roi_.h);
         if (k == "decay_time_us") return from_i(decay_time_us_);
         if (k == "palette") return from_i(static_cast<int>(palette_));
         if (k == "channels") return from_i(channels_ == gui_algo::TimeSurface::Channels::Split ? 2 : 1);
@@ -82,7 +86,7 @@ public:
         const auto* ev = as_events(passthrough_.data());
         std::size_t n = passthrough_.size();
         if (roi_.enabled && roi_.rw > 0 && roi_.rh > 0) {
-            roi_events_ = crop_to_roi(ev, n, roi_, &preproc_);
+            crop_to_roi(ev, n, roi_, &preproc_, roi_events_);
             ev = roi_events_.data();
             n = roi_events_.size();
         } else if (preproc_.active() && n > 0) {
@@ -124,6 +128,7 @@ public:
 class UltraSlowMotionBackend final : public AlgoBackend {
     gui_algo::UltraSlowMotion algo_;
     std::vector<Metavision::EventCD> last_out_;
+    std::vector<Metavision::EventCD> passthrough_;
     RoiFilter roi_;
     std::vector<gui_algo::Event> roi_buf_;
 public:
@@ -138,8 +143,8 @@ public:
         return {};
     }
     void push_events(const Metavision::EventCD* b, const Metavision::EventCD* e) override {
-        std::vector<Metavision::EventCD> inp(b, e);
-        auto [ev, n] = roi_.apply(as_events(inp.data()), inp.size(), roi_buf_);
+        passthrough_.assign(b, e);
+        auto [ev, n] = roi_.apply(as_events(passthrough_.data()), passthrough_.size(), roi_buf_);
         auto out = algo_.process(ev, n);
         last_out_.assign(out.begin(), out.end());
     }
@@ -150,7 +155,7 @@ public:
                    std::string(roi_.region.enabled ? " (ROI)" : "");
         return r;
     }
-    void reset() override { algo_.reset(); last_out_.clear(); roi_buf_.clear(); }
+    void reset() override { algo_.reset(); last_out_.clear(); passthrough_.clear(); roi_buf_.clear(); }
 };
 
 

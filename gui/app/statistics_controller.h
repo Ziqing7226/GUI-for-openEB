@@ -39,6 +39,10 @@ private:
     std::atomic<std::uint64_t> on_count_{0};
     std::atomic<std::uint64_t> off_count_{0};
     QTimer on_off_timer_;
+    /// Last emitted on/off counts — used to skip redundant signal emissions
+    /// when no new events have arrived between timer ticks.
+    std::uint64_t last_on_{0};
+    std::uint64_t last_off_{0};
 };
 
 } // namespace gui

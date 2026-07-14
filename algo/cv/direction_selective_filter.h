@@ -43,6 +43,8 @@ public:
 
     DirectionSelectiveFilter(int width, int height)
         : width_(width), height_(height),
+          cx_(static_cast<double>(width) / 2.0),
+          cy_(static_cast<double>(height) / 2.0),
           surface_(static_cast<std::size_t>(width) * height, 0),
           ori_surface_(static_cast<std::size_t>(kNumDirections) * width * height, 0) {
         global_hist_.fill(0);
@@ -298,10 +300,8 @@ private:
         tx_.filter(vx, e.t);
         ty_.filter(vy, e.t);
 
-        const double cx = static_cast<double>(width_) / 2.0;
-        const double cy = static_cast<double>(height_) / 2.0;
-        const double rx = static_cast<double>(e.x) - cx;
-        const double ry = static_cast<double>(e.y) - cy;
+        const double rx = static_cast<double>(e.x) - cx_;
+        const double ry = static_cast<double>(e.y) - cy_;
         const double r2 = rx * rx + ry * ry;
         if (r2 > 0.0) {
             // Tangential contribution: (-vx*ry + vy*rx) / r^2 (rad/s).
@@ -350,6 +350,8 @@ private:
 
     int width_;
     int height_;
+    double cx_{0.0};  // sensor center x (OPT-32)
+    double cy_{0.0};  // sensor center y (OPT-32)
     int time_window_us_{10000};
     bool enable_global_mode_{true};
     int min_dt_us_{100};       // jAER minDtThreshold

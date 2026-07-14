@@ -76,7 +76,6 @@ private:
     // Padded to avoid false sharing between producer and consumer.
     alignas(kCacheLineSize) std::atomic<std::size_t> head_;
     alignas(kCacheLineSize) std::atomic<std::size_t> tail_;
-    alignas(kCacheLineSize) char pad_[0];
 };
 
 } // namespace gui_algo

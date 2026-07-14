@@ -1465,8 +1465,8 @@ void MainWindow::draw_roi_overlays(
         if (en != "true" && en != "1") continue;
         const int rx = parse(inst->get_param("roi_x"), -1);
         const int ry = parse(inst->get_param("roi_y"), -1);
-        const int rw = parse(inst->get_param("roi_w"), 256);
-        const int rh = parse(inst->get_param("roi_h"), 256);
+        const int rw = parse(inst->get_param("roi_w"), 128);
+        const int rh = parse(inst->get_param("roi_h"), 128);
         // Compute bounds (mirrors ProcessRegion::compute).
         const int aw = (rw <= 0) ? sensor_w : std::min(rw, sensor_w);
         const int ah = (rh <= 0) ? sensor_h : std::min(rh, sensor_h);

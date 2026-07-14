@@ -30,7 +30,8 @@ public:
         cv::Mat blurred;
         const int ksize = 5;  // fixed kernel size (matches rpg_e2vid)
         cv::GaussianBlur(img, blurred, cv::Size(ksize, ksize), sigma_, sigma_);
-        cv::Mat sharp = (1.0f + amount_) * img - amount_ * blurred;
+        cv::Mat sharp;
+        cv::addWeighted(img, 1.0f + amount_, blurred, -amount_, 0.0f, sharp);
         return sharp;
     }
 

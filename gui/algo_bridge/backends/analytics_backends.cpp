@@ -258,7 +258,7 @@ public:
         const auto* ev = as_events(passthrough_.data());
         std::size_t n = passthrough_.size();
         if (roi_.enabled && roi_.rw > 0 && roi_.rh > 0) {
-            roi_events_ = crop_to_roi(ev, n, roi_, &preproc_);
+            crop_to_roi(ev, n, roi_, &preproc_, roi_events_);
             ev = roi_events_.data();
             n = roi_events_.size();
             filtered_active_ = true;
@@ -405,7 +405,7 @@ public:
         const auto* ev = as_events(passthrough_.data());
         std::size_t n = passthrough_.size();
         if (roi_.enabled && roi_.rw > 0 && roi_.rh > 0) {
-            roi_events_ = crop_to_roi(ev, n, roi_, &preproc_);
+            crop_to_roi(ev, n, roi_, &preproc_, roi_events_);
             ev = roi_events_.data();
             n = roi_events_.size();
         } else if (preproc_.active() && n > 0) {

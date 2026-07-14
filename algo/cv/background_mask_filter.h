@@ -63,13 +63,11 @@ public:
         if (collect_ && !packet.empty()) {
             // Packet end time = max event timestamp (jAER uses last timestamp).
             Metavision::timestamp t_now = packet[0].t;
-            for (const Event& e : packet) {
-                if (e.t > t_now) t_now = e.t;
-            }
             if (learn_start_t_ < 0) learn_start_t_ = packet[0].t;
 
             // histogram[x][y]++  (jAER filterPacket collect branch).
             for (const Event& e : packet) {
+                if (e.t > t_now) t_now = e.t;
                 if (e.x >= width_ || e.y >= height_) continue; // ignore OOB / special
                 const std::size_t idx =
                     static_cast<std::size_t>(e.y) * width_ + e.x;

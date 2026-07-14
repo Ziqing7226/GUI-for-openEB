@@ -15,6 +15,7 @@
 
 #include <QMatrix4x4>
 #include <QMouseEvent>
+#include <QShowEvent>
 #include <QSurfaceFormat>
 #include <QVector3D>
 #include <QWheelEvent>
@@ -292,6 +293,25 @@ void SpaceTimeDisplay::initializeGL() {
 
 void SpaceTimeDisplay::resizeGL(int w, int h) {
     glViewport(0, 0, w, h);
+}
+
+void SpaceTimeDisplay::showEvent(QShowEvent* event) {
+    QOpenGLWidget::showEvent(event);
+    // render_timer_ is created in initializeGL(); restart it on subsequent
+    // shows (after a hide). The very first show triggers initializeGL which
+    // creates and starts the timer itself, so render_timer_ is null here.
+    if (render_timer_ && !render_timer_->isActive()) {
+        render_timer_->start();
+    }
+}
+
+void SpaceTimeDisplay::hideEvent(QHideEvent* event) {
+    QOpenGLWidget::hideEvent(event);
+    // Stop the 60 FPS render timer when the widget is not visible — avoids
+    // unnecessary VBO rebuilds and GPU uploads while the dock is hidden.
+    if (render_timer_) {
+        render_timer_->stop();
+    }
 }
 
 void SpaceTimeDisplay::rebuild_vbo() {

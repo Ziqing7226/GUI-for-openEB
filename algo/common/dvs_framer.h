@@ -9,6 +9,7 @@
 #ifndef GUI_ALGO_COMMON_DVS_FRAMER_H
 #define GUI_ALGO_COMMON_DVS_FRAMER_H
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <vector>
@@ -43,7 +44,9 @@ public:
     };
 
     DvsFramer(int width, int height, PolarityMode mode = PolarityMode::UnsignedCount)
-        : width_(width), height_(height), mode_(mode) {
+        : width_(width), height_(height), mode_(mode),
+          on_counts_(static_cast<std::size_t>(width) * height, 0),
+          off_counts_(static_cast<std::size_t>(width) * height, 0) {
         reset();
     }
 
@@ -71,30 +74,34 @@ public:
     cv::Mat generate_and_reset(Metavision::timestamp accumulation_time_us = 0) {
         (void)accumulation_time_us;
         cv::Mat frame;
+        const int total = width_ * height_;
         switch (mode_) {
             case PolarityMode::UnsignedCount: {
                 // ON + OFF both brighten the pixel (total event-count image).
                 frame.create(height_, width_, CV_8UC1);
-                for (int i = 0; i < width_ * height_; ++i) {
+                auto* dst = frame.ptr<std::uint8_t>();
+                for (int i = 0; i < total; ++i) {
                     const int v = on_counts_[i] + off_counts_[i];
-                    frame.at<std::uint8_t>(i) =
+                    dst[i] =
                         static_cast<std::uint8_t>(v > 255 ? 255 : v);
                 }
                 break;
             }
             case PolarityMode::Signed: {
                 frame.create(height_, width_, CV_8UC1);
-                for (int i = 0; i < width_ * height_; ++i) {
+                auto* dst = frame.ptr<std::uint8_t>();
+                for (int i = 0; i < total; ++i) {
                     const int v = 128 + on_counts_[i] - off_counts_[i];
-                    frame.at<std::uint8_t>(i) =
+                    dst[i] =
                         static_cast<std::uint8_t>(v < 0 ? 0 : (v > 255 ? 255 : v));
                 }
                 break;
             }
             case PolarityMode::SplitPolarity: {
                 frame.create(height_, width_, CV_8UC2);
-                for (int i = 0; i < width_ * height_; ++i) {
-                    cv::Vec2b& px = frame.at<cv::Vec2b>(i);
+                auto* dst = frame.ptr<cv::Vec2b>();
+                for (int i = 0; i < total; ++i) {
+                    cv::Vec2b& px = dst[i];
                     px[0] = off_counts_[i];
                     px[1] = on_counts_[i];
                 }
@@ -109,30 +116,34 @@ public:
     cv::Mat generate(Metavision::timestamp accumulation_time_us = 0) {
         (void)accumulation_time_us;
         cv::Mat frame;
+        const int total = width_ * height_;
         switch (mode_) {
             case PolarityMode::UnsignedCount: {
                 // ON + OFF both brighten the pixel (total event-count image).
                 frame.create(height_, width_, CV_8UC1);
-                for (int i = 0; i < width_ * height_; ++i) {
+                auto* dst = frame.ptr<std::uint8_t>();
+                for (int i = 0; i < total; ++i) {
                     const int v = on_counts_[i] + off_counts_[i];
-                    frame.at<std::uint8_t>(i) =
+                    dst[i] =
                         static_cast<std::uint8_t>(v > 255 ? 255 : v);
                 }
                 break;
             }
             case PolarityMode::Signed: {
                 frame.create(height_, width_, CV_8UC1);
-                for (int i = 0; i < width_ * height_; ++i) {
+                auto* dst = frame.ptr<std::uint8_t>();
+                for (int i = 0; i < total; ++i) {
                     const int v = 128 + on_counts_[i] - off_counts_[i];
-                    frame.at<std::uint8_t>(i) =
+                    dst[i] =
                         static_cast<std::uint8_t>(v < 0 ? 0 : (v > 255 ? 255 : v));
                 }
                 break;
             }
             case PolarityMode::SplitPolarity: {
                 frame.create(height_, width_, CV_8UC2);
-                for (int i = 0; i < width_ * height_; ++i) {
-                    cv::Vec2b& px = frame.at<cv::Vec2b>(i);
+                auto* dst = frame.ptr<cv::Vec2b>();
+                for (int i = 0; i < total; ++i) {
+                    cv::Vec2b& px = dst[i];
                     px[0] = off_counts_[i];
                     px[1] = on_counts_[i];
                 }
@@ -143,8 +154,8 @@ public:
     }
 
     void reset() {
-        on_counts_.assign(static_cast<std::size_t>(width_) * height_, 0);
-        off_counts_.assign(static_cast<std::size_t>(width_) * height_, 0);
+        std::fill(on_counts_.begin(), on_counts_.end(), 0);
+        std::fill(off_counts_.begin(), off_counts_.end(), 0);
         accumulated_event_count_ = 0;
         first_timestamp_us_ = -1;
         last_timestamp_us_ = -1;

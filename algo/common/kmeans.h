@@ -84,16 +84,16 @@ private:
         centroids_.push_back(points[uni(rng_)]);
         // Subsequent centroids: weighted by squared distance to nearest existing.
         std::vector<double> d2(points.size(), std::numeric_limits<double>::max());
+        // Initialize d2 with distances to the first centroid
+        for (std::size_t i = 0; i < points.size(); ++i) {
+            d2[i] = dist2(points[i], centroids_[0]);
+        }
         for (std::size_t c = 1; c < k_; ++c) {
             double sum = 0.0;
             for (std::size_t i = 0; i < points.size(); ++i) {
-                double best = d2[i];
-                for (const auto& ctr : centroids_) {
-                    const double dd = dist2(points[i], ctr);
-                    if (dd < best) best = dd;
-                }
-                d2[i] = best;
-                sum += best;
+                const double dd = dist2(points[i], centroids_.back());
+                if (dd < d2[i]) d2[i] = dd;
+                sum += d2[i];
             }
             if (sum <= 0.0) { // Degenerate: all points coincide with centroids.
                 centroids_.push_back(points[uni(rng_)]);
@@ -111,7 +111,7 @@ private:
     }
 
     double assign(const std::vector<Point2D>& points) {
-        labels_.assign(points.size(), 0);
+        labels_.resize(points.size());
         double inertia = 0.0;
         for (std::size_t i = 0; i < points.size(); ++i) {
             std::size_t best = 0;

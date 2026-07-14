@@ -309,6 +309,8 @@ public:
 #if defined(GUI_ALGO_HAS_ONNXRUNTIME)
         // Clear recurrent states if applicable.
         prev_states_.clear();
+        state_buffers_.clear();
+        input_buffer_.clear();
 #endif
     }
 
@@ -399,8 +401,11 @@ private:
             for (int b = 0; b < num_bins_; ++b) {
                 cv::Mat bin(eh, ew, CV_32FC1,
                             const_cast<float*>(grid + b * stride_hw));
-                cv::Mat padded = crop_.pad(bin);
-                std::copy(padded.begin<float>(), padded.end<float>(),
+                cv::copyMakeBorder(bin, padded_buffer_,
+                                   crop_.pad_top, crop_.pad_bottom,
+                                   crop_.pad_left, crop_.pad_right,
+                                   cv::BORDER_REFLECT_101);
+                std::copy(padded_buffer_.begin<float>(), padded_buffer_.end<float>(),
                           input_buffer_.begin() +
                               static_cast<std::size_t>(b) * ch * cw);
             }
@@ -604,6 +609,7 @@ private:
     // input_buffer_ is reused across frames; resized only when crop/bin dims
     // change. Previously every infer_onnx() call did a 320 KB malloc+memset.
     std::vector<float> input_buffer_;
+    cv::Mat padded_buffer_;  ///< Reusable padded image buffer (avoids per-bin allocation)
     // Input/output name strings are fetched once at load_model() time.
     std::vector<Ort::AllocatedStringPtr> input_name_owners_;
     std::vector<Ort::AllocatedStringPtr> output_name_owners_;

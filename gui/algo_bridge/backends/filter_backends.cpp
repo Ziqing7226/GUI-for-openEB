@@ -92,10 +92,11 @@ public:
         // Global orientation vector (from chip center, jAER computeGlobalOriVector).
         {
             float gx = 0, gy = 0;
+            static constexpr float kCosTable[4] = {1.0F, 0.70710678F, 0.0F, -0.70710678F};
+            static constexpr float kSinTable[4] = {0.0F, 0.70710678F, 1.0F, 0.70710678F};
             for (int i = 0; i < gui_algo::OrientationFilter::kNumOrientations; ++i) {
-                const float angle = i * kPiF * 0.25F;
-                gx += std::cos(angle) * hist_[i];
-                gy += std::sin(angle) * hist_[i];
+                gx += kCosTable[i] * hist_[i];
+                gy += kSinTable[i] * hist_[i];
             }
             const int cx = algo_.width() / 2;
             const int cy = algo_.height() / 2;
@@ -212,6 +213,7 @@ public:
         OverlayText t;
         t.x = 10; t.y = 40;
         t.text = "dir: ";
+        t.text.reserve(128);
         for (int i = 0; i < gui_algo::DirectionSelectiveFilter::kNumDirections; ++i) {
             t.text += std::to_string(i * 45) + "=" + std::to_string(hist[i]) + " ";
         }

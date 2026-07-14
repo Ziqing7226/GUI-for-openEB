@@ -61,9 +61,7 @@ public:
     /// @brief Appends a batch of events to the rolling buffer.
     void process(const Event* events, std::size_t n) {
         if (events == nullptr || n == 0) return;
-        for (std::size_t i = 0; i < n; ++i) {
-            buffer_.push_back(events[i]);
-        }
+        buffer_.insert(buffer_.end(), events, events + n);
         latest_t_ = buffer_.back().t;
         prune();
         // Hard cap: even with time-window pruning, a very high event rate can
