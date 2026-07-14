@@ -245,23 +245,25 @@ void MainWindow::resizeEvent(QResizeEvent* event) {
     }
 }
 
-/// @brief Applies the title, app icon, and theme colors to the custom title
-/// bar, and keeps the colors in sync with ThemeController.
+/// @brief Applies the title and theme colors to the custom title bar, and
+/// keeps the colors in sync with ThemeController.
 void MainWindow::build_title_bar_controls() {
     if (!title_bar_) return;
     title_bar_->setTitle(windowTitle());
-    title_bar_->setAppIcon(QStringLiteral("camera"));
 
     // Apply the theme background/text colors and re-apply whenever the theme
     // changes (user color switch or system light/dark flip). The native WM
     // title bar color cannot be changed from Qt, but our custom title bar's
     // color is set directly so it always tracks the application theme.
     //
-    // §13 — inverse color rule: the title label "EB plus" and the camera icon
-    // get PURE black/white (inverse of the background) so they are the most
-    // eye-catching elements on the bar. This rule applies ONLY here; all
-    // other title-bar elements (menus, window controls) use the theme's
-    // normal text color.
+    // §13 — title chip color rules:
+    //   - title_box = the OPPOSITE theme mode's panel color (light panel
+    //     when dark mode is active, dark panel when light mode is active)
+    //     so the rounded chip stands out from the title bar background.
+    //   - title_fg  = RGB-inverse of title_box, so the text always has
+    //     maximum contrast against the chip background.
+    //   - The camera icon has been removed; only the "EB plus" text chip
+    //     remains as the leftmost element.
     //
     // BUG-4: the status bar chart/clock icons are rendered once via
     // IconProvider::get(name) which reads QPalette::WindowText at call time;
@@ -280,11 +282,16 @@ void MainWindow::build_title_bar_controls() {
         // sidebar which uses the primary background.
         const QColor bg(theme_.effective_panel_hex());
         const QColor fg(theme_.effective_text_hex());
-        // RGB-inverse of the background — "颜色意义上的反色" like main branch
-        // (255-r, 255-g, 255-b). This rule applies ONLY to the title label
-        // and camera icon; all other title-bar elements use the theme fg.
-        const QColor title_fg(255 - bg.red(), 255 - bg.green(), 255 - bg.blue());
-        title_bar_->setColors(bg, fg, title_fg);
+        // §13: title chip background = the opposite mode's panel color
+        // (light panel in dark mode, dark panel in light mode) so the chip
+        // stands out from the title bar. The title text color is the
+        // RGB-inverse of the chip background, guaranteeing high contrast
+        // between text and chip in both themes.
+        const QColor title_box(theme_.panel_hex(!theme_.is_dark_mode()));
+        const QColor title_fg(255 - title_box.red(),
+                              255 - title_box.green(),
+                              255 - title_box.blue());
+        title_bar_->setColors(bg, fg, title_fg, title_box);
         // §15.2: set the ActivityBar's separator color to match the title
         // bar's bottom line so both lines are consistent.  Dark bg → lighter
         // line, light bg → darker line (same logic as CustomTitleBar).

@@ -1,7 +1,7 @@
 // gui/main_window.h — top-level QMainWindow.
 //
 // Layout (design §5.1 + §11):
-//   - title bar:  CustomTitleBar (app icon/name + 6 menu dropdowns + window
+//   - title bar:  CustomTitleBar (app name chip + 6 menu dropdowns + window
 //                 controls), installed via setMenuWidget — no QMenuBar hack.
 //   - central:    EventDisplayWidget (OpenGL)
 //   - left dock:  SettingsPanel (VSCode-style sidebar: ActivityBar + stacked

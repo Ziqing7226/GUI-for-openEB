@@ -27,22 +27,21 @@ CustomTitleBar::CustomTitleBar(QWidget* parent)
     layout->setContentsMargins(8, 0, 0, 0);
     layout->setSpacing(8);
 
-    // Left cluster: [app icon][app name]. The title label gets the object
-    // name "AppTitle" so QSS can target it with the inverse title color
-    // (§13 — pure black/white, most eye-catching element on the bar).
-    icon_label_ = new QLabel(this);
-    icon_label_->setFixedSize(20, 20);
-    icon_label_->setAlignment(Qt::AlignCenter);
-    icon_label_->setObjectName(QStringLiteral("AppIcon"));
-    icon_label_->setStyleSheet(QStringLiteral("background: transparent; border: none;"));
-
+    // Left cluster: [app name]. The title label gets the object name
+    // "AppTitle" so QSS can target it. The rounded-rectangle background
+    // (§13 — opposite-mode panel color) and the inverse title text color
+    // are applied in setColors() so they track the active theme.
     title_label_ = new QLabel(QStringLiteral("EB plus"), this);
     title_label_->setObjectName(QStringLiteral("AppTitle"));
-    title_label_->setStyleSheet(QStringLiteral(
-        "background: transparent; border: none; font-weight: bold;"));
+    title_label_->setAttribute(Qt::WA_StyledBackground, true);
+    // Keep the chip tight: Fixed vertical policy prevents the label from
+    // stretching to the full 36px bar height; AlignVCenter centers it.
+    // Maximum horizontal policy prevents horizontal expansion beyond the
+    // text + padding sizeHint.
+    title_label_->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Fixed);
+    title_label_->setAlignment(Qt::AlignCenter);
 
-    layout->addWidget(icon_label_);
-    layout->addWidget(title_label_);
+    layout->addWidget(title_label_, 0, Qt::AlignVCenter);
 
     // Menu dropdown buttons. Populated via addMenu() from MainWindow's
     // build_menus().
@@ -117,18 +116,6 @@ void CustomTitleBar::setTitle(const QString& title) {
     if (title_label_) title_label_->setText(title);
 }
 
-void CustomTitleBar::setAppIcon(const QString& icon_name) {
-    app_icon_name_ = icon_name;
-    renderAppIcon();
-}
-
-void CustomTitleBar::renderAppIcon() {
-    if (icon_label_ && !app_icon_name_.isEmpty()) {
-        const QColor c = title_color_.isValid() ? title_color_ : fg_color_;
-        icon_label_->setPixmap(IconProvider::get(app_icon_name_, c).pixmap(QSize(20, 20)));
-    }
-}
-
 void CustomTitleBar::refresh_icons() {
     if (btn_min_   && !min_icon_name_.isEmpty())
         btn_min_->setIcon(IconProvider::get(min_icon_name_));
@@ -136,15 +123,14 @@ void CustomTitleBar::refresh_icons() {
         btn_max_->setIcon(IconProvider::get(max_icon_name_));
     if (btn_close_ && !close_icon_name_.isEmpty())
         btn_close_->setIcon(IconProvider::get(close_icon_name_));
-    // Re-render the app icon with the current title color (theme change may
-    // flip the inverse color).
-    renderAppIcon();
 }
 
-void CustomTitleBar::setColors(const QColor& bg, const QColor& fg, const QColor& title_fg) {
+void CustomTitleBar::setColors(const QColor& bg, const QColor& fg,
+                               const QColor& title_fg, const QColor& title_box) {
     bg_color_ = bg;
     fg_color_ = fg;
     title_color_ = title_fg;
+    title_box_color_ = title_box;
 
     // Separator line color — visible on both light and dark backgrounds:
     // dark bg → lighter line, light bg → darker line (§15.1).
@@ -155,6 +141,7 @@ void CustomTitleBar::setColors(const QColor& bg, const QColor& fg, const QColor&
     const QString bg_hex = bg.name();
     const QString fg_hex = fg.name();
     const QString title_hex = title_fg.name();
+    const QString box_hex = title_box.name();
     const QString line_hex = line_color_.name();
 
     // §15.3: the background is painted manually in paintEvent() because the
@@ -162,18 +149,36 @@ void CustomTitleBar::setColors(const QColor& bg, const QColor& fg, const QColor&
     // the local `CustomTitleBar { ... }` rule in Qt's stylesheet cascade for
     // widgets installed via setMenuWidget().  The QSS here only styles child
     // widgets (labels, buttons, menus).
+    //
+    // §13: the title label "EB plus" gets a rounded-rectangle chip background
+    // (title_box — the opposite-mode panel color) with the title text color
+    // (RGB-inverse of title_box). The chip is styled inline on the label
+    // because the global QSS `QLabel` rule would otherwise override the
+    // background. Placeholder numbering is sequential (%1/%2/%3) to avoid
+    // ambiguity in Qt's arg() chaining.
     setStyleSheet(QStringLiteral(
         "QLabel { color: %2; background: transparent; border: none; }"
-        "QLabel#AppTitle { color: %3; }"
         "QPushButton { color: %2; background: transparent; border: none; }"
         "QPushButton#qt_menubar_ext_button { background: transparent; border: none; }"
-        "QMenu { background-color: %1; color: %2; border: 1px solid %4; }"
+        "QMenu { background-color: %1; color: %2; border: 1px solid %3; }"
         "QMenu::item { padding: 4px 20px; }"
         "QMenu::item:selected { background-color: rgba(128,128,128,60); }"
-        "QMenu::separator { height: 1px; background: %4; margin: 2px 6px; }"
-    ).arg(bg_hex, fg_hex, title_hex, line_hex));
+        "QMenu::separator { height: 1px; background: %3; margin: 2px 6px; }"
+    ).arg(bg_hex, fg_hex, line_hex));
 
-    // Re-render window control icons + app icon so they track the new theme.
+    // Apply the title chip styling inline so it wins over the global QSS
+    // `QLabel { background: transparent; }` rule (Qt gives inline
+    // setStyleSheet() higher priority in the cascade). Padding is tight so
+    // the chip just covers the text; border-radius gives uniform rounded
+    // corners on all four sides.
+    if (title_label_) {
+        title_label_->setStyleSheet(QStringLiteral(
+            "color: %1; background-color: %2; "
+            "border-radius: 4px; padding: 3px 5px; font-weight: bold;"
+        ).arg(title_hex, box_hex));
+    }
+
+    // Re-render window control icons so they track the new theme.
     refresh_icons();
     update();
 }

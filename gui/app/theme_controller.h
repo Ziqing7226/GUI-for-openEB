@@ -87,6 +87,15 @@ public:
     /// @brief Returns the effective text color (hex) — black in light mode,
     /// white in dark mode.
     QString effective_text_hex() const;
+    /// @brief Returns the panel color (hex) for the current color choice but
+    /// the specified @p dark mode (instead of the effective mode). Used for
+    /// cross-mode color computations (e.g. the title bar's inverse-mode
+    /// rounded box background and the always-dark-mode title text color).
+    QString panel_hex(bool dark) const;
+
+    /// @brief Resolves the current Mode (+ system color scheme when
+    /// FollowSystem) to a concrete light/dark flag.
+    bool is_dark_mode() const;
 
 signals:
     /// @brief Emitted whenever the effective background/text color changes
@@ -100,10 +109,6 @@ private:
     void apply_stylesheet();
     void on_system_color_scheme_changed();
     void sync_menu_actions();
-
-    /// Resolves the current Mode (+ system color scheme when FollowSystem) to
-    /// a concrete light/dark flag. Used to index the semantic token table.
-    bool is_dark_mode() const;
 
     QMainWindow* window_{nullptr};
     Color color_{Color::LightBlue};

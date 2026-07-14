@@ -8,8 +8,8 @@
 // and cannot be changed reliably from Qt.
 //
 // Layout (left to right) per design §3.6.1:
-//   [app icon][app name]  [文件▾][视图▾][相机▾][工具▾][帮助▾]  [—][□][✕]
-//   left cluster           menu dropdown buttons            window controls
+//   [app name]  [File▾][View▾][Camera▾][Tools▾][Help▾]  [—][□][✕]
+//   left cluster  menu dropdown buttons                  window controls
 //
 // The menus are no longer a top-level QMenuBar; each menu is a QPushButton
 // that pops up a QMenu on click (addMenu). Dragging the empty title-bar area
@@ -41,17 +41,18 @@ public:
 
     /// Sets the application title text shown on the left.
     void setTitle(const QString& title);
-    /// Sets the application icon (by SVG name) shown on the left of the title.
-    /// The icon is re-rendered with the title color whenever setColors() is
-    /// called, so it tracks the inverse-color rule applied to the title.
-    void setAppIcon(const QString& icon_name);
 
     /// Sets the background and text colors. The background always tracks the
     /// application theme. @p fg is used for menus and window controls; @p
-    /// title_fg is used ONLY for the title label and app icon — it should be
-    /// pure black/white (inverse of @p bg) so the title is the most eye-
-    /// catching element on the bar (§13 — inverse color rule, title only).
-    void setColors(const QColor& bg, const QColor& fg, const QColor& title_fg);
+    /// title_fg is used ONLY for the title label text — it should be the
+    /// RGB-inverse of the dark-mode panel color so the title is the most eye-
+    /// catching element on the bar regardless of the active theme (§13 —
+    /// inverse color rule, title only). @p title_box is the rounded-rectangle
+    /// background drawn behind the title text; it uses the OPPOSITE theme
+    /// mode's panel color (light panel when dark mode is active, dark panel
+    /// when light mode is active) so the title chip stands out from the bar.
+    void setColors(const QColor& bg, const QColor& fg,
+                   const QColor& title_fg, const QColor& title_box);
 
     /// Re-renders the window control button icons so they pick up the new
     /// theme's foreground color. Called from MainWindow's theme-changed handler.
@@ -71,10 +72,6 @@ protected:
     void paintEvent(QPaintEvent* event) override;
 
 private:
-    /// Re-renders icon_label_ with app_icon_name_ + title_color_.
-    void renderAppIcon();
-
-    QLabel* icon_label_{nullptr};
     QLabel* title_label_{nullptr};
     QHBoxLayout* menu_layout_{nullptr};
     QPushButton* btn_min_{nullptr};
@@ -82,9 +79,9 @@ private:
     QPushButton* btn_close_{nullptr};
     QColor bg_color_;
     QColor fg_color_;
-    QColor title_color_;      // pure black/white — title label + app icon only
+    QColor title_color_;      // RGB-inverse of dark-mode panel — title text only
+    QColor title_box_color_;  // opposite-mode panel — rounded chip background
     QColor line_color_;       // bottom separator line color
-    QString app_icon_name_;   // SVG name for the app icon (e.g. "camera")
     QString min_icon_name_;
     QString max_icon_name_;
     QString close_icon_name_;

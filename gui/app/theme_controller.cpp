@@ -108,6 +108,11 @@ QString ThemeController::effective_text_hex() const {
                                 theme_tokens::Token::FgPrimary);
 }
 
+QString ThemeController::panel_hex(bool dark) const {
+    return theme_tokens::lookup(static_cast<int>(color_), dark,
+                                theme_tokens::Token::BgPanel);
+}
+
 bool ThemeController::is_dark_mode() const {
     switch (mode_) {
         case Mode::FollowSystem: return system_is_dark_;
