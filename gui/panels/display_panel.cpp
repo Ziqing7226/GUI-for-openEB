@@ -85,16 +85,23 @@ DisplayPanel::DisplayPanel(QWidget* parent) : AbstractPanel(parent) {
     palette_combo_->addItem(tr("Gray"), 3);
     form->addRow(tr("Color theme"), palette_combo_);
 
-    // Wire slider <-> spinbox (both integer us).
+    // Wire slider <-> spinbox with exponential mapping.
+    // Block the peer widget to prevent feedback loops: the round-trip
+    // slider→us→slider is not identity due to integer rounding, so
+    // unblocked feedback would cause the slider to jump/oscillate.
     connect(accum_slider_, &QSlider::valueChanged, this,
-            [this](int v) { accum_spin_->setValue(v); });
+            [this](int pos) {
+                const int us = slider_pos_to_us(pos);
+                QSignalBlocker b(accum_spin_);
+                accum_spin_->setValue(us);
+                emit accumulation_time_changed_us(us);
+            });
     connect(accum_spin_, QOverload<int>::of(&QSpinBox::valueChanged), this,
             [this](int v) {
                 QSignalBlocker b(accum_slider_);
-                accum_slider_->setValue(v);
+                accum_slider_->setValue(us_to_slider_pos(v));
+                emit accumulation_time_changed_us(v);
             });
-    connect(accum_spin_, QOverload<int>::of(&QSpinBox::valueChanged), this,
-            [this](int v) { emit accumulation_time_changed_us(v); });
 
     // FPS spinbox -> signal.
     connect(fps_spin_, QOverload<int>::of(&QSpinBox::valueChanged), this,
