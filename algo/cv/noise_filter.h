@@ -238,7 +238,7 @@ public:
         }
         std::fill(hp_counts_.begin(), hp_counts_.end(), 0);
         hp_start_ = kSentinel;
-        hp_thresh_ = 0.0;
+        hp_thresh_ = std::numeric_limits<double>::infinity();
         rate_start_ = kSentinel;
         rate_events_ = 0;
         rate_eps_ = 0.0;
@@ -384,8 +384,9 @@ private:
         const short ey = static_cast<short>(e.y);
         int ncorrelated = 0;
         const auto count_match = [&](const DwRing& r) {
+            std::size_t idx = r.head;
             for (std::size_t i = 0; i < r.count; ++i) {
-                const std::array<short, 2>& v = r.buf[(r.head + i) % r.cap];
+                const std::array<short, 2>& v = r.buf[idx];
                 const int dx = static_cast<int>(ex) - static_cast<int>(v[0]);
                 const int dy = static_cast<int>(ey) - static_cast<int>(v[1]);
                 const int d = (dx < 0 ? -dx : dx) + (dy < 0 ? -dy : dy);
@@ -393,6 +394,7 @@ private:
                     ++ncorrelated;
                     if (ncorrelated >= dwf_min_corr_) return;
                 }
+                if (++idx >= r.cap) idx = 0;
             }
         };
         count_match(dwf_signal_);
@@ -697,7 +699,7 @@ private:
     // Hot-pixel bookkeeping ------------------------------------------------
     std::vector<std::uint32_t> hp_counts_;
     Metavision::timestamp hp_start_{kSentinel};
-    double hp_thresh_{0.0};
+    double hp_thresh_{std::numeric_limits<double>::infinity()};
     static constexpr Metavision::timestamp hp_window_us_{1000000};
 
     // Adaptive correlation-time bookkeeping --------------------------------

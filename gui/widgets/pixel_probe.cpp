@@ -29,7 +29,7 @@ PixelProbe::PixelProbe(QWidget* parent) : QWidget(parent, Qt::Window) {
     }
 
     auto* layout = new QVBoxLayout(this);
-    layout->setContentsMargins(4, 4, 4, 4);
+    layout->setContentsMargins(8, 8, 8, 8);
     header_label_ = new QLabel(tr("Click a pixel in the main display to inspect."), this);
     header_label_->setWordWrap(true);
     layout->addWidget(header_label_);

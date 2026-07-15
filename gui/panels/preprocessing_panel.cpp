@@ -17,7 +17,7 @@
 
 namespace gui {
 
-PreprocessingPanel::PreprocessingPanel(QWidget* parent) : QWidget(parent) {
+PreprocessingPanel::PreprocessingPanel(QWidget* parent) : AbstractPanel(parent) {
     build_ui();
     setEnabled(false);
 }
@@ -27,7 +27,7 @@ void PreprocessingPanel::build_ui() {
     outer->setContentsMargins(0, 0, 0, 0);
     group_ = new QGroupBox(tr("Preprocessing"), this);
     auto* form = new QFormLayout(group_);
-    auto* hint = new QLabel(tr("Note: Noise/Hot-pixel filters are under the Algorithm menu."), group_);
+    auto* hint = new QLabel(tr("Note: Noise/Hot-pixel filters are under the Algorithms section."), group_);
     hint->setWordWrap(true);
     form->addRow(hint);
 
@@ -68,9 +68,11 @@ void PreprocessingPanel::build_ui() {
     make_enum_row("rotate", tr("Rotate"),
                   {"0", "90", "180", "270"}, "rotation");
     make_row("transpose", tr("Transpose"));
-    // Rescale needs two float inputs; expose as a simple spinbox pair.
+    // Rescale needs two float inputs; expose as separate rows so the row
+    // width fits the narrower sidebar (§13.3 — splitting wide rows).
     {
         auto* cb = new QCheckBox(tr("Rescale"), group_);
+        form->addRow(cb);
         auto* sx = new QDoubleSpinBox(group_);
         sx->setRange(0.01, 10.0);
         sx->setValue(1.0);
@@ -79,13 +81,8 @@ void PreprocessingPanel::build_ui() {
         sy->setRange(0.01, 10.0);
         sy->setValue(1.0);
         sy->setEnabled(false);
-        auto* w = new QWidget;
-        auto* hl = new QHBoxLayout(w);
-        hl->setContentsMargins(0, 0, 0, 0);
-        hl->addWidget(cb);
-        hl->addWidget(sx, 1);
-        hl->addWidget(sy, 1);
-        form->addRow(w);
+        form->addRow(tr("  Scale X"), sx);
+        form->addRow(tr("  Scale Y"), sy);
         enables_["rescale"] = cb;
         // Store pointers for apply_stage (typed correctly, no casts).
         double_spins_["rescale|scale_width"] = sx;
@@ -101,25 +98,20 @@ void PreprocessingPanel::build_ui() {
             apply_stage("rescale");
         });
     }
-    // ROI filter
+    // ROI filter — each coordinate on its own row so the row width fits
+    // the narrower sidebar (§13.3 — splitting wide rows).
     {
         auto* cb = new QCheckBox(tr("ROI Filter"), group_);
+        form->addRow(cb);
         auto* x0 = new QSpinBox(group_); x0->setRange(0, 100000);
         auto* y0 = new QSpinBox(group_); y0->setRange(0, 100000);
         auto* x1 = new QSpinBox(group_); x1->setRange(0, 100000); x1->setValue(1279);
         auto* y1 = new QSpinBox(group_); y1->setRange(0, 100000); y1->setValue(719);
         for (auto* s : {x0, y0, x1, y1}) s->setEnabled(false);
-        auto* w = new QWidget;
-        auto* hl = new QHBoxLayout(w);
-        hl->setContentsMargins(0, 0, 0, 0);
-        hl->addWidget(cb);
-        auto* g = new QGridLayout;
-        g->addWidget(new QLabel("x0"), 0, 0); g->addWidget(x0, 0, 1);
-        g->addWidget(new QLabel("y0"), 0, 2); g->addWidget(y0, 0, 3);
-        g->addWidget(new QLabel("x1"), 1, 0); g->addWidget(x1, 1, 1);
-        g->addWidget(new QLabel("y1"), 1, 2); g->addWidget(y1, 1, 3);
-        hl->addLayout(g, 1);
-        form->addRow(w);
+        form->addRow(tr("  X0"), x0);
+        form->addRow(tr("  Y0"), y0);
+        form->addRow(tr("  X1"), x1);
+        form->addRow(tr("  Y1"), y1);
         enables_["roi_filter"] = cb;
         spins_["roi_filter|x0"] = x0;
         spins_["roi_filter|y0"] = y0;
@@ -140,8 +132,8 @@ void PreprocessingPanel::build_ui() {
 }
 
 void PreprocessingPanel::apply_stage(const QString& stage) {
-    if (!controller_) return;
-    auto* chain = controller_->filter_chain();
+    if (!camera_) return;
+    auto* chain = camera_->filter_chain();
     auto* cb = enables_.value(stage);
     if (!cb) return;
     // Use the thread-safe locked wrappers. Calling chain->stage()->set_enabled
@@ -180,7 +172,7 @@ void PreprocessingPanel::apply_stage(const QString& stage) {
 }
 
 void PreprocessingPanel::on_camera_connected(CameraController* controller) {
-    controller_ = controller;
+    camera_ = controller;
     setEnabled(true);
     // Re-apply any stages that were enabled before the camera connected
     // (e.g. via the Preprocess menu while disconnected). Without this the
@@ -193,19 +185,19 @@ void PreprocessingPanel::on_camera_connected(CameraController* controller) {
 }
 
 void PreprocessingPanel::on_camera_disconnected() {
-    // Disable every stage in the FilterChain BEFORE nullifying controller_.
+    // Disable every stage in the FilterChain BEFORE nullifying camera_.
     // CameraController is a long-lived MainWindow member (not destroyed on
     // disconnect) and CameraController::teardown() does not reset filter_chain_,
     // so previously-enabled stages would keep filtering events from the next
     // camera with no UI indication. apply_stage() early-returns once
-    // controller_ is null, so we must drive the chain directly here.
-    if (controller_) {
-        auto* chain = controller_->filter_chain();
+    // camera_ is null, so we must drive the chain directly here.
+    if (camera_) {
+        auto* chain = camera_->filter_chain();
         for (auto it = enables_.constBegin(); it != enables_.constEnd(); ++it) {
             chain->set_stage_enabled(it.key().toStdString(), false);
         }
     }
-    controller_ = nullptr;
+    camera_ = nullptr;
     setEnabled(false);
     for (auto* cb : enables_) {
         cb->blockSignals(true);

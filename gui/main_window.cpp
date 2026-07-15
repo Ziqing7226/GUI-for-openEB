@@ -20,8 +20,7 @@
 #include <QSettings>
 #include <QStatusBar>
 #include <QStyle>
-#include <QToolBar>
-#include <QToolButton>
+#include <QTimer>
 #include <QVBoxLayout>
 #include <QWindow>
 
@@ -30,13 +29,12 @@
 
 #include <metavision/sdk/core/utils/colors.h>
 
-#include <opencv2/imgproc.hpp>
-
 #include "panels/algorithms_panel.h"
 #include "panels/biases_panel.h"
 #include "panels/devices_panel.h"
 #include "panels/display_panel.h"
 #include "panels/esp_panel.h"
+#include "panels/file_tools_panel.h"
 #include "panels/information_panel.h"
 #include "panels/preprocessing_panel.h"
 #include "panels/roi_panel.h"
@@ -45,28 +43,11 @@
 #include "recorder/playback_controls.h"
 #include "exporter/export_dialog.h"
 #include "calibration/calibration_wizard.h"
+#include "app/icon_provider.h"
+#include "display/display_strategy.h"
+#include "widgets/activity_bar.h"
 
 namespace gui {
-
-namespace {
-
-/// Converts a cv::Mat (1-channel gray or 3-channel BGR) to a deep-copied
-/// RGB888 QImage suitable for display.
-QImage mat_to_qimage(const cv::Mat& mat) {
-    if (mat.empty()) return QImage();
-    cv::Mat rgb;
-    if (mat.channels() == 1) {
-        cv::cvtColor(mat, rgb, cv::COLOR_GRAY2RGB);
-    } else if (mat.channels() == 3) {
-        cv::cvtColor(mat, rgb, cv::COLOR_BGR2RGB);
-    } else {
-        return QImage();
-    }
-    return QImage(rgb.data, rgb.cols, rgb.rows,
-                  static_cast<int>(rgb.step), QImage::Format_RGB888).copy();
-}
-
-} // namespace
 
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent),
@@ -100,9 +81,25 @@ MainWindow::MainWindow(QWidget* parent)
     settings_dock_->setObjectName("SettingsDock");
     settings_dock_->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
     settings_dock_->setWidget(settings_);
-    settings_dock_->setFeatures(QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetClosable);
-    addDockWidget(Qt::RightDockWidgetArea, settings_dock_);
-    settings_dock_->setMinimumWidth(320);
+    // No dock features (not movable, not closable) and no title bar — the
+    // sidebar is controlled entirely via the ActivityBar toggle button
+    // (§11.2 point 5). An empty QWidget as the title bar widget hides the
+    // default title bar (title text + close button).
+    settings_dock_->setFeatures(QDockWidget::NoDockWidgetFeatures);
+    settings_dock_->setTitleBarWidget(new QWidget(this));
+    addDockWidget(Qt::LeftDockWidgetArea, settings_dock_);
+    settings_dock_->setMinimumWidth(200);
+
+    // Sidebar content toggle (§11.2 point 5): when the user clicks the
+    // toggle button at the bottom of the ActivityBar, SettingsPanel emits
+    // content_toggled. MainWindow saves/restores the dock width and updates
+    // the toggle icon's chevron direction based on dock area + visibility.
+    connect(settings_, &SettingsPanel::content_toggled, this,
+            &MainWindow::on_sidebar_content_toggled);
+    // Also update the toggle icon when the dock is moved to a different area
+    // (left → right or vice versa).
+    connect(settings_dock_, &QDockWidget::dockLocationChanged, this,
+            [this](Qt::DockWidgetArea) { update_toggle_icon(); });
 
     // Phase 3: bottom-bar playback transport (hidden until a file is opened).
     playback_controls_ = new PlaybackControls(this);
@@ -123,18 +120,21 @@ MainWindow::MainWindow(QWidget* parent)
     // Phase 10: layout manager (saves/restores dock geometry).
     layout_manager_ = std::make_unique<LayoutManager>(this, this);
 
+    // Phase 3 (§3.6.1): real custom title bar — replaces the QMenuBar hack.
+    // Installed via setMenuWidget so it sits at the very top of the window,
+    // above the central widget and docks. build_menus() adds the 6 dropdown
+    // menus to it; build_title_bar_controls() applies the title/icon/colors.
+    title_bar_ = new CustomTitleBar(this);
+    setMenuWidget(title_bar_);
+
     build_menus();
-    build_toolbar();
     build_status_bar();
     wire_signals();
 
-    // --- Frameless-window title bar built on the native QMenuBar ---
-    // With Qt::FramelessWindowHint the QMenuBar sits at the very top of
-    // the window.  We add the window title (left corner) and min/max/close
-    // buttons (right corner) directly to the menu bar, and install an
-    // event filter so dragging the menu bar moves the window
-    // (QWindow::startSystemMove).  This is simpler and more reliable than
-    // setMenuWidget().
+    // Populate the ROI panel's preset combo from the config manager (§14.5 —
+    // presets moved from the Camera menu to the sidebar ROI panel).
+    settings_->roi_panel()->set_preset_names(config_.preset_names());
+
     build_title_bar_controls();
 
     // Edge/corner resize handles — since the window is frameless, the WM
@@ -149,7 +149,15 @@ MainWindow::MainWindow(QWidget* parent)
 
     // Capture the factory layout (all docks in their default positions) so
     // reset_layout() can restore it. Must be called before load_default()
-    // which may overlay a user-customized layout.
+    // which may overlay a user-customized layout.  Set the sidebar to the
+    // default width BEFORE capturing so reset_layout() restores to this
+    // width instead of Qt's initial wide default (§13.2).
+    if (settings_dock_) {
+        settings_dock_->setMinimumWidth(200);
+        const QList<QDockWidget*> docks = {settings_dock_};
+        const QList<int> sizes = {380};
+        resizeDocks(docks, sizes, Qt::Horizontal);
+    }
     layout_manager_->capture_default();
 
     // Try restoring the previous layout (silent on failure).
@@ -157,14 +165,25 @@ MainWindow::MainWindow(QWidget* parent)
 
     // Force the sidebar visible on startup regardless of the restored
     // layout state — the user explicitly requested it be shown by default.
-    // Sync the toggle action to match.
     if (settings_dock_) {
         settings_dock_->setVisible(true);
     }
-    if (a_toggle_sidebar_) {
-        a_toggle_sidebar_->setChecked(true);
-    }
-    update_sidebar_tab_visibility();
+    // Explicitly set the sidebar to the default width.  setMinimumWidth
+    // alone doesn't set the actual width — the dock's width is controlled
+    // by the saved layout state (restoreState) which may have a previously
+    // saved wider width.  resizeDocks() is the only way to programmatically
+    // set the dock width.  Deferred via QTimer::singleShot so it runs after
+    // the window is shown and the layout pass has settled (§13.2).
+    QTimer::singleShot(0, this, [this]() {
+        if (!settings_dock_ || !settings_dock_->isVisible()) return;
+        settings_dock_->setMinimumWidth(200);
+        const QList<QDockWidget*> docks = {settings_dock_};
+        const QList<int> sizes = {380};
+        resizeDocks(docks, sizes, Qt::Horizontal);
+    });
+    // Set the initial toggle icon based on the dock's current area (left by
+    // default) and content visibility (visible by default).
+    update_toggle_icon();
 
     // Populate the device list on startup.
     on_refresh_devices();
@@ -226,86 +245,78 @@ void MainWindow::resizeEvent(QResizeEvent* event) {
     }
 }
 
-bool MainWindow::eventFilter(QObject* obj, QEvent* event) {
-    // Drag the window by dragging the menu bar (title bar).
-    if (obj == menuBar()) {
-        if (event->type() == QEvent::MouseButtonPress) {
-            auto* me = static_cast<QMouseEvent*>(event);
-            if (me->button() == Qt::LeftButton) {
-                if (auto* handle = windowHandle()) {
-                    handle->startSystemMove();
-                }
-            }
-        } else if (event->type() == QEvent::MouseButtonDblClick) {
-            auto* me = static_cast<QMouseEvent*>(event);
-            if (me->button() == Qt::LeftButton) {
-                if (isMaximized()) showNormal();
-                else showMaximized();
+/// @brief Applies the title and theme colors to the custom title bar, and
+/// keeps the colors in sync with ThemeController.
+void MainWindow::build_title_bar_controls() {
+    if (!title_bar_) return;
+    title_bar_->setTitle(windowTitle());
+
+    // Apply the theme background/text colors and re-apply whenever the theme
+    // changes (user color switch or system light/dark flip). The native WM
+    // title bar color cannot be changed from Qt, but our custom title bar's
+    // color is set directly so it always tracks the application theme.
+    //
+    // §13 — title chip color rules:
+    //   - title_box = the OPPOSITE theme mode's panel color (light panel
+    //     when dark mode is active, dark panel when light mode is active)
+    //     so the rounded chip stands out from the title bar background.
+    //   - title_fg  = RGB-inverse of title_box, so the text always has
+    //     maximum contrast against the chip background.
+    //   - The camera icon has been removed; only the "EB plus" text chip
+    //     remains as the leftmost element.
+    //
+    // BUG-4: the status bar chart/clock icons are rendered once via
+    // IconProvider::get(name) which reads QPalette::WindowText at call time;
+    // after a theme switch the palette changes but the cached pixmaps do
+    // not, so we re-render them here. The ActivityBar icons are refreshed
+    // via SettingsPanel::refresh_icons() for the same reason. The toolbar
+    // action icons are re-rendered via the "icon_name" property (§13.1).
+    auto apply = [this]() {
+        if (!title_bar_) return;
+        // Clear the icon cache so re-rendered icons pick up the new theme
+        // color (BUG-R7: stale icons from the previous theme otherwise
+        // persist in the cache).
+        IconProvider::clear_cache();
+        // §15.3: title bar uses the panel color (same as the status bar) so
+        // both bars share the same shade, with a subtle difference from the
+        // sidebar which uses the primary background.
+        const QColor bg(theme_.effective_panel_hex());
+        const QColor fg(theme_.effective_text_hex());
+        // §13: title chip background = the opposite mode's panel color
+        // (light panel in dark mode, dark panel in light mode) so the chip
+        // stands out from the title bar. The title text color is the
+        // RGB-inverse of the chip background, guaranteeing high contrast
+        // between text and chip in both themes.
+        const QColor title_box(theme_.panel_hex(!theme_.is_dark_mode()));
+        const QColor title_fg(255 - title_box.red(),
+                              255 - title_box.green(),
+                              255 - title_box.blue());
+        title_bar_->setColors(bg, fg, title_fg, title_box);
+        // §15.2: set the ActivityBar's separator color to match the title
+        // bar's bottom line so both lines are consistent.  Dark bg → lighter
+        // line, light bg → darker line (same logic as CustomTitleBar).
+        if (settings_) {
+            if (auto* bar = settings_->findChild<ActivityBar*>()) {
+                const QColor sep = bg.lightness() < 128
+                    ? bg.lighter(140)
+                    : bg.darker(120);
+                bar->set_separator_color(sep);
             }
         }
-    }
-    return QMainWindow::eventFilter(obj, event);
-}
-
-/// @brief Adds the window title (left) and min/max/close buttons (right) to
-/// the menu bar, turning it into a frameless-window title bar.
-void MainWindow::build_title_bar_controls() {
-    auto* mb = menuBar();
-
-    // Left corner: window title (bold, inverse color of the title bar bg).
-    auto* title_label = new QLabel(QStringLiteral("EB plus"), mb);
-    title_label->setObjectName("WindowTitleLabel");
-    title_label->setStyleSheet(QStringLiteral(
-        "background: transparent; border: none; padding: 0 8px;"
-        "font-weight: bold;"
-    ));
-    mb->setCornerWidget(title_label, Qt::TopLeftCorner);
-
-    // Right corner: window control buttons.
-    auto* controls = new QWidget(mb);
-    controls->setStyleSheet(QStringLiteral(
-        "QWidget { background: transparent; }"
-        "QPushButton { background: transparent; border: none; "
-        "  min-width: 40px; max-width: 40px; }"
-        "QPushButton:hover { background: rgba(128,128,128,60); }"
-        "QPushButton:pressed { background: rgba(128,128,128,100); }"
-    ));
-    auto* layout = new QHBoxLayout(controls);
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(0);
-
-    auto make_btn = [this](QStyle::StandardPixmap pix, const QString& tip) {
-        auto* btn = new QPushButton;
-        btn->setIcon(style()->standardIcon(pix));
-        btn->setIconSize(QSize(16, 16));
-        btn->setToolTip(tip);
-        btn->setFocusPolicy(Qt::NoFocus);
-        btn->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Expanding);
-        return btn;
+        // Re-render theme-recolorable status bar icons (BUG-4).
+        if (status_rate_icon_) {
+            status_rate_icon_->setPixmap(
+                IconProvider::get(QStringLiteral("chart")).pixmap(QSize(12, 12)));
+        }
+        if (status_ts_icon_) {
+            status_ts_icon_->setPixmap(
+                IconProvider::get(QStringLiteral("clock")).pixmap(QSize(12, 12)));
+        }
+        // Refresh ActivityBar icons so they track the new theme.
+        if (settings_) settings_->refresh_icons();
     };
-
-    auto* btn_min   = make_btn(QStyle::SP_TitleBarMinButton,  tr("Minimize"));
-    auto* btn_max   = make_btn(QStyle::SP_TitleBarMaxButton,  tr("Maximize"));
-    auto* btn_close = make_btn(QStyle::SP_TitleBarCloseButton, tr("Close"));
-
-    connect(btn_min, &QPushButton::clicked, this, [this]() {
-        showMinimized();
-    });
-    connect(btn_max, &QPushButton::clicked, this, [this]() {
-        if (isMaximized()) showNormal();
-        else showMaximized();
-    });
-    connect(btn_close, &QPushButton::clicked, this, [this]() {
-        close();
-    });
-
-    layout->addWidget(btn_min);
-    layout->addWidget(btn_max);
-    layout->addWidget(btn_close);
-    mb->setCornerWidget(controls, Qt::TopRightCorner);
-
-    // Let the menu bar act as a drag region for the frameless window.
-    mb->installEventFilter(this);
+    apply();
+    connect(&theme_, &ThemeController::theme_changed, this, apply);
 }
 
 // ---------------------------------------------------------------------------
@@ -313,13 +324,12 @@ void MainWindow::build_title_bar_controls() {
 // ---------------------------------------------------------------------------
 
 void MainWindow::build_menus() {
-    auto* mb = menuBar();
-    // The native menu bar (GNOME global menu, macOS screen menu) does not
-    // respect Qt stylesheets, so the theme cannot recolor it. Force the
-    // in-process Qt menu bar so the theme stylesheet applies to the menu
-    // bar and its dropdowns — this keeps the top bar consistent with the
-    // selected background color and text color.
-    mb->setNativeMenuBar(false);
+    // Phase 3 (§3.6.1/§3.6.3): menus live as dropdown buttons inside the
+    // custom title bar (no top-level QMenuBar). Each addMenu() call adds a
+    // QPushButton to the title bar that pops up the returned QMenu. The 5
+    // dropdowns are File | View | Theme | Tools | Help; the former Calibration
+    // menu folds into Tools (design §3.6.3). All existing actions are preserved.
+    auto* mb = title_bar_;
 
     // File
     auto* m_file = mb->addMenu(tr("&File"));
@@ -331,26 +341,18 @@ void MainWindow::build_menus() {
     a_load_cfg_ = m_file->addAction(tr("Load Camera Config..."), this, &MainWindow::on_load_config);
     a_save_cfg_->setEnabled(false);
     a_load_cfg_->setEnabled(false);
+    a_save_cfg_->setToolTip(tr("Requires a live camera connection"));
+    a_load_cfg_->setToolTip(tr("Requires a live camera connection"));
     m_file->addSeparator();
     a_save_biases_ = m_file->addAction(tr("Save Biases..."), this, &MainWindow::on_save_biases);
     a_load_biases_ = m_file->addAction(tr("Load Biases..."), this, &MainWindow::on_load_biases);
     a_save_biases_->setEnabled(false);
     a_load_biases_->setEnabled(false);
-    m_file->addSeparator();
-    // Phase 3 — recording actions.
-    a_record_start_ = m_file->addAction(tr("Start &Recording..."), this,
-                                        &MainWindow::on_record_start,
-                                        QKeySequence("R"));
-    a_record_stop_  = m_file->addAction(tr("Sto&p Recording"), this,
-                                        &MainWindow::on_record_stop);
-    a_record_start_->setEnabled(false);
-    a_record_stop_->setEnabled(false);
-    m_file->addSeparator();
-    // Phase 4 — export.
-    a_export_ = m_file->addAction(tr("&Export..."), this, &MainWindow::on_export_dialog);
-    a_export_->setEnabled(false);
+    a_save_biases_->setToolTip(tr("Requires a live camera connection"));
+    a_load_biases_->setToolTip(tr("Requires a live camera connection"));
     m_file->addSeparator();
     // Phase 10 — algorithm parameter save/load.
+    // Recording and Export moved to the sidebar's File Tools panel (§14.5).
     m_file->addAction(tr("Save Algo Params..."), this, [this]() {
         const QString path = QFileDialog::getSaveFileName(
             this, tr("Save Algorithm Parameters"), {},
@@ -378,14 +380,10 @@ void MainWindow::build_menus() {
     m_file->addSeparator();
     m_file->addAction(tr("E&xit"), this, &QWidget::close, QKeySequence::Quit);
 
-    // View — includes the sidebar (settings dock) toggle with shortcut.
+    // View — sidebar toggle is no longer here; it lives in the ActivityBar
+    // toggle button (§11.2 point 5). Playback panel toggle and layout actions
+    // remain.
     auto* m_view = mb->addMenu(tr("&View"));
-    a_toggle_sidebar_ = m_view->addAction(tr("Toggle Sidebar"));
-    a_toggle_sidebar_->setCheckable(true);
-    a_toggle_sidebar_->setChecked(true);
-    a_toggle_sidebar_->setShortcut(QKeySequence("Ctrl+Shift+S"));
-    // The toggled -> setVisible connection is wired in wire_signals() after
-    // the sidebar tab is created, so the tab visibility stays in sync.
     auto* pb_toggle = m_view->addAction(tr("Toggle Playback Panel"));
     pb_toggle->setCheckable(true);
     pb_toggle->setChecked(false);
@@ -404,56 +402,34 @@ void MainWindow::build_menus() {
                           else showFullScreen();
                       }, QKeySequence("F11"));
 
-    // Theme — background color + light/dark mode. Moved here from the
-    // sidebar so the controls are at the top of the window where appearance
-    // settings are typically found. The controller builds its own submenu
-    // with radio actions for each color and mode.
+    // Theme — top-level dropdown to the right of View (§11.2 point 6).
+    // The controller builds its own submenu with radio actions for each
+    // color and mode.
     auto* m_theme = mb->addMenu(tr("&Theme"));
     theme_.build_menu(m_theme);
 
-    // Camera — only display-interaction controls and presets that are NOT
-    // in the sidebar's Devices panel. Connect/Disconnect/Refresh live in
-    // the DevicesPanel (基础功能 tab).
-    auto* m_cam = mb->addMenu(tr("&Camera"));
-    a_roi_drag_ = m_cam->addAction(tr("&ROI Drag Mode"), this, &MainWindow::on_toggle_roi_drag);
-    a_roi_drag_->setCheckable(true);
-    a_roi_drag_->setChecked(false);
-    a_roi_drag_->setShortcut(QKeySequence("Ctrl+R"));
-    a_roi_drag_->setEnabled(false);
-    m_cam->addSeparator();
-    // Built-in config presets (Phase 4).
-    auto* m_presets = m_cam->addMenu(tr("&Presets"));
-    const auto preset_names = config_.preset_names();
-    for (int i = 0; i < preset_names.size(); ++i) {
-        m_presets->addAction(preset_names[i], this, [this, i]() { on_apply_preset(i); });
-    }
+    // The Camera menu has been removed — ROI Drag Mode and Presets moved
+    // to the sidebar's ROI panel (Hardware section) per §14.5.
+    // Connect/Disconnect/Refresh already live in the DevicesPanel.
 
     // Preprocess menu and Frame Mode menu have been removed — all
     // preprocessing stage toggles live in the PreprocessingPanel and all
     // frame mode selection lives in the DisplayPanel (both in the sidebar's
-    // 基础功能 tab). This eliminates duplication with the sidebar.
+    // 算法模块 / 显示与统计 sections). This eliminates duplication with the sidebar.
 
     // The Algorithm menu has been removed — all algorithm configuration
     // (enable, ROI, parameters, configure) lives in the sidebar's "算法模块"
-    // tab (AlgorithmsPanel).
+    // section (AlgorithmsPanel).
 
-    // Calibration (Phase 9) — launches the wizard lazily.
-    m_calibration_ = mb->addMenu(tr("&Calibration"));
-    m_calibration_->addAction(tr("&Intrinsic Wizard..."), this, &MainWindow::on_intrinsic_wizard);
-
-    // Tools (design §5.5) — window management only. Algorithm-specific
-    // windows are opened from the sidebar's "算法模块" tab, not duplicated here.
+    // Tools (design §5.5) — the calibration wizard (folded in from the former
+    // Calibration menu, §3.6.3). The former Add/Tile/Cascade/Close display-
+    // window actions were removed (§14.1) — they were legacy multi-window
+    // management functions irrelevant to the current dock-based GUI.
+    // Algorithm-specific windows are opened from the sidebar's Algorithms
+    // section, not duplicated here.
     m_tools_ = mb->addMenu(tr("&Tools"));
-    m_tools_->addAction(tr("&Add Display Window..."), this, &MainWindow::on_add_display_window);
-    m_tools_->addAction(tr("&Tile Windows"), this, &MainWindow::on_tile_windows);
-    m_tools_->addAction(tr("&Cascade Windows"), this, [this]() {
-        if (multi_window_) multi_window_->cascade();
-        else statusBar()->showMessage(tr("No display windows open."), 3000);
-    });
-    m_tools_->addAction(tr("&Close All Windows"), this, [this]() {
-        if (multi_window_) multi_window_->close_all();
-        else statusBar()->showMessage(tr("No display windows open."), 3000);
-    });
+    // Calibration (Phase 9) — launches the wizard lazily.
+    m_tools_->addAction(tr("&Intrinsic Wizard..."), this, &MainWindow::on_intrinsic_wizard);
 
     // Help
     auto* m_help = mb->addMenu(tr("&Help"));
@@ -461,124 +437,222 @@ void MainWindow::build_menus() {
     m_help->addAction(tr("About &Qt"), this, &QApplication::aboutQt);
 }
 
-void MainWindow::build_toolbar() {
-    // Main toolbar — prominent, always-visible toggles for the most-used
-    // view controls. The sidebar toggle here is the "醒目位置按钮" requested
-    // by the user: it's at the top of the window, checkable, and uses a
-    // standard icon so it stands out from the menu items.
-    main_toolbar_ = addToolBar(tr("Main"));
-    main_toolbar_->setObjectName("MainToolbar");
-    main_toolbar_->setMovable(false);
-    main_toolbar_->setIconSize({20, 20});
-    main_toolbar_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-
-    // Sidebar toggle — the primary action on the toolbar.
-    if (a_toggle_sidebar_) {
-        // Make the toolbar button show the checked state visually.
-        auto* btn = qobject_cast<QToolButton*>(main_toolbar_->widgetForAction(a_toggle_sidebar_));
-        if (btn) btn->setCheckable(true);
-        main_toolbar_->addAction(a_toggle_sidebar_);
-    }
-
-    main_toolbar_->addSeparator();
-
-    // Tile / reset layout — quick access for multi-window arrangement.
-    auto* a_tile = main_toolbar_->addAction(style()->standardIcon(QStyle::SP_TitleBarNormalButton),
-                                            tr("Tile"));
-    connect(a_tile, &QAction::triggered, this, &MainWindow::on_tile_windows);
-
-    auto* a_reset = main_toolbar_->addAction(style()->standardIcon(QStyle::SP_BrowserReload),
-                                             tr("Reset Layout"));
-    connect(a_reset, &QAction::triggered, this, &MainWindow::on_reset_layout);
-
-    main_toolbar_->addSeparator();
-
-    // Fullscreen toggle on the toolbar for discoverability.
-    auto* a_fs = main_toolbar_->addAction(style()->standardIcon(QStyle::SP_TitleBarMaxButton),
-                                          tr("Fullscreen"));
-    connect(a_fs, &QAction::triggered, this, [this]() {
-        if (isFullScreen()) showNormal();
-        else showFullScreen();
-    });
-
-    // --- Right-edge sidebar tab (collapsed marker) ---
-    // A thin vertical toolbar docked to the right edge. It's visible ONLY
-    // when the sidebar is hidden, giving the user a clear way to bring it
-    // back without hunting through the View menu. The arrow icon makes it
-    // obvious that clicking it expands something to the right.
-    sidebar_tab_ = new QToolBar(tr("Sidebar Tab"), this);
-    sidebar_tab_->setObjectName("SidebarTab");
-    sidebar_tab_->setMovable(false);
-    sidebar_tab_->setFloatable(false);
-    sidebar_tab_->setIconSize({22, 22});
-    sidebar_tab_->setToolButtonStyle(Qt::ToolButtonIconOnly);
-    addToolBar(Qt::RightToolBarArea, sidebar_tab_);
-    a_show_sidebar_ = sidebar_tab_->addAction(
-        style()->standardIcon(QStyle::SP_ArrowLeft), tr("Show Sidebar"));
-    a_show_sidebar_->setToolTip(tr("Show Sidebar (Ctrl+Shift+S)"));
-    auto* sb_btn = qobject_cast<QToolButton*>(sidebar_tab_->widgetForAction(a_show_sidebar_));
-    if (sb_btn) {
-        sb_btn->setAutoRaise(true);
-        sb_btn->setFixedWidth(28);
-    }
-    connect(a_show_sidebar_, &QAction::triggered, this, [this]() {
-        if (settings_dock_) {
-            settings_dock_->setVisible(true);
-            if (a_toggle_sidebar_) {
-                QSignalBlocker b(a_toggle_sidebar_);
-                a_toggle_sidebar_->setChecked(true);
-            }
-        }
-        update_sidebar_tab_visibility();
-    });
-    sidebar_tab_->setVisible(false);  // hidden until sidebar is closed
-}
-
-void MainWindow::update_sidebar_tab_visibility() {
-    const bool dock_visible = settings_dock_ && settings_dock_->isVisible();
-    if (sidebar_tab_) {
-        sidebar_tab_->setVisible(!dock_visible);
-    }
-}
-
 void MainWindow::build_status_bar() {
     auto* sb = statusBar();
-    status_conn_ = new QLabel(tr("Disconnected"), this);
-    status_rate_ = new QLabel(tr("— ev/s"), this);
-    status_ts_   = new QLabel(tr("t: —"), this);
-    status_rec_  = new QLabel(tr("Idle"), this);
-    sb->addWidget(status_conn_);
-    sb->addWidget(status_rate_);
-    sb->addWidget(status_ts_);
-    sb->addPermanentWidget(status_rec_);
+
+    // Monospace font for numeric status labels (event rate / timestamp /
+    // recording timer) — design §3.9.2.
+    QFont mono(QStringLiteral("JetBrains Mono"), 9);
+    mono.setFamilies({QStringLiteral("JetBrains Mono"),
+                      QStringLiteral("Consolas"),
+                      QStringLiteral("Menlo"),
+                      QStringLiteral("Monospace")});
+
+    // Builds a [icon][text] composite status item. @p icon_name selects an
+    // SVG from the icon resource; @p text_out receives the text QLabel (so
+    // existing setText() call sites keep working); @p icon_out, when non-null,
+    // receives the icon QLabel (for dots whose color must change at runtime).
+    const auto make_item = [this](const QString& icon_name,
+                                  QLabel** text_out,
+                                  QLabel** icon_out = nullptr) -> QWidget* {
+        auto* w = new QWidget(this);
+        auto* l = new QHBoxLayout(w);
+        l->setContentsMargins(0, 0, 0, 0);
+        l->setSpacing(4);
+        auto* icon = new QLabel(w);
+        icon->setPixmap(IconProvider::get(icon_name).pixmap(QSize(12, 12)));
+        icon->setFixedSize(14, 14);
+        icon->setAlignment(Qt::AlignCenter);
+        auto* text = new QLabel(w);
+        l->addWidget(icon);
+        l->addWidget(text);
+        *text_out = text;
+        if (icon_out) *icon_out = icon;
+        return w;
+    };
+
+    // Connection: colored dot (green connected / gray disconnected).
+    sb->addWidget(make_item(QStringLiteral("circle"), &status_conn_, &status_conn_dot_));
+    status_conn_->setText(tr("Disconnected"));
+    set_conn_connected(false);
+
+    // Event rate: chart icon + monospace numeric.
+    sb->addWidget(make_item(QStringLiteral("chart"), &status_rate_, &status_rate_icon_));
+    status_rate_->setText(tr("— ev/s"));
+    status_rate_->setFont(mono);
+
+    // Timestamp: clock icon + monospace numeric.
+    sb->addWidget(make_item(QStringLiteral("clock"), &status_ts_, &status_ts_icon_));
+    status_ts_->setText(tr("t: —"));
+    status_ts_->setFont(mono);
+
+    // Recording: red dot (blinks while recording) + monospace timer.
+    sb->addPermanentWidget(make_item(QStringLiteral("circle"), &status_rec_, &status_rec_dot_));
+    status_rec_->setText(tr("Idle"));
+    status_rec_->setFont(mono);
+    // Rec dot is red and hidden until recording starts.
+    status_rec_dot_->setPixmap(
+        IconProvider::get(QStringLiteral("circle"), QColor(229, 57, 53)).pixmap(QSize(12, 12)));
+    status_rec_dot_->setVisible(false);
+
+    // Recording blink timer (design §3.8.2: 500ms interval).
+    rec_blink_timer_ = new QTimer(this);
+    rec_blink_timer_->setInterval(500);
+    connect(rec_blink_timer_, &QTimer::timeout, this, &MainWindow::on_rec_blink);
+
+    // Performance metrics flush timer (10 Hz). Queries PerformanceMeter and
+    // AlgoBridge, updates the InformationPanel with live latency, throughput,
+    // and algorithm overload status. All metrics are derived from the
+    // Metavision SDK's own RateEstimator and actual wall-clock measurements
+    // — not a jAER port. Latency = SDK CD callback arrival → frame_ready
+    // signal; throughput = SDK rate × sizeof(EventCD); algo status = actual
+    // flood-guard state from AlgoInstance::is_overloaded().
+    perf_timer_ = new QTimer(this);
+    perf_timer_->setInterval(100);
+    connect(perf_timer_, &QTimer::timeout, this, [this]() {
+        if (!camera_.is_connected()) return;
+        const double latency_ms = perf_meter_.latency_us() * 1.0e-3;
+        // Throughput: SDK rate (events/s) × event struct size (bytes) → MB/s.
+        constexpr double event_size = sizeof(Metavision::EventCD);
+        const double throughput_mbs = last_rate_eps_ * event_size / 1.0e6;
+        settings_->information_panel()->set_performance(latency_ms, throughput_mbs);
+        // Algorithm overload status from AlgoBridge. Also compute the max
+        // drop rate across all live instances (total_dropped / total_pushed)
+        // so the user can see if any algorithm is falling behind the event
+        // rate and silently discarding events via the flood guard.
+        int active = 0, overloaded = 0;
+        double max_drop_pct = 0.0;
+        for (const auto& inst : algo_bridge_.list_live()) {
+            if (inst->is_overloaded())
+                ++overloaded;
+            else if (inst->is_enabled())
+                ++active;
+            const std::size_t pushed = inst->total_pushed();
+            if (pushed > 0) {
+                const double pct = 100.0 * static_cast<double>(inst->total_dropped())
+                                   / static_cast<double>(pushed);
+                if (pct > max_drop_pct) max_drop_pct = pct;
+            }
+        }
+        settings_->information_panel()->set_algo_status(active, overloaded);
+        settings_->information_panel()->set_drop_rate(max_drop_pct);
+    });
+    perf_timer_->start();
+}
+
+void MainWindow::set_conn_connected(bool connected) {
+    // Green dot when connected, gray when disconnected (design §3.8.2).
+    const QColor dot_color = connected ? QColor(67, 160, 71)    // green
+                                       : QColor(158, 158, 158); // gray
+    if (status_conn_dot_) {
+        status_conn_dot_->setPixmap(
+            IconProvider::get(QStringLiteral("circle"), dot_color).pixmap(QSize(12, 12)));
+    }
+    if (status_conn_) {
+        status_conn_->setProperty("class", connected ? "status-conn" : "status-disc");
+        status_conn_->style()->unpolish(status_conn_);
+        status_conn_->style()->polish(status_conn_);
+    }
+}
+
+void MainWindow::start_rec_blink() {
+    rec_blink_on_ = true;
+    if (status_rec_dot_) {
+        status_rec_dot_->setVisible(true);
+    }
+    if (rec_blink_timer_) rec_blink_timer_->start();
+}
+
+void MainWindow::stop_rec_blink() {
+    if (rec_blink_timer_) rec_blink_timer_->stop();
+    rec_blink_on_ = false;
+    if (status_rec_dot_) status_rec_dot_->setVisible(false);
+}
+
+void MainWindow::on_rec_blink() {
+    if (status_rec_dot_) {
+        status_rec_dot_->setVisible(!status_rec_dot_->isVisible());
+    }
+}
+
+void MainWindow::update_toggle_icon() {
+    if (!settings_dock_ || !settings_) return;
+    const auto area = dockWidgetArea(settings_dock_);
+    const bool content_visible = settings_->is_content_visible();
+    // Chevron direction (§11.2 point 5):
+    //   Left dock + visible  → chevron-left
+    //   Left dock + hidden   → chevron-right
+    //   Right dock + visible → chevron-right
+    //   Right dock + hidden  → chevron-left
+    QString icon_name;
+    if (area == Qt::LeftDockWidgetArea) {
+        icon_name = content_visible ? QStringLiteral("chevron-left")
+                                    : QStringLiteral("chevron-right");
+    } else {
+        icon_name = content_visible ? QStringLiteral("chevron-right")
+                                    : QStringLiteral("chevron-left");
+    }
+    // Access the ActivityBar via SettingsPanel to set the toggle icon.
+    // We use findChild to avoid exposing ActivityBar as a public accessor.
+    if (auto* bar = settings_->findChild<ActivityBar*>()) {
+        bar->set_toggle_icon(icon_name);
+    }
+}
+
+void MainWindow::on_sidebar_content_toggled(bool visible) {
+    if (!settings_dock_ || !settings_) return;
+    if (visible) {
+        // Restore the minimum width and the saved dock width (or a sensible
+        // default if none saved).
+        settings_dock_->setMinimumWidth(200);
+        settings_dock_->setMaximumWidth(QWIDGETSIZE_MAX); // remove collapsed cap
+        const int target = saved_sidebar_width_ > 0 ? saved_sidebar_width_ : 380;
+        const QList<QDockWidget*> docks = {settings_dock_};
+        const QList<int> sizes = {target};
+        resizeDocks(docks, sizes, Qt::Horizontal);
+    } else {
+        // Save the current dock width before shrinking to ActivityBar width.
+        saved_sidebar_width_ = settings_dock_->width();
+        // Lower the minimum width and cap the maximum so the dock cannot be
+        // dragged wider while collapsed (§15.5).
+        settings_dock_->setMinimumWidth(48);
+        settings_dock_->setMaximumWidth(48);
+        const QList<QDockWidget*> docks = {settings_dock_};
+        const QList<int> sizes = {48};
+        resizeDocks(docks, sizes, Qt::Horizontal);
+    }
+    update_toggle_icon();
 }
 
 void MainWindow::wire_signals() {
-    // Sidebar toggle (menu action + toolbar button) <-> settings dock.
-    // The dock's visibilityChanged signal keeps the toggle action checked
-    // state and the collapsed-side-tab visibility in sync no matter how the
-    // dock is shown/hidden (menu, toolbar, dock X button, or layout restore).
-    if (a_toggle_sidebar_ && settings_dock_) {
-        connect(a_toggle_sidebar_, &QAction::toggled, this, [this](bool on) {
-            if (settings_dock_) settings_dock_->setVisible(on);
-        });
-        connect(settings_dock_, &QDockWidget::visibilityChanged, this,
-                [this](bool visible) {
-                    if (a_toggle_sidebar_) {
-                        QSignalBlocker b(a_toggle_sidebar_);
-                        a_toggle_sidebar_->setChecked(visible);
-                    }
-                    update_sidebar_tab_visibility();
-                });
-    }
+    // Sidebar toggle is now handled by the ActivityBar toggle button →
+    // SettingsPanel::content_toggled → on_sidebar_content_toggled (connected
+    // in the constructor). No menu action or toolbar button involved.
 
     // Devices panel <-> controller
     auto* dp = settings_->devices_panel();
     connect(dp, &DevicesPanel::refresh_requested, this, &MainWindow::on_refresh_devices);
     connect(dp, &DevicesPanel::connect_first_requested, this, &MainWindow::on_connect_first);
     connect(dp, &DevicesPanel::connect_serial_requested, this,
-            [this](const QString& serial) { camera_.connect_serial(serial.toStdString()); });
+            [this](const QString& serial) {
+                // Stop the recorder before switching sources so it can close
+                // the output file cleanly while the old camera is still alive.
+                // connect_serial() calls teardown() which destroys the old
+                // camera — after that, recorder_.stop() can no longer call
+                // stop_log_raw_data() and the file is left without a footer.
+                if (recorder_.is_recording()) recorder_.stop();
+                camera_.connect_serial(serial.toStdString());
+            });
     connect(dp, &DevicesPanel::disconnect_requested, this, &MainWindow::on_disconnect);
+
+    // Phase 2 (§3.3.2): bind every registered panel to the camera so each
+    // panel auto-receives connected/disconnected events via its
+    // on_camera_connected / on_camera_disconnected slots. This replaces the
+    // per-panel on_camera_connected calls that were previously scattered in
+    // the connected/disconnected lambdas below.
+    for (const auto& panel : settings_->panels()) {
+        panel->bind_camera(&camera_);
+    }
 
     // Controller -> UI
     connect(&camera_, &CameraController::connected, this, [this](const SensorInfo& info) {
@@ -590,23 +664,20 @@ void MainWindow::wire_signals() {
         status_conn_->setText(tr("Connected: %1").arg(info.generation_name.isEmpty()
                                                            ? info.integrator
                                                            : info.generation_name));
-        // Phase 2 panels: populate from the now-connected camera.
-        settings_->biases_panel()->on_camera_connected(&camera_);
-        settings_->roi_panel()->on_camera_connected(&camera_);
-        settings_->esp_panel()->on_camera_connected(&camera_);
-        settings_->trigger_panel()->on_camera_connected(&camera_);
-        // Phase 5 panels.
-        settings_->preprocessing_panel()->on_camera_connected(&camera_);
+        set_conn_connected(true);
         // Enable config / bias file actions on live cameras only.
         const bool live = !info.is_file;
         a_save_cfg_->setEnabled(live);
         a_load_cfg_->setEnabled(live);
         a_save_biases_->setEnabled(live);
         a_load_biases_->setEnabled(live);
-        a_roi_drag_->setEnabled(live);
-        a_record_start_->setEnabled(live);
-        a_record_stop_->setEnabled(false);
-        a_export_->setEnabled(true);
+        // ROI Drag Mode + Presets moved to the sidebar ROI panel (§14.5).
+        settings_->roi_panel()->set_roi_drag_enabled(live);
+        settings_->roi_panel()->set_presets_enabled(live);
+        // Recording + Export moved to the sidebar File Tools panel (§14.5).
+        settings_->file_tools_panel()->set_record_enabled(live);
+        settings_->file_tools_panel()->set_stop_enabled(false);
+        settings_->file_tools_panel()->set_export_enabled(true);
         // Phase 3: show/hide playback bar.
         if (auto* pb = findChild<QDockWidget*>("PlaybackDock")) {
             pb->setVisible(info.is_file);
@@ -648,20 +719,40 @@ void MainWindow::wire_signals() {
         if (xyt_display_) {
             xyt_display_->clear();
         }
+        // Reset any stale algo_cd_cb_id_ from a previous camera. The
+        // connect_*() paths (connect_file/serial/first_available) call
+        // teardown() which destroys the old camera — and with it the old CD
+        // callback — but never emits disconnected(), so remove_algo_callback()
+        // (which lives in the disconnected handler) never ran. Without this
+        // reset, install_algo_callback() short-circuits on the stale ID and
+        // the new camera's CD callback is never installed (algorithms
+        // receive no events after a source switch).
+        algo_cd_cb_id_.reset();
         install_algo_callback();
         camera_.start();
         // Sync UI to FramePipeline's current (persisted) values so the
         // DisplayPanel and PlaybackControls reflect the actual fps /
         // accumulation / fps_limit after a reconnect or file reopen.
         if (auto* fp = camera_.frame_pipeline()) {
-            settings_->display_panel()->set_accumulation_time_ms(
-                fp->accumulation_time_us() / 1000.0);
+            settings_->display_panel()->set_accumulation_time_us(
+                fp->accumulation_time_us());
             settings_->display_panel()->set_fps(fp->fps());
             settings_->display_panel()->set_fps_limit(fp->fps_limit());
             playback_controls_->on_time_window_changed(fp->accumulation_time_us());
             playback_controls_->on_frame_rate_changed(fp->fps());
             playback_controls_->on_fps_limit_changed(fp->fps_limit());
         }
+        // Explicitly refresh facility-dependent panels AFTER camera_.start().
+        // The AbstractPanel::bind_camera signal fires on_camera_connected
+        // BEFORE start() completes, so HAL facilities (biases, ROI, trigger,
+        // ESP) may not be fully available at that point. Calling again here
+        // ensures panels see the live camera's facilities — matching the
+        // pattern used by on_load_config / on_apply_preset. Safe to call
+        // twice: each panel's populate() clears and rebuilds.
+        settings_->biases_panel()->on_camera_connected(&camera_);
+        settings_->roi_panel()->on_camera_connected(&camera_);
+        settings_->esp_panel()->on_camera_connected(&camera_);
+        settings_->trigger_panel()->on_camera_connected(&camera_);
     });
     connect(&camera_, &CameraController::disconnected, this, [this]() {
         // Explicitly remove the CD callback before clearing the ID, so the
@@ -669,26 +760,27 @@ void MainWindow::wire_signals() {
         // members are destroyed.
         remove_algo_callback();
         prev_frame_ts_ = 0;
+        perf_meter_.reset();
+        last_rate_eps_ = 0.0;
         settings_->information_panel()->clear();
         settings_->statistics_panel()->clear();
         settings_->devices_panel()->set_connected(false);
-        settings_->biases_panel()->on_camera_disconnected();
-        settings_->roi_panel()->on_camera_disconnected();
-        settings_->esp_panel()->on_camera_disconnected();
-        settings_->trigger_panel()->on_camera_disconnected();
-        settings_->preprocessing_panel()->on_camera_disconnected();
         status_conn_->setText(tr("Disconnected"));
+        set_conn_connected(false);
         status_rate_->setText(tr("— ev/s"));
         status_ts_->setText(tr("t: —"));
         a_save_cfg_->setEnabled(false);
         a_load_cfg_->setEnabled(false);
         a_save_biases_->setEnabled(false);
         a_load_biases_->setEnabled(false);
-        a_roi_drag_->setEnabled(false);
-        a_roi_drag_->setChecked(false);
-        a_record_start_->setEnabled(false);
-        a_record_stop_->setEnabled(false);
-        a_export_->setEnabled(false);
+        // ROI Drag Mode + Presets moved to the sidebar ROI panel (§14.5).
+        settings_->roi_panel()->set_roi_drag_enabled(false);
+        settings_->roi_panel()->set_roi_drag_checked(false);
+        settings_->roi_panel()->set_presets_enabled(false);
+        // Recording + Export moved to the sidebar File Tools panel (§14.5).
+        settings_->file_tools_panel()->set_record_enabled(false);
+        settings_->file_tools_panel()->set_stop_enabled(false);
+        settings_->file_tools_panel()->set_export_enabled(false);
         display_->set_roi_drag_mode(false);
         display_->clear();
         if (auto* pb = findChild<QDockWidget*>("PlaybackDock")) {
@@ -698,17 +790,32 @@ void MainWindow::wire_signals() {
     });
     connect(&camera_, &CameraController::started, this, [this]() {
         status_rec_->setText(tr("Streaming"));
+        stop_rec_blink();
     });
     connect(&camera_, &CameraController::stopped, this, [this]() {
-        if (!recorder_.is_recording()) {
+        // Auto-stop the recorder when the camera stops (user stop, file EOF,
+        // runtime error). Without this, the recorder keeps running with a
+        // dead camera — the flush timer ticks but get_latest_raw_data()
+        // returns nothing, and the output file is left without a clean
+        // footer because stop_log_raw_data() is never called.
+        if (recorder_.is_recording()) {
+            recorder_.stop();
+        } else {
             status_rec_->setText(tr("Idle"));
+            stop_rec_blink();
         }
     });
     connect(&camera_, &CameraController::error, this, [this](const QString& msg) {
+        // Auto-stop the recorder on camera error for the same reason as
+        // stopped(). The error handler runs before stopped() (both are
+        // queued from the error callback), so stop here to ensure the
+        // file is closed while the camera handle is still valid.
+        if (recorder_.is_recording()) recorder_.stop();
         QMessageBox::warning(this, tr("Camera error"), msg);
     });
     connect(&camera_, &CameraController::runtime_warning, this, [this](const QString& msg) {
         status_rec_->setText(tr("Stopped"));
+        stop_rec_blink();
         statusBar()->showMessage(msg, 5000);
     });
 
@@ -717,9 +824,6 @@ void MainWindow::wire_signals() {
             [this](QImage frame, Metavision::timestamp ts) {
                 process_algo_results(frame);
                 display_->set_frame(frame);
-                // Forward the annotated frame to any multi-window child displays
-                // so they see the same overlays/replacements as the main view.
-                emit annotated_frame_ready(frame);
                 settings_->statistics_panel()->set_timestamp(ts);
                 status_ts_->setText(QStringLiteral("t: %1 s").arg(ts / 1.0e6, 0, 'f', 3));
                 if (prev_frame_ts_ > 0 && ts > prev_frame_ts_) {
@@ -727,6 +831,7 @@ void MainWindow::wire_signals() {
                     settings_->statistics_panel()->set_fps(fps);
                 }
                 prev_frame_ts_ = ts;
+                perf_meter_.tick_frame();
             });
 
     // File playback: feed the events in each accumulation window to algorithm
@@ -739,10 +844,49 @@ void MainWindow::wire_signals() {
     connect(camera_.frame_pipeline(), &FramePipeline::events_window_ready,
             this, &MainWindow::on_events_window_ready);
 
+    // File loop: reset all algorithm instances when the cursor wraps to 0.
+    // Stateful algorithms (time_surface current_t_, E2VID log_intensity_,
+    // InteractingMaps I_map_, etc.) only increase their internal timestamps,
+    // so after a loop the new events (t≈0) are less than current_t_ and get
+    // ignored — the output freezes. Resetting clears this stale state so the
+    // second pass renders correctly. The XYT point cloud is also cleared to
+    // avoid mixing old and new timestamps on the Z axis.
+    connect(camera_.frame_pipeline(), &FramePipeline::file_looped,
+            this, [this]() {
+                for (auto& inst : algo_bridge_.list_live()) {
+                    inst->reset();
+                }
+                if (xyt_display_) {
+                    xyt_display_->clear();
+                }
+            });
+
+    // File seek: reset all algorithm instances when the cursor jumps to a
+    // new position. Backward seeks trigger the same stale-state freeze as
+    // looped() — algorithms with monotonically-increasing internal
+    // timestamps (time_surface current_t_, E2VID log_intensity_, etc.)
+    // would ignore new events whose timestamps are below current_t_. Even
+    // forward seeks can leave algorithms with buffered state that doesn't
+    // match the new cursor position, so we reset unconditionally. The XYT
+    // point cloud is cleared to avoid mixing pre-seek and post-seek events
+    // on the Z axis. The seeked signal is emitted BEFORE render_frame()
+    // (see FileFrameGenerator::seek), so the reset takes effect before
+    // the new window's events are pushed via events_window_ready.
+    connect(camera_.frame_pipeline(), &FramePipeline::file_seeked,
+            this, [this](Metavision::timestamp) {
+                for (auto& inst : algo_bridge_.list_live()) {
+                    inst->reset();
+                }
+                if (xyt_display_) {
+                    xyt_display_->clear();
+                }
+            });
+
     // Statistics controller -> panel + status bar
     connect(camera_.statistics(), &StatisticsController::rate_updated, this,
             [this](double rate, double peak, Metavision::timestamp t) {
                 settings_->statistics_panel()->set_rate(rate, peak, t);
+                last_rate_eps_ = rate;
                 if (rate >= 1.0e6) {
                     status_rate_->setText(QStringLiteral("%1 Mev/s")
                                               .arg(rate / 1.0e6, 0, 'f', 2));
@@ -759,20 +903,6 @@ void MainWindow::wire_signals() {
     // Display panel -> FramePipeline (single source of truth for display params)
     connect(settings_->display_panel(), &DisplayPanel::color_palette_changed, this,
             &MainWindow::update_palettes);
-    connect(settings_->display_panel(), &DisplayPanel::frame_mode_changed, this,
-            [this](int idx) {
-                // Frame modes map to accumulation-time presets (the underlying
-                // CDFrameGenerator only supports accumulation rendering).
-                // 0: Diff Frame (10 ms), 1: Integration (50 ms), 2: Time Decay (30 ms).
-                const int us[] = {10000, 50000, 30000};
-                const int accumulation = (idx >= 0 && idx < 3) ? us[idx] : 10000;
-                camera_.frame_pipeline()->set_accumulation_time_us(accumulation);
-                // No need to manually sync the DisplayPanel — the
-                // accumulation_time_changed signal from FramePipeline updates
-                // both the DisplayPanel and PlaybackControls automatically.
-                statusBar()->showMessage(
-                    tr("Frame mode %1 (accumulation %2 us)").arg(idx).arg(accumulation), 3000);
-            });
     connect(settings_->display_panel(), &DisplayPanel::accumulation_time_changed_us,
             this, [this](int us) {
                 camera_.frame_pipeline()->set_accumulation_time_us(us);
@@ -794,7 +924,7 @@ void MainWindow::wire_signals() {
         connect(fp, &FramePipeline::accumulation_time_changed, this,
                 [this](Metavision::timestamp us) {
                     if (settings_ && settings_->display_panel())
-                        settings_->display_panel()->set_accumulation_time_ms(us / 1000.0);
+                        settings_->display_panel()->set_accumulation_time_us(static_cast<int>(us));
                     if (playback_controls_)
                         playback_controls_->on_time_window_changed(us);
                 });
@@ -820,18 +950,31 @@ void MainWindow::wire_signals() {
             roi, &RoiPanel::set_roi_from_drag);
     connect(roi, &RoiPanel::roi_applied, display_, &EventDisplayWidget::set_roi_overlay);
 
+    // ROI Drag Mode + Presets moved from Camera menu to ROI panel (§14.5).
+    connect(roi, &RoiPanel::roi_drag_toggled, this, &MainWindow::on_toggle_roi_drag);
+    connect(roi, &RoiPanel::preset_apply_requested, this, &MainWindow::on_apply_preset);
+
+    // Recording + Export moved from File menu/toolbar to File Tools panel (§14.5).
+    auto* ft = settings_->file_tools_panel();
+    connect(ft, &FileToolsPanel::record_start_requested, this, &MainWindow::on_record_start);
+    connect(ft, &FileToolsPanel::record_stop_requested, this, &MainWindow::on_record_stop);
+    connect(ft, &FileToolsPanel::export_requested, this, &MainWindow::on_export_dialog);
+
     // Phase 3 — recorder.
     connect(&recorder_, &RecorderController::recording_started, this,
             [this](const QString& path) {
                 status_rec_->setText(tr("REC: %1").arg(QFileInfo(path).fileName()));
-                a_record_start_->setEnabled(false);
-                a_record_stop_->setEnabled(true);
+                start_rec_blink();
+                settings_->file_tools_panel()->set_record_enabled(false);
+                settings_->file_tools_panel()->set_stop_enabled(true);
             });
     connect(&recorder_, &RecorderController::recording_stopped, this,
             [this](const QString& path) {
                 status_rec_->setText(tr("Idle"));
-                a_record_start_->setEnabled(camera_.is_connected() && !camera_.is_file_source());
-                a_record_stop_->setEnabled(false);
+                stop_rec_blink();
+                settings_->file_tools_panel()->set_record_enabled(
+                    camera_.is_connected() && !camera_.is_file_source());
+                settings_->file_tools_panel()->set_stop_enabled(false);
                 statusBar()->showMessage(tr("Recording saved: %1").arg(path), 5000);
             });
     connect(&recorder_, &RecorderController::elapsed, this, &MainWindow::on_record_elapsed);
@@ -933,6 +1076,11 @@ void MainWindow::on_open_file() {
 }
 
 void MainWindow::on_file_opened_for_playback(const QString& path) {
+    // Stop the recorder before switching sources. open_file() calls
+    // connect_file() → teardown() which destroys the old camera — after that,
+    // recorder_.stop() can no longer call stop_log_raw_data() and the file is
+    // left without a clean footer (BUG-S2).
+    if (recorder_.is_recording()) recorder_.stop();
     // Route through the playback controller so it can capture duration and
     // start the position probe timer.
     if (!playback_.open_file(path)) {
@@ -995,13 +1143,22 @@ void MainWindow::on_open_recent_file(const QString& path) {
 }
 
 void MainWindow::on_connect_first() {
-    if (!camera_.connect_first_available()) {
-        QMessageBox::information(this, tr("Connect"),
-                                 tr("No live camera available."));
-    }
+    // Stop the recorder before switching sources. connect_first_available()
+    // calls teardown() which destroys the old camera — after that,
+    // recorder_.stop() can no longer call stop_log_raw_data() and the file is
+    // left without a clean footer (BUG-S2).
+    if (recorder_.is_recording()) recorder_.stop();
+    // On failure, CameraController emits disconnected() (UI cleanup) then
+    // error() (which already shows a QMessageBox::warning in the error
+    // handler). No additional dialog needed here — that was a duplicate.
+    camera_.connect_first_available();
 }
 
 void MainWindow::on_disconnect() {
+    // Stop the recorder first so it closes the output file cleanly before the
+    // camera's data thread disappears (BUG-G3: without this, the recorder's
+    // CD callback may fire on a torn-down pipeline and crash).
+    recorder_.stop();
     camera_.disconnect();
 }
 
@@ -1136,58 +1293,91 @@ void MainWindow::install_algo_callback() {
             // File playback feeds algorithms from the GUI thread via
             // events_window_ready (synchronous with frame display).
             if (!file_source) {
+                // Apply FilterChain so algorithms AND the XYT display receive
+                // the same orientation (flip/rotate/etc.) as the display
+                // pipeline. Without this, Replace-mode algorithms overwrite
+                // the flipped display frame with an unflipped output, making
+                // flip/rotate invisible (same issue fixed for file mode in
+                // FileFrameGenerator::render_frame).
+                //
+                // Thread safety: FilterChain::process() and has_enabled()
+                // both acquire chain_mutex(), which serialises with GUI-thread
+                // mutations (set_stage_enabled / set_stage_param).  No data
+                // race.
+                const Metavision::EventCD* pb = b;
+                const Metavision::EventCD* pe = e;
+                std::vector<Metavision::EventCD> filtered;
+                auto* fc = camera_.filter_chain();
+                if (fc && fc->has_enabled()) {
+                    fc->process(b, e, filtered);
+                    if (filtered.empty()) {
+                        // All events filtered out — still tick the profiler
+                        // with the raw count so the event rate is accurate.
+                        perf_meter_.tick_events(static_cast<std::size_t>(e - b),
+                                                (e - 1)->t);
+                        return;
+                    }
+                    pb = filtered.data();
+                    pe = pb + filtered.size();
+                }
                 try {
-                    // Push events to every live algorithm instance. AlgoInstance
-                    // is internally mutex-guarded, so this is safe from the SDK
-                    // data thread. The reinterpret_cast inside AlgoBackend is
-                    // valid because gui_algo::Event is layout-compatible with
-                    // Metavision::EventCD (POD x,y,p,t).
+                    // Push (filtered) events to every live algorithm instance.
+                    // AlgoInstance is internally mutex-guarded, so this is safe
+                    // from the SDK data thread. The reinterpret_cast inside
+                    // AlgoBackend is valid because gui_algo::Event is
+                    // layout-compatible with Metavision::EventCD (POD x,y,p,t).
                     auto instances = algo_bridge_.list_live();
                     for (auto& inst : instances) {
                         if (inst->is_enabled()) {
-                            inst->push_events(b, e);
+                            inst->push_events(pb, pe);
                         }
                     }
                 } catch (...) {}
-            }
+                // Feed the performance profiler for live-camera latency measurement.
+                // Uses the RAW event count/timestamp so the rate reflects camera
+                // output, not the post-filter count.
+                perf_meter_.tick_events(static_cast<std::size_t>(e - b), (e - 1)->t);
 
-            // Throttled, downsampled feed to the XYT 3D window. The
-            // SpaceTimeDisplay is a QOpenGLWidget and must only be touched
-            // from the GUI thread, so we marshal via QMetaObject::invokeMethod.
-            // For file sources the XYT feed is driven by events_window_ready
-            // instead (synchronized with playback), so skip it here.
-            if (!file_source && xyt_display_) {
-                const Metavision::timestamp cur_ts = (e - 1)->t;
-                const Metavision::timestamp last =
-                    algo_last_xyt_post_us_.load(std::memory_order_relaxed);
-                if (cur_ts - last >= 16000) {  // 16ms ≈ 60 FPS
-                    algo_last_xyt_post_us_.store(cur_ts, std::memory_order_relaxed);
-                    const std::size_t count = static_cast<std::size_t>(e - b);
-                    auto copy = std::make_shared<std::vector<Metavision::EventCD>>();
-                    if (count > 5000) {
-                        const std::size_t stride = count / 5000;
-                        copy->reserve(count / stride + 1);
-                        for (std::size_t i = 0; i < count; i += stride) {
-                            copy->push_back(b[i]);
-                        }
-                    } else {
-                        copy->assign(b, e);
-                    }
-                    QMetaObject::invokeMethod(this, [this, copy]() {
-                        if (xyt_display_) {
-                            // Sync time_window from algo parameter in case
-                            // the user changed it in the sidebar.
-                            if (xyt_algo_) {
-                                const auto tw = xyt_algo_->get_param("time_window_us");
-                                if (!tw.empty()) {
-                                    xyt_display_->set_time_window_ms(
-                                        static_cast<float>(std::stoi(tw)) / 1000.0f);
-                                }
+                // Throttled, downsampled feed to the XYT 3D window. The
+                // SpaceTimeDisplay is a QOpenGLWidget and must only be touched
+                // from the GUI thread, so we marshal via QMetaObject::invokeMethod.
+                // For file sources the XYT feed is driven by events_window_ready
+                // instead (synchronized with playback), so skip it here.
+                // Uses the filtered pointers (pb/pe) so the 3D point cloud
+                // matches the display orientation.
+                if (xyt_display_) {
+                    const Metavision::timestamp cur_ts = (pe - 1)->t;
+                    const Metavision::timestamp last =
+                        algo_last_xyt_post_us_.load(std::memory_order_relaxed);
+                    if (cur_ts - last >= 16000) {  // 16ms ≈ 60 FPS
+                        algo_last_xyt_post_us_.store(cur_ts, std::memory_order_relaxed);
+                        const std::size_t count = static_cast<std::size_t>(pe - pb);
+                        auto copy = std::make_shared<std::vector<Metavision::EventCD>>();
+                        if (count > 5000) {
+                            const std::size_t stride = count / 5000;
+                            copy->reserve(count / stride + 1);
+                            for (std::size_t i = 0; i < count; i += stride) {
+                                copy->push_back(pb[i]);
                             }
-                            xyt_display_->push_events(copy->data(),
-                                                      copy->data() + copy->size());
+                        } else {
+                            copy->assign(pb, pe);
                         }
-                    }, Qt::QueuedConnection);
+                        QMetaObject::invokeMethod(this, [this, copy]() {
+                            if (xyt_display_) {
+                                // Sync time_window from algo parameter in case
+                                // the user changed it in the sidebar.
+                                if (xyt_algo_) {
+                                    const auto tw = xyt_algo_->get_param("time_window_us");
+                                    if (!tw.empty()) {
+                                        xyt_display_->set_time_window_ms(
+                                            static_cast<float>(std::stoi(tw)) / 1000.0f);
+                                    }
+                                }
+                                xyt_display_->push_events(copy->data(),
+                                                          copy->data() + copy->size());
+                            }
+                        }, Qt::QueuedConnection);
+                    }
                 }
             }
         });
@@ -1289,6 +1479,11 @@ void MainWindow::on_events_window_ready(std::shared_ptr<std::vector<Metavision::
         }
     } catch (...) {}
 
+    // Feed the performance profiler (file playback path). For file mode the
+    // latency measured here → frame_ready is near-zero (both on GUI thread),
+    // which correctly reflects that file playback has no real-time backlog.
+    perf_meter_.tick_events(events->size(), ts);
+
     // Feed the XYT 3D display with REAL (unscaled) timestamps — the Z axis
     // must show the actual event time, not the scaled playback time.
     // Same downsampling as the live path so a large accumulation window
@@ -1325,10 +1520,14 @@ void MainWindow::remove_algo_callback() {
 }
 
 void MainWindow::process_algo_results(QImage& frame) {
-    // Iterate a snapshot of live instances and pull each one's latest result.
-    // For Overlay/Replace instances we mutate @p frame in place; for
-    // Standalone instances we route the result frame (if any) to the
-    // dedicated child display widget. Passive instances are skipped.
+    // Iterate a snapshot of live instances and pull each one's latest result,
+    // then dispatch to the instance's display strategy (design §3.5.4). The
+    // per-mode drawing/routing that used to live in the switch below now lives
+    // in the concrete IDisplayStrategy classes (gui/display/display_strategy.cpp).
+    DisplayContext ctx{&annotator_, &algo_windows_, xyt_display_.data(), this,
+                       &camera_, nullptr};
+    // Snapshot once and reuse for draw_roi_overlays to avoid a redundant
+    // list_live() call (N7).
     auto instances = algo_bridge_.list_live();
     for (auto& inst : instances) {
         // Surface the flood-guard auto-disable so the user knows why an algo
@@ -1347,241 +1546,24 @@ void MainWindow::process_algo_results(QImage& frame) {
             continue;
         }
         if (!inst->is_enabled()) continue;
-        const auto mode = inst->info().display_mode;
-
-        // Passive algorithms (in-place event filters like noise_filter /
-        // hot_pixel_filter) don't draw overlays or replace the frame, but if
-        // the user opened an AlgoWindow for one we still need to pull_result
-        // and update the status text so the window doesn't stay stuck on
-        // "Waiting for events..." forever.
-        if (mode == AlgoDisplayMode::Passive) {
-            auto wit = algo_windows_.find(inst->info().name);
-            if (wit == algo_windows_.end() || !wit.value()) continue;
-            AlgoResult r;
-            try {
-                r = inst->pull_result();
-            } catch (...) {
-                continue;
-            }
-            if (!r.status.empty()) {
-                QString text = QString::fromStdString(r.status);
-                for (const auto& t : r.texts) {
-                    text += QStringLiteral("\n  ");
-                    text += QString::fromStdString(t.text);
-                }
-                QPointer<AlgoWindow> w = wit.value();
-                QMetaObject::invokeMethod(this, [w, text]() {
-                    if (w) w->set_status_text(text);
-                }, Qt::QueuedConnection);
-            }
-            continue;
-        }
-
         AlgoResult r;
         try {
             r = inst->pull_result();
         } catch (...) {
             continue;
         }
-
-        if (mode == AlgoDisplayMode::Overlay) {
-            // Convert AlgoResult overlay primitives into FrameAnnotator calls.
-            // Boxes: tracked-object boxes with optional id.
-            if (!r.boxes.empty()) {
-                std::vector<FrameAnnotator::Box> boxes;
-                boxes.reserve(r.boxes.size());
-                for (const auto& b : r.boxes) {
-                    FrameAnnotator::Box box;
-                    box.rect = QRect(b.x, b.y, b.w, b.h);
-                    box.id = b.id;
-                    boxes.push_back(std::move(box));
-                }
-                annotator_.draw_boxes(frame, boxes);
-            }
-            // Lines.
-            if (!r.lines.empty()) {
-                std::vector<QLineF> lines;
-                lines.reserve(r.lines.size());
-                for (const auto& l : r.lines) {
-                    lines.emplace_back(QPointF(l.x1, l.y1), QPointF(l.x2, l.y2));
-                }
-                annotator_.draw_lines(frame, lines);
-            }
-            // Points.
-            if (!r.points.empty()) {
-                std::vector<QPointF> pts;
-                pts.reserve(r.points.size());
-                for (const auto& p : r.points) {
-                    pts.emplace_back(p.x, p.y);
-                }
-                annotator_.draw_points(frame, pts);
-            }
-            // Colored points (optical-flow HSV visualization).
-            if (!r.colored_points.empty()) {
-                std::vector<std::pair<QPointF, QColor>> pts;
-                pts.reserve(r.colored_points.size());
-                for (const auto& p : r.colored_points) {
-                    pts.emplace_back(QPointF(p.x, p.y),
-                                     QColor(p.r, p.g, p.b));
-                }
-                annotator_.draw_colored_points(frame, pts, 3.0);
-            }
-            // Circles.
-            if (!r.circles.empty()) {
-                std::vector<std::pair<QPointF, double>> circs;
-                circs.reserve(r.circles.size());
-                for (const auto& c : r.circles) {
-                    circs.emplace_back(QPointF(c.cx, c.cy), c.r);
-                }
-                annotator_.draw_circles(frame, circs);
-            }
-            // Text labels.
-            if (!r.texts.empty()) {
-                for (const auto& t : r.texts) {
-                    annotator_.draw_text(frame, QString::fromStdString(t.text),
-                                         QPoint(t.x, t.y));
-                }
-            }
-            // Colored events (orientation/direction per-event coloring).
-            if (!r.colored_events.empty()) {
-                std::vector<std::tuple<int, int, QColor>> cevs;
-                cevs.reserve(r.colored_events.size());
-                for (const auto& ce : r.colored_events) {
-                    cevs.emplace_back(ce.event.x, ce.event.y,
-                                      QColor(ce.r, ce.g, ce.b));
-                }
-                annotator_.draw_colored_events(frame, cevs);
-            }
-            // Trajectories (cluster history paths).
-            if (!r.trajectories.empty()) {
-                std::vector<std::pair<int, std::vector<QPointF>>> trajs;
-                trajs.reserve(r.trajectories.size());
-                for (const auto& t : r.trajectories) {
-                    std::vector<QPointF> pts;
-                    pts.reserve(t.points.size());
-                    for (const auto& pt : t.points) {
-                        pts.emplace_back(pt.x, pt.y);
-                    }
-                    trajs.emplace_back(t.id, std::move(pts));
-                }
-                annotator_.draw_trajectories(frame, trajs, QColor(0, 255, 0));
-            }
-            // Aux frame (Hough θ-ρ / per-pixel accumulator space).
-            // Routed to the AlgoWindow's display widget if one is open, so
-            // the user can see the accumulator state alongside the overlay.
-            if (r.has_aux_frame && !r.aux_frame.empty()) {
-                auto wit = algo_windows_.find(inst->info().name);
-                if (wit != algo_windows_.end() && wit.value()) {
-                    QPointer<EventDisplayWidget> disp = wit.value()->frame_display();
-                    if (disp) {
-                        QImage q = mat_to_qimage(r.aux_frame);
-                        QMetaObject::invokeMethod(this, [disp, q]() {
-                            if (disp) disp->set_frame(q);
-                        }, Qt::QueuedConnection);
-                    }
-                }
-            }
-            // ROI zoom view (design §5.6.6): if the algo has ROI enabled and an
-            // AlgoWindow with an EventDisplayWidget is open, crop the ROI
-            // region from the annotated main frame and push it to the window.
-            // This gives the user a zoomed-in view of just the ROI region
-            // (with the algorithm's overlay drawn on it), which is otherwise
-            // hard to inspect on the sensor-scale main display.
-            const std::string en_str = inst->get_param("roi_enabled");
-            const bool roi_on = (en_str == "true" || en_str == "1");
-            if (roi_on) {
-                auto parse_int = [](const std::string& s, int def) -> int {
-                    try { return s.empty() ? def : std::stoi(s); }
-                    catch (...) { return def; }
-                };
-                int sw = 1280, sh = 720;
-                if (camera_.is_connected()) {
-                    const auto& sinfo = camera_.sensor_info();
-                    sw = sinfo.width; sh = sinfo.height;
-                }
-                int rx = parse_int(inst->get_param("roi_x"), -1);
-                int ry = parse_int(inst->get_param("roi_y"), -1);
-                int rw = parse_int(inst->get_param("roi_w"), 256);
-                int rh = parse_int(inst->get_param("roi_h"), 256);
-                int aw = (rw <= 0) ? sw : std::min(rw, sw);
-                int ah = (rh <= 0) ? sh : std::min(rh, sh);
-                int ax = (rx < 0) ? (sw - aw) / 2
-                                  : std::min(std::max(0, rx), sw - aw);
-                int ay = (ry < 0) ? (sh - ah) / 2
-                                  : std::min(std::max(0, ry), sh - ah);
-                auto wit = algo_windows_.find(inst->info().name);
-                if (wit != algo_windows_.end() && wit.value()) {
-                    // Use QPointer so the lambda safely no-ops if the
-                    // AlgoWindow's display widget is destroyed between
-                    // scheduling and execution (e.g. user closes/undocks the
-                    // dock while a frame is in flight). Without this the raw
-                    // pointer would dangle and crash on dereference.
-                    QPointer<EventDisplayWidget> disp = wit.value()->frame_display();
-                    if (disp) {
-                        QRect roi_rect(ax, ay, aw, ah);
-                        QImage zoom = frame.copy(roi_rect);
-                        QMetaObject::invokeMethod(this, [disp, zoom]() {
-                            if (disp) disp->set_frame(zoom);
-                        }, Qt::QueuedConnection);
-                    }
-                }
-            }
-            continue;
-        }
-
-        if (mode == AlgoDisplayMode::Replace) {
-            // Replace the main display frame with the algorithm output.
-            if (r.has_frame && !r.frame.empty()) {
-                frame = mat_to_qimage(r.frame);
-            }
-            continue;
-        }
-
-        if (mode == AlgoDisplayMode::Standalone) {
-            const std::string& name = inst->info().name;
-            // Route results to the AlgoWindow (design §5.6.6). Frame-producing
-            // algos (time_surface, event_to_video, isi_analyzer, background_mask)
-            // use an EventDisplayWidget; text-producing algos (freq_detector,
-            // flow_statistics, auto_bias, etc.) use the default status QLabel.
-            // xyt_visualizer is handled separately via SpaceTimeDisplay.
-            auto wit = algo_windows_.find(name);
-            if (wit != algo_windows_.end() && wit.value()) {
-                QPointer<AlgoWindow> w = wit.value();
-                if (r.has_frame && !r.frame.empty()) {
-                    // QPointer protects against the dock being closed/undocked
-                    // (and its display widget destroyed) between scheduling
-                    // and execution of the queued call.
-                    QPointer<EventDisplayWidget> disp = w->frame_display();
-                    if (disp) {
-                        QImage q = mat_to_qimage(r.frame);
-                        QMetaObject::invokeMethod(this, [disp, q]() {
-                            if (disp) disp->set_frame(q);
-                        }, Qt::QueuedConnection);
-                    }
-                }
-                if (!r.status.empty()) {
-                    QString text = QString::fromStdString(r.status);
-                    for (const auto& t : r.texts) {
-                        text += QStringLiteral("\n  ");
-                        text += QString::fromStdString(t.text);
-                    }
-                    QMetaObject::invokeMethod(this, [w, text]() {
-                        if (w) w->set_status_text(text);
-                    }, Qt::QueuedConnection);
-                }
-            }
-            // xyt_visualizer is driven through its own SpaceTimeDisplay window
-            // (design §5.6.1); pull_result is a no-op for it.
-        }
+        inst->apply_strategy(frame, r, ctx);
     }
 
     // Draw the ROI rectangle of any enabled self-developed algorithm so the
     // user can see which region is being processed (design §5.6.6: all
     // self-developed algos support ROI, defaulting to center 128×128).
-    draw_roi_overlays(frame);
+    draw_roi_overlays(frame, instances);
 }
 
-void MainWindow::draw_roi_overlays(QImage& frame) {
+void MainWindow::draw_roi_overlays(
+    QImage& frame,
+    const std::vector<std::shared_ptr<AlgoInstance>>& instances) {
     // All self-developed algorithms support ROI (design §5.6.6). Iterate the
     // live instances and draw a rectangle for each enabled one with
     // roi_enabled=true. The overlay coordinates are at sensor scale.
@@ -1597,7 +1579,6 @@ void MainWindow::draw_roi_overlays(QImage& frame) {
     };
     std::vector<QRect> boxes;
     std::vector<std::pair<QString, QPoint>> labels;  // (text, pos)
-    auto instances = algo_bridge_.list_live();
     for (auto& inst : instances) {
         if (!inst->is_enabled()) continue;
         // Only self-developed algorithms carry the roi_* params (design §5.6.6).
@@ -1607,8 +1588,8 @@ void MainWindow::draw_roi_overlays(QImage& frame) {
         if (en != "true" && en != "1") continue;
         const int rx = parse(inst->get_param("roi_x"), -1);
         const int ry = parse(inst->get_param("roi_y"), -1);
-        const int rw = parse(inst->get_param("roi_w"), 256);
-        const int rh = parse(inst->get_param("roi_h"), 256);
+        const int rw = parse(inst->get_param("roi_w"), 128);
+        const int rh = parse(inst->get_param("roi_h"), 128);
         // Compute bounds (mirrors ProcessRegion::compute).
         const int aw = (rw <= 0) ? sensor_w : std::min(rw, sensor_w);
         const int ah = (rh <= 0) ? sensor_h : std::min(rh, sensor_h);
@@ -1642,26 +1623,6 @@ void MainWindow::on_intrinsic_wizard() {
     calibration_wizard_->show_intrinsic();
 }
 
-void MainWindow::on_add_display_window() {
-    if (!multi_window_) {
-        multi_window_ = std::make_unique<MultiWindowManager>(this);
-    }
-    auto* w = multi_window_->add_display(tr("Display %1").arg(multi_window_->window_count() + 1));
-    if (w) {
-        // Feed the new display the annotated frame (after process_algo_results)
-        // so child windows see the same overlays/replacements as the main view.
-        connect(this, &MainWindow::annotated_frame_ready,
-                w, &EventDisplayWidget::set_frame);
-        statusBar()->showMessage(tr("Added display window (%1 total).")
-            .arg(multi_window_->window_count()), 3000);
-    }
-}
-
-void MainWindow::on_tile_windows() {
-    if (multi_window_) multi_window_->tile();
-    else statusBar()->showMessage(tr("No display windows open."), 3000);
-}
-
 void MainWindow::on_save_layout() {
     if (!layout_manager_) return;
     const QString path = QFileDialog::getSaveFileName(
@@ -1681,7 +1642,7 @@ void MainWindow::on_load_layout() {
         this, tr("Load Layout"), {}, tr("Layout JSON (*.json);;All Files (*)"));
     if (!path.isEmpty()) {
         if (layout_manager_->load(path)) {
-            update_sidebar_tab_visibility();
+            update_toggle_icon();
             statusBar()->showMessage(tr("Layout loaded from %1").arg(path), 3000);
         } else {
             QMessageBox::warning(this, tr("Load Layout"), tr("Could not load layout."));
@@ -1691,7 +1652,25 @@ void MainWindow::on_load_layout() {
 
 void MainWindow::on_reset_layout() {
     if (layout_manager_) layout_manager_->reset_layout();
-    update_sidebar_tab_visibility();
+    if (settings_dock_) {
+        settings_dock_->setVisible(true);
+        // §15.5: expand the sidebar if it was collapsed — reset should
+        // restore the full default layout, not a collapsed state.
+        if (settings_ && !settings_->is_content_visible()) {
+            saved_sidebar_width_ = 380;  // use default width on reset
+            settings_->toggle_content();  // emits content_toggled(true)
+            // on_sidebar_content_toggled handles the resize; no need to
+            // resize again here.
+        } else {
+            // Already expanded — just force the default width.
+            settings_dock_->setMinimumWidth(200);
+            settings_dock_->setMaximumWidth(QWIDGETSIZE_MAX);
+            const QList<QDockWidget*> docks = {settings_dock_};
+            const QList<int> sizes = {380};
+            resizeDocks(docks, sizes, Qt::Horizontal);
+        }
+    }
+    update_toggle_icon();
     statusBar()->showMessage(tr("Layout reset to default."), 3000);
 }
 
@@ -1721,7 +1700,7 @@ void MainWindow::on_about() {
            "Bias / ROI / ESP / Trigger panels, recording & playback, HDF5 / AVI "
            "export, JSON config with presets, OpenEB filter-chain preprocessing, "
            "file conversion tools, calibration wizard, "
-           "30 self-developed CV/analytics algorithms with overlay/replace/"
+           "29 self-developed CV/analytics algorithms with overlay/replace/"
            "standalone display modes, XYT 3D point cloud, and more.</p>"));
 }
 
@@ -1788,16 +1767,20 @@ void MainWindow::on_open_algo_window(const std::string& algo_name) {
         ap->set_algo_enabled(algo_name, true);
     }
 
-    // Dock the AlgoWindow into the main window. Default to the left edge so
-    // it doesn't conflict with the settings sidebar (right) or playback bar
-    // (bottom). If another algo dock is already there, tab this one with it
-    // so multiple algo windows share a single dock slot (the user can switch
-    // between them via the tab bar).
-    addDockWidget(Qt::LeftDockWidgetArea, w);
-    // Find any other already-docked algo window to tabify with.
+    // Dock the AlgoWindow into the main window. Default to the right edge
+    // (§11.2 point 3) so it doesn't conflict with the settings sidebar
+    // (left) or playback bar (bottom). If another algo dock is already
+    // there, tab this one with it so multiple algo windows share a single
+    // dock slot (the user can switch between them via the tab bar).
+    addDockWidget(Qt::RightDockWidgetArea, w);
+    // Find any other already-docked algo window to tabify with. Only tabify
+    // if both docks are in the same area (BUG-G11: tabifyDockWidget moves the
+    // second dock to the first's area, which would relocate the new window
+    // if the other algo is in a different area).
     for (auto tit = algo_windows_.constBegin(); tit != algo_windows_.constEnd(); ++tit) {
         AlgoWindow* other = tit.value().data();
-        if (other && other != w && !other->isFloating()) {
+        if (other && other != w && !other->isFloating() &&
+            dockWidgetArea(other) == Qt::RightDockWidgetArea) {
             tabifyDockWidget(other, w);
             break;
         }

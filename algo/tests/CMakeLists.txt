@@ -133,11 +133,69 @@ target_link_libraries(test_playback_e2v PRIVATE
 add_executable(test_file_frame_generator
     test_file_frame_generator.cpp
     ${CMAKE_SOURCE_DIR}/gui/app/file_frame_generator.cpp
+    ${CMAKE_SOURCE_DIR}/gui/algo_bridge/filter_chain.cpp
 )
 target_include_directories(test_file_frame_generator PRIVATE
     ${CMAKE_SOURCE_DIR}/gui
 )
 target_link_libraries(test_file_frame_generator PRIVATE
+    Qt6::Core
+    Qt6::Gui
+    MetavisionSDK::base
+    MetavisionSDK::core
+    MetavisionSDK::stream
+    ${OpenCV_LIBS}
+)
+
+# Diagnostic: verify FilterChain (flip_x) is applied in
+# FileFrameGenerator::render_frame() so display reflects flip toggles
+# immediately during file playback.
+add_executable(test_filter_in_render
+    test_filter_in_render.cpp
+    ${CMAKE_SOURCE_DIR}/gui/app/file_frame_generator.cpp
+    ${CMAKE_SOURCE_DIR}/gui/algo_bridge/filter_chain.cpp
+)
+target_include_directories(test_filter_in_render PRIVATE
+    ${CMAKE_SOURCE_DIR}/gui
+)
+target_link_libraries(test_filter_in_render PRIVATE
+    Qt6::Core
+    Qt6::Gui
+    MetavisionSDK::base
+    MetavisionSDK::core
+    ${OpenCV_LIBS}
+)
+
+# Integration test: full file-playback flow with FilterChain using a real
+# .raw file. Verifies flip_x toggled DURING playback takes effect.
+add_executable(test_filter_integration
+    test_filter_integration.cpp
+    ${CMAKE_SOURCE_DIR}/gui/app/file_frame_generator.cpp
+    ${CMAKE_SOURCE_DIR}/gui/algo_bridge/filter_chain.cpp
+)
+target_include_directories(test_filter_integration PRIVATE
+    ${CMAKE_SOURCE_DIR}/gui
+)
+target_link_libraries(test_filter_integration PRIVATE
+    Qt6::Core
+    Qt6::Gui
+    MetavisionSDK::base
+    MetavisionSDK::core
+    MetavisionSDK::stream
+    ${OpenCV_LIBS}
+)
+
+# Loop + flip test: verifies flip_x works during LOOP playback and survives
+# across loop wraps. Simulates the exact GUI scenario.
+add_executable(test_loop_flip
+    test_loop_flip.cpp
+    ${CMAKE_SOURCE_DIR}/gui/app/file_frame_generator.cpp
+    ${CMAKE_SOURCE_DIR}/gui/algo_bridge/filter_chain.cpp
+)
+target_include_directories(test_loop_flip PRIVATE
+    ${CMAKE_SOURCE_DIR}/gui
+)
+target_link_libraries(test_loop_flip PRIVATE
     Qt6::Core
     Qt6::Gui
     MetavisionSDK::base

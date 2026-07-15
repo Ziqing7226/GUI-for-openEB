@@ -7,7 +7,7 @@
 
 namespace gui {
 
-StatisticsPanel::StatisticsPanel(QWidget* parent) : QWidget(parent) {
+StatisticsPanel::StatisticsPanel(QWidget* parent) : AbstractPanel(parent) {
     auto* form = new QFormLayout(this);
     form->setContentsMargins(8, 8, 8, 8);
     form->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);

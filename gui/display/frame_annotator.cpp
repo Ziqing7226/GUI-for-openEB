@@ -10,7 +10,15 @@
 
 namespace gui {
 
-FrameAnnotator::FrameAnnotator() = default;
+FrameAnnotator::FrameAnnotator() {
+    // Monospace font for overlay text (design §3.9.2) — JetBrains Mono with
+    // platform fallbacks so coordinate/ID labels stay aligned on every system.
+    font_ = QFont(QStringLiteral("JetBrains Mono"), 9);
+    font_.setFamilies({QStringLiteral("JetBrains Mono"),
+                       QStringLiteral("Consolas"),
+                       QStringLiteral("Menlo"),
+                       QStringLiteral("Monospace")});
+}
 
 void FrameAnnotator::set_pen_width(double w) {
     pen_width_ = (w > 0.0) ? w : 1.0;

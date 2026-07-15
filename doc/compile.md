@@ -1,5 +1,7 @@
 # OpenEB 编译指南
 
+> 本文档分为两部分：**第一部分**编译 OpenEB SDK（`openeb/` 子目录），**第二部分**编译 GUI 应用（`gui/` + `algo/`）。OpenEB SDK 是 GUI 的底层依赖，须先编译。
+
 ## 系统环境
 
 | 项目       | 版本                    |
@@ -7,9 +9,12 @@
 | 操作系统   | Ubuntu 26.04            |
 | 架构       | amd64 (x86_64)          |
 | GCC        | 15.x（系统默认）        |
-| CMake      | 4.2.3                   |
+| CMake      | 4.2.3（最低要求 3.16）  |
+| C++ 标准   | C++17（`CMAKE_CXX_STANDARD 17`）|
 | Python     | 3.14（系统默认，不兼容 openeb） |
 | 编译用 Python | 3.12（via deadsnakes PPA） |
+| Qt         | 6.x（GUI 应用必需）     |
+| OpenCV     | 4.x                     |
 
 ## 注意事项
 
@@ -65,7 +70,9 @@ python3.12 -m venv /tmp/prophesee/py3venv --system-site-packages
 
 ### 5. 修复 GCC 15 兼容性问题
 
-在 `OPENEB_SRC_DIR/CMakeLists.txt` 的 `project()` 行之后添加：
+> **注**：此修复已预先应用到本仓库的 `openeb/CMakeLists.txt`（第 24-27 行）和根 `CMakeLists.txt`（第 16-18 行），无需手动添加。以下说明仅供理解原理。
+
+在 `OPENEB_SRC_DIR/CMakeLists.txt` 的 `project()` 行之后添加（如尚未存在）：
 
 ```cmake
 # GCC 15+ no longer implicitly includes <cstdint>; add it globally to fix uint8_t/uint16_t etc.
@@ -112,3 +119,102 @@ export HDF5_PLUGIN_PATH=$HDF5_PLUGIN_PATH:/usr/local/lib/hdf5/plugin
 | `OpenGL` 库找不到                     | 未安装 OpenGL 开发库                        | 安装 `libgl-dev libglx-dev libopengl-dev`         |
 | `GLEW` 库找不到                       | 未安装 GLEW 开发库                          | 安装 `libglew-dev`                                |
 | `glfw3` 配置文件找不到                | 未安装 GLFW3 开发库                         | 安装 `libglfw3-dev`                               |
+
+---
+
+## 第二部分：GUI 应用编译
+
+本部分编译 EBplus GUI 应用（`gui/` + `algo/` 目录）。前提条件：OpenEB SDK 已按第一部分编译并部署（`source OPENEB_SRC_DIR/build/utils/scripts/setup_env.sh` 或 `sudo make install`）。
+
+### G1. 安装 GUI 额外依赖
+
+```bash
+# Qt 6（Widgets + OpenGL + OpenGLWidgets）
+sudo apt -y install qt6-base-dev qt6-base-dev-tools libqt6opengl6-dev
+
+# ONNX Runtime（E2VID 神经网络推理，可选但推荐）
+# 见下方 G4 节单独安装步骤
+
+# Google Test（GUI 单元测试，可选）
+sudo apt -y install libgtest-dev libgmock-dev
+```
+
+### G2. 编译 GUI 应用
+
+```bash
+cd /path/to/GUI-for-openEB
+
+# 配置（CMake 会自动检测 OpenEB SDK、Qt6、OpenCV、ONNX Runtime）
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+# 编译
+cmake --build build -- -j$(nproc)
+```
+
+**CMake 选项**：
+
+| 选项 | 默认 | 说明 |
+|------|------|------|
+| `GUI_BUILD_TESTS` | `ON` | 编译 GUI 单元测试（`gui/tests/`） |
+| `CMAKE_BUILD_TYPE` | — | 推荐 `Release` |
+
+### G3. 运行 GUI
+
+```bash
+# 推荐方式：使用启动脚本（自动处理 Wayland 兼容、HAL 插件路径、OpenGL 后端）
+./run.sh
+
+# 或直接运行（需自行设置环境变量）
+./build/gui_for_openeb
+```
+
+`run.sh` 自动设置以下环境变量：
+- `QT_QPA_PLATFORM=xcb`（Wayland 下强制 XCB 兼容）
+- `QSG_RHI_BACKEND=opengl`（强制 OpenGL 渲染后端）
+- HAL 插件路径（`MV_HAL_PLUGIN_PATH`）
+
+### G4. ONNX Runtime 安装（E2VID 推理）
+
+E2VID 模式使用 ONNX Runtime 进行神经网络推理。如未安装，E2VID 自动降级为启发式模式（voxel-grid sum + sigmoid）。
+
+```bash
+cd /path/to/GUI-for-openEB
+mkdir -p third_party/onnxruntime && cd third_party/onnxruntime
+wget https://github.com/microsoft/onnxruntime/releases/download/v1.19.2/onnxruntime-linux-x64-1.19.2.tgz
+tar xzf onnxruntime-linux-x64-1.19.2.tgz --strip-components=1
+cd ../..
+
+# 安装后重新编译，CMake 会自动检测 third_party/onnxruntime/
+cmake --build build -- -j$(nproc)
+```
+
+模型权重转换（PyTorch → ONNX）详见 [README.md](../README.md) §E2VID Neural Network Reconstruction。
+
+### G5. 运行测试
+
+```bash
+cd /path/to/GUI-for-openEB/build
+
+# 运行全部测试（GUI + algo）
+ctest --output-on-failure
+
+# 仅运行 GUI 测试
+ctest -R "test_algo_bridge|test_config_manager|test_display_strategy|test_layout_manager|test_theme_tokens" --output-on-failure
+
+# 仅运行 algo 测试
+ctest -R "test_phase|test_raw" --output-on-failure
+```
+
+**测试套件**：
+- `gui/tests/`：5 个可执行文件，40 个 TEST() 宏（algo_bridge/config_manager/display_strategy/layout_manager/theme_tokens）
+- `algo/tests/`：4 个可执行文件，288 个 TEST()/TEST_F() 宏（phase6_common/phase7_cv/phase8_10/raw_algos）
+
+### G6. GUI 构建注意事项
+
+| 问题 | 原因 | 解决方案 |
+|------|------|----------|
+| `Qt6` 找不到 | 未安装 Qt6 开发包 | `sudo apt install qt6-base-dev libqt6opengl6-dev` |
+| `MetavisionSDK::hal` 找不到 | OpenEB 未部署或环境变量未设 | `source OPENEB_SRC_DIR/build/utils/scripts/setup_env.sh` |
+| E2VID 降级为启发式模式 | ONNX Runtime 未安装 | 按 G4 步骤安装到 `third_party/onnxruntime/` |
+| Wayland 下窗口无法拖拽 | Wayland 原生模式不支持 frameless 拖拽 | 使用 `./run.sh`（强制 XCB），或 `export QT_QPA_PLATFORM=xcb` |
+| `gtest` 找不到 | 未安装 GTest 开发包 | `sudo apt install libgtest-dev libgmock-dev` |

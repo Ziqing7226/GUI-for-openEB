@@ -5,7 +5,6 @@
 #include <QCheckBox>
 #include <QGroupBox>
 #include <QLabel>
-#include <QScrollArea>
 #include <QSpinBox>
 #include <QDoubleSpinBox>
 #include <QComboBox>
@@ -20,7 +19,7 @@
 namespace gui {
 
 AlgorithmsPanel::AlgorithmsPanel(AlgoBridge* bridge, QWidget* parent)
-    : QWidget(parent), bridge_(bridge) {
+    : AbstractPanel(parent), bridge_(bridge) {
     build_ui();
 }
 
@@ -34,21 +33,26 @@ void AlgorithmsPanel::build_ui() {
     // algo's parameter editor; they're controlled exclusively here.
     build_roi_selector(outer);
 
-    auto* scroll = new QScrollArea(this);
-    scroll->setWidgetResizable(true);
-    scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    outer->addWidget(scroll);
+    // Global Preprocessing selector (v1.1.0): stackable noise filter + 1/4
+    // downsample applied AFTER the ROI (order: ROI → filter → downsample).
+    // These overlay on top of any main algorithm and are NOT mutually
+    // exclusive with it. Per-algorithm preproc_* params are skipped in each
+    // algo's parameter editor and controlled exclusively here.
+    build_preproc_selector(outer);
 
-    auto* host = new QWidget(scroll);
+    // Algorithm category groups are added directly to the outer layout —
+    // no inner QScrollArea. The outer SettingsPanel scroll area already
+    // provides scrolling for the entire sidebar page (§12.2.5).
+    auto* host = new QWidget(this);
     auto* layout = new QVBoxLayout(host);
     layout->setContentsMargins(6, 6, 6, 6);
     layout->setSpacing(6);
+    outer->addWidget(host);
 
     if (!bridge_) {
         auto* lbl = new QLabel(tr("Algorithm bridge unavailable."), host);
         layout->addWidget(lbl);
         layout->addStretch(1);
-        scroll->setWidget(host);
         return;
     }
 
@@ -92,6 +96,7 @@ void AlgorithmsPanel::build_ui() {
             params_host->setVisible(false);
 
             const std::string algo_name = a->name;
+            algo_panel_state_[algo_name].params_host = params_host;
             // Match a default value to an enum_values entry. Entries may be
             // "N=Label" (match on the "N" prefix) or plain values.
             auto match_enum_index = [](const std::vector<std::string>& vals,
@@ -111,6 +116,9 @@ void AlgorithmsPanel::build_ui() {
                 if (p.key == "roi_enabled" || p.key == "roi_x" ||
                     p.key == "roi_y" || p.key == "roi_w" ||
                     p.key == "roi_h") continue;
+                // Skip per-algorithm preproc_* params — they're controlled by
+                // the global Preprocessing selector at the top of the panel.
+                if (p.key.rfind("preproc_", 0) == 0) continue;
 
                 auto* lbl = new QLabel(QString::fromStdString(p.display_name),
                                        params_host);
@@ -199,11 +207,15 @@ void AlgorithmsPanel::build_ui() {
                         if (!other_cb || !other_cb->isChecked()) continue;
                         QSignalBlocker b(other_cb);
                         other_cb->setChecked(false);
-                        // Hide the other algo's parameter editor.
-                        // (The editor is the row immediately following the
-                        // checkbox in the same QFormLayout; we can find it
-                        // by re-using the params_host pattern: just hide via
-                        // the live_instances_ map's enable flag.)
+                        // Hide the other algo's parameter editor. Because
+                        // QSignalBlocker suppresses the toggled signal, the
+                        // other algo's toggled handler (which would normally
+                        // hide its params_host) never runs. We must hide it
+                        // explicitly here (BUG-M2).
+                        auto st = algo_panel_state_.find(other_name);
+                        if (st != algo_panel_state_.end() && st->second.params_host) {
+                            st->second.params_host->setVisible(false);
+                        }
                         auto it = live_instances_.find(other_name);
                         if (it != live_instances_.end() && it->second) {
                             it->second->set_enabled(false);
@@ -217,31 +229,53 @@ void AlgorithmsPanel::build_ui() {
                     if (inst) {
                         inst->set_enabled(true);
                         live_instances_[algo_name] = inst;
-                        // Apply the current global ROI to this newly-enabled
-                        // instance so it starts with the right region.
+                        // create() already replayed the cached preproc_* and
+                        // roi_* params (BUG-R4, N3). Refresh the ROI cache from
+                        // the current widget values so the new instance is
+                        // guaranteed to match the sidebar state even if no
+                        // widget signal fired since app start.
                         apply_global_roi();
+                        emit info_message(tr("Algorithm enabled: %1")
+                                              .arg(QString::fromStdString(a->display_name)));
+                        // Request MainWindow to open the AlgoWindow so Standalone
+                        // algorithms have a display and Overlay algorithms get
+                        // their ROI zoom view. Without this the sidebar-enabled
+                        // algorithm produces no visible output.
+                        emit open_algo_window_requested(algo_name);
+                        emit algorithm_toggled(QString::fromStdString(a->name), true);
+                    } else {
+                        // find_or_create should never fail for registered
+                        // algorithms, but revert the checkbox defensively so
+                        // the UI stays consistent if it ever does.
+                        QSignalBlocker b(cb);
+                        cb->setChecked(false);
+                        params_host->setVisible(false);
+                        emit error_message(tr("Failed to create algorithm: %1")
+                                               .arg(QString::fromStdString(a->display_name)));
+                        // Don't emit algorithm_toggled(name, true): the algo
+                        // was never enabled and the checkbox was reverted.
+                        // Emitting true would mislead MainWindow into showing
+                        // "enabled" in the status bar (BUG-G15). Don't emit
+                        // false either: open_algo_window_requested was never
+                        // emitted, so there is no AlgoWindow to close.
                     }
-                    emit info_message(tr("Algorithm enabled: %1")
-                                          .arg(QString::fromStdString(a->display_name)));
-                    // Request MainWindow to open the AlgoWindow so Standalone
-                    // algorithms have a display and Overlay algorithms get
-                    // their ROI zoom view. Without this the sidebar-enabled
-                    // algorithm produces no visible output.
-                    emit open_algo_window_requested(algo_name);
                 } else {
                     auto it = live_instances_.find(algo_name);
                     if (it != live_instances_.end() && it->second) {
                         it->second->set_enabled(false);
                     }
+                    emit algorithm_toggled(QString::fromStdString(a->name), false);
                 }
-                emit algorithm_toggled(QString::fromStdString(a->name), on);
             });
         }
         layout->addWidget(gb);
     }
 
     layout->addStretch(1);
-    scroll->setWidget(host);
+
+    // Initial build complete — subsequent mode switches are user-driven and
+    // must not clobber user-customised ROI/fps (BUG-14 fix).
+    first_init_ = false;
 }
 
 void AlgorithmsPanel::build_roi_selector(QVBoxLayout* parent_layout) {
@@ -249,7 +283,7 @@ void AlgorithmsPanel::build_roi_selector(QVBoxLayout* parent_layout) {
     auto* form = new QFormLayout(gb);
     form->setContentsMargins(6, 6, 6, 6);
 
-    roi_enabled_cb_ = new QCheckBox(tr("Enabled (center 256×256 default)"), gb);
+    roi_enabled_cb_ = new QCheckBox(tr("Enabled (center 128×128 default)"), gb);
     roi_enabled_cb_->setChecked(true);
     form->addRow(roi_enabled_cb_);
 
@@ -267,13 +301,13 @@ void AlgorithmsPanel::build_roi_selector(QVBoxLayout* parent_layout) {
 
     roi_w_sp_ = new QSpinBox(gb);
     roi_w_sp_->setRange(0, 100000);
-    roi_w_sp_->setValue(256);
+    roi_w_sp_->setValue(128);
     roi_w_sp_->setSpecialValueText(tr("full"));
     form->addRow(tr("W"), roi_w_sp_);
 
     roi_h_sp_ = new QSpinBox(gb);
     roi_h_sp_->setRange(0, 100000);
-    roi_h_sp_->setValue(256);
+    roi_h_sp_->setValue(128);
     roi_h_sp_->setSpecialValueText(tr("full"));
     form->addRow(tr("H"), roi_h_sp_);
 
@@ -289,20 +323,197 @@ void AlgorithmsPanel::build_roi_selector(QVBoxLayout* parent_layout) {
 }
 
 void AlgorithmsPanel::apply_global_roi() {
+    if (!bridge_) return;
     const std::string enabled = roi_enabled_cb_->isChecked() ? "true" : "false";
     const std::string x = std::to_string(roi_x_sp_->value());
     const std::string y = std::to_string(roi_y_sp_->value());
     const std::string w = std::to_string(roi_w_sp_->value());
     const std::string h = std::to_string(roi_h_sp_->value());
-    // Apply to every live instance. Also apply to instances that are created
-    // lazily but not yet enabled (so the ROI is set before the algo starts).
-    for (auto& [name, inst] : live_instances_) {
-        if (!inst) continue;
-        inst->set_param("roi_enabled", enabled);
-        inst->set_param("roi_x", x);
-        inst->set_param("roi_y", y);
-        inst->set_param("roi_w", w);
-        inst->set_param("roi_h", h);
+    // Delegate to the bridge, which iterates every live self-developed
+    // instance (skipping OpenEB wrappers and calibration algos) AND caches
+    // the values so future instances created via create() inherit the
+    // current ROI (N3).
+    bridge_->apply_global_roi(enabled, x, y, w, h);
+}
+
+void AlgorithmsPanel::apply_global_preproc(const std::string& key,
+                                           const std::string& value) {
+    // Delegate to the bridge, which iterates every live self-developed
+    // instance and forwards the preproc_* parameter. Each backend's
+    // Preprocessor / RoiFilter member recognises the key. Preprocessing is
+    // stackable and NOT mutually exclusive with the main algorithm.
+    if (bridge_) bridge_->apply_global_preproc(key, value);
+}
+
+void AlgorithmsPanel::build_preproc_selector(QVBoxLayout* parent_layout) {
+    auto* gb = new QGroupBox(tr("Preprocessing (ROI > filter > downsample)"), this);
+    auto* form = new QFormLayout(gb);
+    form->setContentsMargins(6, 6, 6, 6);
+
+    // Noise filter enable (default off — opt-in denoising stage).
+    preproc_filter_cb_ = new QCheckBox(tr("Noise filter"), gb);
+    preproc_filter_cb_->setChecked(false);
+    form->addRow(preproc_filter_cb_);
+
+    // 1/4 downsample (default ON to preserve v1.0.0 behaviour where
+    // event_to_video had downsample=true).
+    preproc_downsample_cb_ = new QCheckBox(tr("1/4 Downsample"), gb);
+    preproc_downsample_cb_->setChecked(true);
+    form->addRow(preproc_downsample_cb_);
+
+    // Filter mode (8 modes, default STCF=1).
+    preproc_filter_mode_combo_ = new QComboBox(gb);
+    preproc_filter_mode_combo_->addItem("0=BAF");
+    preproc_filter_mode_combo_->addItem("1=STCF");
+    preproc_filter_mode_combo_->addItem("2=Refractory");
+    preproc_filter_mode_combo_->addItem("3=DWF");
+    preproc_filter_mode_combo_->addItem("4=AgePolarity");
+    preproc_filter_mode_combo_->addItem("5=Harmonic");
+    preproc_filter_mode_combo_->addItem("6=Repetitious");
+    preproc_filter_mode_combo_->addItem("7=SpatialBP");
+    preproc_filter_mode_combo_->setCurrentIndex(1);  // STCF
+    form->addRow(tr("Filter mode"), preproc_filter_mode_combo_);
+
+    // Mode-specific parameter rows (BUG-3 fix). All 8 modes' params are
+    // pre-created and shown/hidden based on the selected filter mode.
+    // Cross-mode params (mode=-1) are always visible when the filter is on.
+    preproc_params_form_ = new QFormLayout();
+    preproc_params_form_->setContentsMargins(6, 6, 6, 6);
+    form->addRow(preproc_params_form_);
+
+    // Parameter definitions: {key, display, type, def, lo, hi, mode}
+    // type: "i"=int, "f"=float, "b"=bool
+    struct PDef {
+        const char* key;
+        const char* disp;
+        char type;
+        const char* def;
+        const char* lo;
+        const char* hi;
+        int mode;
+    };
+    static const PDef pdefs[] = {
+        // STCF (mode 1)
+        {"preproc_filter_correlation_time_s", "STCF corr (s)", 'f', "0.005", "0.001", "0.1", 1},
+        {"preproc_filter_min_neighbors", "STCF min nbr", 'i', "2", "1", "8", 1},
+        {"preproc_filter_require_polarity_match", "STCF pol match", 'b', "false", "", "", 1},
+        {"preproc_filter_allow_coincidence", "STCF coincide", 'b', "false", "", "", 1},
+        // BAF (mode 0)
+        {"preproc_filter_baf_dt_us", "BAF dt (us)", 'i', "1000", "1000", "100000", 0},
+        {"preproc_filter_baf_subsample_by", "BAF subsample", 'i', "0", "0", "4", 0},
+        // Refractory (mode 2)
+        {"preproc_filter_refractory_us", "Refractory (us)", 'i', "1000", "100", "100000", 2},
+        // DWF (mode 3)
+        {"preproc_filter_dwf_window_length", "DWF win len", 'i', "2", "1", "100", 3},
+        {"preproc_filter_dwf_dist_threshold", "DWF dist", 'i', "2", "1", "1024", 3},
+        {"preproc_filter_dwf_min_correlated", "DWF min corr", 'i', "2", "1", "8", 3},
+        {"preproc_filter_dwf_double_mode", "DWF double", 'b', "false", "", "", 3},
+        // AgePolarity (mode 4)
+        {"preproc_filter_agep_tau_us", "AgePol tau (us)", 'i', "3000", "1000", "100000", 4},
+        {"preproc_filter_age_threshold", "AgePol thresh", 'f', "2.0", "0.0", "8.0", 4},
+        {"preproc_filter_agep_radius", "AgePol radius", 'i', "2", "1", "5", 4},
+        // Harmonic (mode 5) — line_freq_hz is an enum (50 or 60 Hz), not an
+        // arbitrary int. Use type 'e' so the UI presents a combo box and the
+        // backend's penum definition (algo_bridge.cpp) is respected.
+        {"preproc_filter_line_freq_hz", "Harm Hz", 'e', "50", "50", "60", 5},
+        {"preproc_filter_notch_q", "Harm Q", 'f', "5.0", "0.1", "100.0", 5},
+        {"preproc_filter_harmonic_threshold", "Harm thresh", 'f', "0.1", "0.0", "1.0", 5},
+        // Repetitious (mode 6)
+        {"preproc_filter_rep_period_us", "Rep period (us)", 'i', "5000", "1000", "1000000", 6},
+        {"preproc_filter_rep_tolerance_us", "Rep tol (us)", 'i', "1000", "100", "10000", 6},
+        {"preproc_filter_rep_ratio_shorter", "Rep ratio short", 'i', "10", "1", "100", 6},
+        {"preproc_filter_rep_ratio_longer", "Rep ratio long", 'i', "10", "1", "100", 6},
+        {"preproc_filter_rep_min_dt_to_store_us", "Rep min dt (us)", 'i', "1000", "0", "1000000", 6},
+        // SpatialBP (mode 7)
+        {"preproc_filter_sbp_center_radius_px", "SBP center", 'i', "2", "1", "10", 7},
+        {"preproc_filter_sbp_surround_radius_px", "SBP surround", 'i', "10", "5", "30", 7},
+        {"preproc_filter_sbp_dt_surround_us", "SBP dt (us)", 'i', "10000", "100", "1000000", 7},
+        // Cross-mode flags
+        {"preproc_filter_filter_hot_pixels", "Filter hot px", 'b', "false", "", "", -1},
+        {"preproc_filter_adaptive_correlation_time", "Adaptive corr", 'b', "false", "", "", -1},
+    };
+
+    for (const auto& p : pdefs) {
+        auto* lbl = new QLabel(tr(p.disp), gb);
+        QWidget* w = nullptr;
+        const std::string pkey = p.key;
+        if (p.type == 'b') {
+            auto* cmb = new QComboBox(gb);
+            cmb->addItem("false"); cmb->addItem("true");
+            cmb->setCurrentIndex(std::string(p.def) == "true" ? 1 : 0);
+            w = cmb;
+            connect(cmb, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+                    [this, pkey, cmb](int) {
+                        apply_global_preproc(pkey, cmb->currentText().toStdString());
+                    });
+        } else if (p.type == 'e') {
+            // Enum: lo and hi are the two valid string values (e.g. "50"/"60").
+            auto* cmb = new QComboBox(gb);
+            cmb->addItem(QString::fromUtf8(p.lo));
+            cmb->addItem(QString::fromUtf8(p.hi));
+            cmb->setCurrentIndex(std::string(p.def) == p.hi ? 1 : 0);
+            w = cmb;
+            connect(cmb, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+                    [this, pkey, cmb](int) {
+                        apply_global_preproc(pkey, cmb->currentText().toStdString());
+                    });
+        } else if (p.type == 'i') {
+            auto* sp = new QSpinBox(gb);
+            sp->setRange(std::string(p.lo).empty() ? -100000000 : std::stoi(p.lo),
+                         std::string(p.hi).empty() ? 100000000 : std::stoi(p.hi));
+            sp->setValue(std::stoi(p.def));
+            w = sp;
+            connect(sp, QOverload<int>::of(&QSpinBox::valueChanged), this,
+                    [this, pkey](int v) {
+                        apply_global_preproc(pkey, std::to_string(v));
+                    });
+        } else { // 'f'
+            auto* sp = new QDoubleSpinBox(gb);
+            sp->setRange(-1e9, 1e9);
+            sp->setDecimals(6);
+            sp->setValue(std::stod(p.def));
+            w = sp;
+            connect(sp, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this,
+                    [this, pkey](double v) {
+                        apply_global_preproc(pkey, std::to_string(v));
+                    });
+        }
+        preproc_params_form_->addRow(lbl, w);
+        preproc_rows_.push_back({lbl, w, p.mode, pkey});
+    }
+
+    parent_layout->addWidget(gb);
+
+    // Wire up: any change applies the preproc setting to all live instances.
+    // These checkboxes are intentionally NOT added to checkboxes_ (the
+    // algorithm-mutex map) so enabling preprocessing does not disable the
+    // main algorithm — preprocessing overlays on top of it.
+    connect(preproc_filter_cb_, &QCheckBox::toggled, this, [this](bool on) {
+        apply_global_preproc("preproc_filter_enabled", on ? "true" : "false");
+        refresh_preproc_params();
+    });
+    connect(preproc_downsample_cb_, &QCheckBox::toggled, this, [this](bool on) {
+        apply_global_preproc("preproc_downsample", on ? "true" : "false");
+    });
+    connect(preproc_filter_mode_combo_,
+            QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            [this](int idx) {
+                apply_global_preproc("preproc_filter_mode", std::to_string(idx));
+                refresh_preproc_params();
+            });
+
+    // Show the rows matching the default mode (STCF=1).
+    refresh_preproc_params();
+}
+
+void AlgorithmsPanel::refresh_preproc_params() {
+    if (!preproc_filter_mode_combo_) return;
+    const int mode = preproc_filter_mode_combo_->currentIndex();
+    const bool filter_on = preproc_filter_cb_ && preproc_filter_cb_->isChecked();
+    for (auto& row : preproc_rows_) {
+        const bool visible = filter_on && (row.mode < 0 || row.mode == mode);
+        if (row.label) row.label->setVisible(visible);
+        if (row.field) row.field->setVisible(visible);
     }
 }
 
@@ -324,6 +535,27 @@ void AlgorithmsPanel::apply_param(const std::string& algo_name,
         it = live_instances_.find(algo_name);
     }
     it->second->set_param(param_key, value);
+
+    // BUG-G2: after setting model_path, the E2VID num_bins is dictated by the
+    // loaded ONNX model. Read it back and update the GUI field so the user
+    // sees the actual value the algo will use (not the stale typed value).
+    if (param_key == "model_path") {
+        const std::string nb = it->second->get_param("num_bins");
+        if (!nb.empty()) {
+            auto state_it = algo_panel_state_.find(algo_name);
+            if (state_it != algo_panel_state_.end()) {
+                for (auto& row : state_it->second.rows) {
+                    if (row.key == "num_bins" && row.field) {
+                        QSignalBlocker b(row.field);
+                        if (auto* sp = qobject_cast<QSpinBox*>(row.field)) {
+                            sp->setValue(QString::fromStdString(nb).toInt());
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+    }
 }
 
 void AlgorithmsPanel::refresh_mode_visibility(const std::string& algo_name) {
@@ -351,7 +583,7 @@ void AlgorithmsPanel::refresh_mode_visibility(const std::string& algo_name) {
         if (row.field) row.field->setVisible(visible);
     }
 
-    // Auto-set mode-appropriate ROI and output_fps on every mode switch
+    // Auto-set mode-appropriate ROI and output_fps only during initial build
     // (design §4.4.2): all three event_to_video modes default to a 128×128
     // center ROI with 1/4 downsample enabled (effective reconstruction at
     // 64×64). E2VID runs NN inference at this resolution; BardowVariational
@@ -359,6 +591,10 @@ void AlgorithmsPanel::refresh_mode_visibility(const std::string& algo_name) {
     // (the output is upsampled back to the ROI size for display). 24 fps is
     // a comfortable target across all modes.
     // Only event_to_video has a "mode" enum, so this code only runs for it.
+    // BUG-14 fix: skip ROI/fps reset on user-driven mode switches so
+    // user-customised values are preserved.
+    if (!first_init_) return;
+
     const int target_w  = 128;
     const int target_h  = 128;
     const int target_fps = 24;
@@ -398,6 +634,14 @@ void AlgorithmsPanel::set_algo_enabled(const std::string& name, bool on) {
     QSignalBlocker b(it->second);
     it->second->setChecked(on);
 
+    // Show/hide the target's parameter editor to match the new checkbox
+    // state. QSignalBlocker suppressed the toggled handler which would
+    // normally do this (BUG-M2).
+    auto st = algo_panel_state_.find(name);
+    if (st != algo_panel_state_.end() && st->second.params_host) {
+        st->second.params_host->setVisible(on);
+    }
+
     // Algorithm mutex: when turning an algo on programmatically (e.g. from
     // on_open_algo_window), uncheck every other algo so only one is live at
     // a time. The toggled-handler path enforces mutex itself; this covers
@@ -408,6 +652,12 @@ void AlgorithmsPanel::set_algo_enabled(const std::string& name, bool on) {
             if (!other_cb || !other_cb->isChecked()) continue;
             QSignalBlocker ob(other_cb);
             other_cb->setChecked(false);
+            // Hide the other algo's parameter editor (BUG-M2: QSignalBlocker
+            // suppresses the toggled handler that would normally hide it).
+            auto ost = algo_panel_state_.find(other_name);
+            if (ost != algo_panel_state_.end() && ost->second.params_host) {
+                ost->second.params_host->setVisible(false);
+            }
             auto oi = live_instances_.find(other_name);
             if (oi != live_instances_.end() && oi->second) {
                 oi->second->set_enabled(false);

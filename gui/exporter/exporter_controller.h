@@ -24,7 +24,7 @@ struct ExportParams {
     enum class Format { HDF5, AVI } format{Format::HDF5};
     // AVI-only options:
     int fps{30};
-    double accumulation_ms{33.3};
+    int accumulation_us{33000};
     int quality{90};          // 1..100 (codec selection heuristic)
     bool color{true};
 };

@@ -1,21 +1,35 @@
 # gui/ — Qt 6 GUI application for openEB.
 
-set(GUI_SOURCES
-    main.cpp
+# Library sources (everything except main.cpp). Built once as a static library
+# so the unit tests in tests/ can link the same code without recompiling it.
+set(GUI_LIB_SOURCES
     main_window.cpp
     app/camera_controller.cpp
     app/file_converter.cpp
     app/file_frame_generator.cpp
     app/frame_pipeline.cpp
+    app/icon_provider.cpp
     app/statistics_controller.cpp
     app/theme_controller.cpp
     algo_bridge/algo_bridge.cpp
-    algo_bridge/algo_backend.cpp
+    algo_bridge/backends/cv_backends.cpp
+    algo_bridge/backends/cv_vector_backends.cpp
+    algo_bridge/backends/analytics_backends.cpp
+    algo_bridge/backends/analytics_extra_backends.cpp
+    algo_bridge/backends/display_backends.cpp
+    algo_bridge/backends/filter_backends.cpp
+    algo_bridge/backends/openeb_filter_backends.cpp
+    algo_bridge/backends/openeb_frame_backends.cpp
+    algo_bridge/backends/openeb_preproc_backends.cpp
+    algo_bridge/backends/openeb_util_backends.cpp
+    algo_bridge/backends/backend_factory.cpp
     algo_bridge/filter_chain.cpp
     config/config_manager.cpp
     display/event_display_widget.cpp
+    display/display_strategy.cpp
     exporter/exporter_controller.cpp
     exporter/export_dialog.cpp
+    panels/abstract_panel.cpp
     panels/algorithms_panel.cpp
     panels/biases_panel.cpp
     panels/devices_panel.cpp
@@ -35,22 +49,22 @@ set(GUI_SOURCES
 
 # Phase 9 — calibration wizard (built when sources are present).
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/calibration/calibration_wizard.cpp")
-    list(APPEND GUI_SOURCES
+    list(APPEND GUI_LIB_SOURCES
         calibration/calibration_wizard.cpp
     )
 endif()
 
-# Phase 10 — multi-window / layout manager.
-list(APPEND GUI_SOURCES
-    widgets/multi_window_manager.cpp
+# Phase 10 — layout manager.
+list(APPEND GUI_LIB_SOURCES
     widgets/custom_title_bar.cpp
+    widgets/activity_bar.cpp
     config/layout_manager.cpp
 )
 
 # Phase 11 — jAER-inspired display / widgets (design §1.6).
 # Header-only utility multiline_text.h needs no source entry.
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/display/space_time_display.cpp")
-    list(APPEND GUI_SOURCES
+    list(APPEND GUI_LIB_SOURCES
         widgets/target_labeler.cpp
         widgets/pixel_probe.cpp
         widgets/mouse_adaptor.cpp
@@ -60,11 +74,10 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/display/space_time_display.cpp")
     )
 endif()
 
-add_executable(gui_for_openeb ${GUI_SOURCES})
-
-target_include_directories(gui_for_openeb PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-
-target_link_libraries(gui_for_openeb PRIVATE
+# Static library shared by the application and the unit tests.
+add_library(gui_core STATIC ${GUI_LIB_SOURCES})
+target_include_directories(gui_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(gui_core PUBLIC
     Qt6::Widgets
     Qt6::OpenGL
     Qt6::OpenGLWidgets
@@ -76,7 +89,26 @@ target_link_libraries(gui_for_openeb PRIVATE
 # MetavisionSDK CMake config as MetavisionSDK::hal; link it explicitly so
 # the include paths propagate even if gui_algo only links base/core/stream.
 if(TARGET MetavisionSDK::hal)
-    target_link_libraries(gui_for_openeb PRIVATE MetavisionSDK::hal)
+    target_link_libraries(gui_core PUBLIC MetavisionSDK::hal)
 endif()
 
+# Main executable — entry point only; all logic lives in gui_core.
+add_executable(gui_for_openeb main.cpp)
+
+# Qt resources — theme QSS template + Lucide-style SVG icons (design §3.1/§3.2).
+# AUTORCC compiles these into the binary so the code can load ":/theme/..." and
+# ":/icons/..." at runtime.
+target_sources(gui_for_openeb PRIVATE
+    resources/theme.qrc
+    resources/icons.qrc
+)
+
+target_link_libraries(gui_for_openeb PRIVATE gui_core)
+
 install(TARGETS gui_for_openeb RUNTIME DESTINATION bin)
+
+# --- Unit tests (design §3.11) ---------------------------------------------
+option(GUI_BUILD_TESTS "Build GUI unit tests" ON)
+if(GUI_BUILD_TESTS)
+    add_subdirectory(tests)
+endif()

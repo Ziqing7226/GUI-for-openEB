@@ -62,9 +62,10 @@ public:
             const FlowSample& s = samples[i];
             const double u_est = s.u_est, v_est = s.v_est;
             const double u_gt = s.u_gt, v_gt = s.v_gt;
-            const double mag_gt = std::sqrt(u_gt * u_gt + v_gt * v_gt);
-            const double mag_est = std::sqrt(u_est * u_est + v_est * v_est);
-            if (mag_gt < kEps) continue;
+            const double mag_gt2 = u_gt * u_gt + v_gt * v_gt;
+            if (mag_gt2 < kEps * kEps) continue;
+            const double mag_gt = std::sqrt(mag_gt2);
+            const double mag_est2 = u_est * u_est + v_est * v_est;
             // Endpoint error.
             const double dx = u_est - u_gt;
             const double dy = v_est - v_gt;
@@ -75,7 +76,8 @@ public:
             pe_.push(epe * 100.0 / mag_gt);
             // Angular error: 2D vector angle between est and gt (jAER
             // AngularError). Skip when est magnitude is zero.
-            if (mag_est >= kEps) {
+            if (mag_est2 >= kEps * kEps) {
+                const double mag_est = std::sqrt(mag_est2);
                 double cos_a = (u_est * u_gt + v_est * v_gt) / (mag_est * mag_gt);
                 if (cos_a > 1.0) cos_a = 1.0;
                 if (cos_a < -1.0) cos_a = -1.0;

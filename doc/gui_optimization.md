@@ -51,6 +51,8 @@
 
 ### 2.1 代码规模
 
+> **历史快照**：本表反映 v1.0.9 重构前的状态，保留作历史参照。重构后 `algo_backend.cpp` 已拆分为 11 个 `backends/*.cpp`；`main_window.cpp` 实际 1706 行；`algo_bridge.cpp` 实际 937 行；`gui/` 总计约 21152 行；`gui/tests/` 已有 5 个测试文件。
+
 | 文件 | 行数 | 问题 |
 |------|------|------|
 | [algo_backend.cpp](file:///home/justin/GUI-for-openEB/gui/algo_bridge/algo_backend.cpp) | 2897 | 50 个 `*Backend` 子类挤在一个文件 |
@@ -88,6 +90,8 @@ settings_->preprocessing_panel()->on_camera_connected(&camera_);
 [main_window.cpp:1032-1121](file:///home/justin/GUI-for-openEB/gui/main_window.cpp#L1032-L1121) 用 `if (mode == Overlay)... else if (mode == Replace)...` 分支处理 4 种显示模式。增加新模式要改 MainWindow。
 
 #### 问题 E：GUI 零测试
+
+> **历史快照**：此问题已在 v1.0.9 后解决。`gui/tests/` 现有 5 个测试文件（test_algo_bridge/test_config_manager/test_display_strategy/test_layout_manager/test_theme_tokens），共 40 个 TEST() 宏。
 
 `gui/**/test*` 返回空。16324 行 GUI 代码无单元测试。
 
@@ -289,27 +293,21 @@ private:
 
 #### 3.4.1 拆分方案
 
-`algo_backend.cpp`（2897 行，50 个子类）按类别拆成 7 个文件：
+`algo_backend.cpp`（2897 行，50 个子类）按类别拆成 11 个文件：
 
 ```
 gui/algo_bridge/backends/
-  ├── cv_backends.cpp          // 13 个：NoiseFilter, HotPixel, OpticalGyro,
-  │                            //        PerspectiveUndistort, ObjectTracker,
-  │                            //        CornerDetector, BlobDetector,
-  │                            //        SparseOpticalFlow, HoughLine,
-  │                            //        HoughCircle, LineSegment,
-  │                            //        OrientationCluster, ClusterLif
-  ├── analytics_backends.cpp   // 8 个：EventToVideo, FlowStatistics,
-  │                            //        ISIAnalyzer, FreqDetector,
-  │                            //        ActiveMarker, ParticleCounter,
-  │                            //        AutoBias, TriggerSynced
-  ├── display_backends.cpp     // 4 个：TimeSurface, UltraSlowMotion,
-  │                            //        XYTVisualizer, Overlay
-  ├── filter_backends.cpp      // 4 个：OrientationFilter, DirectionSelective,
-  │                            //        BackgroundMask, BandpassFilter
-  ├── openeb_filter_backends.cpp  // RoiMask, AdaptiveRateSplit 等
-  ├── openeb_frame_backends.cpp   // FrameIntegration, FrameDiff, FrameHisto 等
-  └── openeb_util_backends.cpp    // UtilFrameComposer, UtilRateEstimator 等
+  ├── backend_factory.cpp           // 注册入口
+  ├── cv_backends.cpp               // 自研 CV 算法
+  ├── cv_vector_backends.cpp        // CV 向量/轨迹类算法
+  ├── analytics_backends.cpp        // 自研 analytics 算法
+  ├── analytics_extra_backends.cpp  // analytics 扩展，E2VID 等
+  ├── display_backends.cpp          // 显示类算法
+  ├── filter_backends.cpp           // 自研 noise/hot_pixel filter
+  ├── openeb_filter_backends.cpp    // OpenEB 滤波器
+  ├── openeb_frame_backends.cpp     // OpenEB 帧生成
+  ├── openeb_preproc_backends.cpp   // OpenEB 预处理
+  └── openeb_util_backends.cpp      // OpenEB 工具
 ```
 
 `algo_backend.h` 保留 `AlgoBackend` 基类、`AlgoResult` 结构、`ProcessRegion`/`RoiFilter` helper。
@@ -438,6 +436,8 @@ void MainWindow::process_algo_results(QImage& frame) {
 - **帮助**：About, Documentation
 
 ### 3.7 面板可折叠分组
+
+> **更新（v1.0.9 后续）**：`collapsible_section.h` / `.cpp` 文件已从代码库中彻底删除。v1.0.9 重构将其从 SettingsPanel 移除后，该组件不再有任何代码引用，属于死代码。§3.7 保留为历史记录。
 
 #### 3.7.1 回归 design.md §5.1
 
@@ -651,7 +651,7 @@ gui/tests/
 | 任务 | 改动范围 | 依赖 |
 |------|----------|------|
 | 3.3 Panel 基类 + 事件解耦 | 新增 abstract_panel.h + 12 panel 改继承 + SettingsPanel 注册式 | 无 |
-| 3.4 algo_backend 拆分 | 2897 行拆成 7 文件 + CMakeLists 更新 | 无 |
+| 3.4 algo_backend 拆分 | 2897 行拆成 11 文件 + CMakeLists 更新 | 无 |
 | 3.5 显示策略多态化 | 新增 display_strategy.h + 4 策略 + process_algo_results 简化 | 无 |
 
 **验收标准**：
@@ -713,7 +713,7 @@ gui/tests/
 |------|------|------|
 | 令牌迁移工作量 | ~15 处裸 hex + theme_controller 重构 | 分批替换，每改一个 panel 验证 10 个主题变体 |
 | Panel 基类引入 | 12 个 panel 改继承，Q_OBJECT 宏需重新 moc | 清理构建目录后重新 cmake |
-| algo_backend 拆分 | 50 个类移文件，CMakeLists 同步 | 保持头文件不变，只拆 .cpp；先拆再编译验证 |
+| algo_backend 拆分 | 48 个类移文件，CMakeLists 同步 | 保持头文件不变，只拆 .cpp；先拆再编译验证 |
 | 标题栏重做 | frameless 窗口拖拽/缩放在 Wayland 下行为 | 保留 ResizeGrip 方案，Wayland 下用 startSystemMove/Resize |
 | 事件总线引入 | 信号槽从直接调用改为 panel 自订阅 | 相机连接逻辑先加日志验证，确保所有 panel 仍收到事件 |
 
@@ -742,8 +742,8 @@ WCAG AA 标准要求文字对比度 ≥ 4.5:1。当前 `#888` 在各暗色背景
 - `gui/app/icon_provider.h` / `.cpp`
 - `gui/panels/abstract_panel.h`
 - `gui/display/display_strategy.h` / `.cpp`
-- `gui/widgets/collapsible_section.h` / `.cpp`
-- `gui/algo_bridge/backends/*.cpp`（7 个）
+- `gui/widgets/collapsible_section.h` / `.cpp`（**已删除**，见 §3.7）
+- `gui/algo_bridge/backends/*.cpp`（11 个）
 - `gui/tests/*.cpp`（5 个）+ `gui/tests/CMakeLists.txt`
 
 **修改文件**：
@@ -1063,6 +1063,450 @@ for (auto& inst : algo_bridge_.list_live()) {
 - 用户可在 GUI 中调整（范围 10000–10000000μs）
 
 同时更新 `XYTVisualizerBackend` 构造函数中的 `XYTVisualizer` 默认参数从 1000.0f 改为 200.0f，保持一致。
+
+---
+
+## 九、v1.0.9 自检 BUG 总结（main → develop）
+
+> **状态：全部已修复（v1.0.9）**。以下 14 个 BUG 均已在 develop 分支提交中修复并通过 341 项测试验证。下方保留原始记录供参考。
+
+> 自检日期：2026-07-13
+> 自检范围：main（7d5fde6 v1.0.0）→ develop（e67a858 v1.0.9）提交，104 文件变更，+6922/−4218 行
+> 自检方式：编译验证（通过）+ 测试套件（341/341 通过）+ 代码静态审查
+
+### 9.1 编译与测试状态
+
+- **编译**：✅ 通过（GUI 静态库 `libgui_core.a` + 主程序 `gui_for_openeb` + 5 个测试可执行文件）
+- **测试**：✅ 341/341 通过（含 268 合成测试 + 33 raw 事件测试 + 40 GUI 测试）
+- **注意**：测试全绿不代表无 BUG——合成测试只验证 API 契约，GUI 测试在 offscreen 平台运行无法复现真实交互问题
+
+### 9.2 高严重性 BUG
+
+#### BUG-1：RoiFilter::get_param 缺少 roi_x/roi_y/roi_w/roi_h
+
+- **位置**：[backend_common.h:303-308](file:///home/justin/GUI-for-openEB/gui/algo_bridge/backends/backend_common.h#L303-L308)
+- **描述**：`RoiFilter::get_param` 只处理 `roi_enabled`，未实现 `roi_x`/`roi_y`/`roi_w`/`roi_h` 的 getter，返回空字符串
+- **影响**：GUI 通过 `AlgoInstance::get_param` 读取 ROI 参数时（如 [display_strategy.cpp:200-203](file:///home/justin/GUI-for-openEB/gui/display/display_strategy.cpp#L200-L203) 的 OverlayStrategy ROI zoom view），`roi_x` 等返回空串，`parse_int` 回退到默认值。当用户手动设置 ROI 偏移后，Overlay 算法的 ROI zoom 裁剪区域可能不正确
+- **根因**：`set_param` 实现了全部 5 个 ROI 参数（line 295-300），但 `get_param` 遗漏了 4 个
+- **违反约束**：project memory "All algorithm parameters must have both set_param and get_param implementations"
+
+#### BUG-2：apply_global_preproc 不区分 self/openeb 算法
+
+- **位置**：[algo_bridge.cpp:312-327](file:///home/justin/GUI-for-openEB/gui/algo_bridge/algo_bridge.cpp#L312-L327)
+- **描述**：`apply_global_preproc` 遍历**所有** live instances（包括 OpenEB 包装算法），对它们调用 `set_param("preproc_*", ...)`。注释说"every live self-developed instance"但代码未过滤 `source=="self"`
+- **影响**：OpenEB 算法（roi_filter, polarity_filter 等）的 `param_values_` map 被注入 33 个 `preproc_*` 参数，但它们的 `info_.params` 中没有这些参数。ConfigManager 保存/加载状态时可能出现不一致；GUI 参数编辑器遍历 `info_.params` 不会显示这些参数（设计正确），但 `param_values_` 被污染
+- **修复建议**：在循环中添加 `if (inst->info().source != "self") continue;`
+
+#### BUG-3：NoiseFilter 预处理参数未按模式在 GUI 暴露
+
+- **位置**：[algorithms_panel.cpp:337-383](file:///home/justin/GUI-for-openEB/gui/panels/algorithms_panel.cpp#L337-L383)（`build_preproc_selector`）
+- **描述**：`build_preproc_selector` 只暴露 3 个控件：噪声滤波器开关、1/4 降采样开关、滤波器模式 combo。`preproc_params()` 定义了 33 个参数（8 种模式各自的参数），但 GUI 未根据所选模式动态暴露相应参数
+- **影响**：用户无法调整 STCF 的 `correlation_time_s`、BAF 的 `baf_dt_us`、DWF 的 `window_length` 等关键滤波器参数，只能使用默认值
+- **违反约束**：project memory "NoiseFilter parameters must be exposed in GUI based on selected filter mode (DWF/AgePolarity/Harmonic/Repetitious/SpatialBP)"
+
+### 9.3 中严重性 BUG
+
+#### BUG-4：主题切换后状态栏图标颜色不更新
+
+- **位置**：[main_window.cpp:515-518](file:///home/justin/GUI-for-openEB/gui/main_window.cpp#L515-L518)（`build_status_bar` 的 `make_item`）+ [icon_provider.cpp:16-18](file:///home/justin/GUI-for-openEB/gui/app/icon_provider.cpp#L16-L18)
+- **描述**：`IconProvider::get(name)` 在调用时读取 `QPalette::WindowText` 渲染 SVG 图标为 QPixmap。状态栏的 chart/clock 图标在 `build_status_bar` 时一次性渲染，之后主题切换（`ThemeController::apply_stylesheet` 调用 `app->setPalette`）不会重新渲染这些图标
+- **影响**：用户切换主题（特别是明暗模式切换）后，状态栏的 chart 和 clock 图标保持旧主题颜色，视觉不一致
+- **修复建议**：监听 `theme_changed` 信号，在槽函数中重新渲染状态栏图标；或改用 `QIcon` + `QPalette` 动态着色
+
+#### BUG-5：settings_panel.h tabs_/tab_widget() 为死代码
+
+- **位置**：[settings_panel.h:82](file:///home/justin/GUI-for-openEB/gui/panels/settings_panel.h#L82)（`tab_widget()` 声明）+ [settings_panel.h:94](file:///home/justin/GUI-for-openEB/gui/panels/settings_panel.h#L94)（`tabs_` 成员）
+- **描述**：Phase 3 将 QTabWidget 替换为 CollapsibleSection 堆叠布局，但 `tabs_` 成员和 `tab_widget()` 访问器保留未删除。`tabs_` 永远为 nullptr，`tab_widget()` 永远返回 nullptr
+- **影响**：无功能影响（无调用方），但代码冗余可能误导后续开发者
+- **修复建议**：删除 `tabs_` 成员和 `tab_widget()` 方法
+
+#### BUG-6：Light Gray 和 Light Blue 主题 fg-muted 对比度偏低
+
+- **位置**：[tokens.h:67](file:///home/justin/GUI-for-openEB/gui/resources/theme/tokens.h#L67)（Light Gray fg-muted #6A6A6A）+ [tokens.h:175](file:///home/justin/GUI-for-openEB/gui/resources/theme/tokens.h#L175)（Light Blue fg-muted #5A7590）
+- **描述**：Light Gray fg-muted `#6A6A6A` 对 `#E8E8E8` 对比度约 4.41:1；Light Blue fg-muted `#5A7590` 对 `#D4E6F1` 对比度约 3.74:1。两者均低于 WCAG AA 4.5:1 阈值
+- **影响**：在 Light Gray 和 Light Blue 主题下，hint/placeholder 文本可读性略差。测试 `FgMutedContrastLightFloor` 使用 3.0:1 阈值所以通过，但实际可读性不理想
+- **修复建议**：将 Light Gray fg-muted 加深至 `#5A5A5A`（约 5.3:1）；Light Blue fg-muted 加深至 `#4A6580`（约 4.6:1）
+
+#### BUG-7：custom_title_bar QMenu border 硬编码 #888
+
+- **位置**：[custom_title_bar.cpp:130](file:///home/justin/GUI-for-openEB/gui/widgets/custom_title_bar.cpp#L130)
+- **描述**：`setColors` 中 QMenu 样式使用 `border: 1px solid #888` 硬编码，未使用主题的 border token
+- **影响**：在某些主题下（如 Light Pink/Blue），QMenu 边框颜色与主题不协调
+- **修复建议**：将 `#888` 替换为传入的 border 颜色参数
+
+### 9.4 低严重性 BUG / 改进建议
+
+#### BUG-8：collapsible_section QSettings key 使用中文标题
+
+- **位置**：[collapsible_section.cpp:72](file:///home/justin/GUI-for-openEB/gui/widgets/collapsible_section.cpp#L72) + [settings_panel.cpp:123-124](file:///home/justin/GUI-for-openEB/gui/panels/settings_panel.cpp#L123-L124)
+- **描述**：QSettings key 格式为 `layout/section_<中文标题>_collapsed`，如 `layout/section_相机设备_collapsed`。如果将来翻译 group 标题，旧的折叠状态会丢失
+- **影响**：国际化/翻译后用户自定义的折叠状态丢失
+- **修复建议**：改用稳定的英文 key（如 `group_camera`、`group_display` 等）
+
+#### BUG-9：版本号注释不一致
+
+- **位置**：[algo_bridge.cpp:207](file:///home/justin/GUI-for-openEB/gui/algo_bridge/algo_bridge.cpp#L207)（注释 "v1.1.0"）+ [test_algo_bridge.cpp](file:///home/justin/GUI-for-openEB/gui/tests/test_algo_bridge.cpp)（测试名 `NoiseFilterRemovedInV1_1_0`）
+- **描述**：代码注释和测试名引用 v1.1.0，但实际发布版本是 1.0.9
+- **影响**：无功能影响，文档/测试名误导
+- **修复建议**：更新注释为 v1.0.9，测试名改为 `NoiseFilterRemovedInV1_0_9`
+- **状态**：已修复。测试名已改为 `NoiseFilterRemovedInV1_0_9`，`algo_bridge.cpp` 注释已改为 v1.0.9，`test_algo_bridge.cpp` 注释也已改为 v1.0.9。
+
+#### BUG-10：窗口控制按钮（min/max/close）无 hover 效果
+
+- **位置**：[custom_title_bar.cpp:54-62](file:///home/justin/GUI-for-openEB/gui/widgets/custom_title_bar.cpp#L54-L62)（`make_btn`）
+- **描述**：`make_btn` 创建的窗口控制按钮未设置 hover/pressed 样式，而 `addMenu` 的下拉按钮有 hover 效果（line 96-97）
+- **影响**：UX 不一致，窗口控制按钮缺少视觉反馈
+- **修复建议**：为 `make_btn` 添加 hover/pressed 样式
+
+#### BUG-11：PreprocessingPanel 与 AlgorithmsPanel 预处理控件功能重叠
+
+- **位置**：[settings_panel.cpp:80-82](file:///home/justin/GUI-for-openEB/gui/panels/settings_panel.cpp#L80-L82)
+- **描述**：`PreprocessingPanel`（OpenEB 滤波器链控制）和 `AlgorithmsPanel`（自研算法预处理控制）都在 "算法模块" 折叠组中。两者都有"预处理"功能，但作用于不同算法体系，用户可能混淆
+- **影响**：用户可能误以为 PreprocessingPanel 控制 AlgorithmsPanel 的噪声滤波器
+- **修复建议**：在 GUI 中明确标注两者作用范围，或将 PreprocessingPanel 移到其他组
+
+### 9.5 用户反馈补充 BUG（第二轮自检）
+
+#### BUG-12：GUI 中文 UI 文本（违反全英文要求）
+
+- **位置**：11 个 panel 的 `panel_group()` 返回中文 + [settings_panel.cpp:87-91](file:///home/justin/GUI-for-openEB/gui/panels/settings_panel.cpp#L87-L91)
+- **描述**：develop 分支在 `panel_group()` 中引入中文 UI 文本：`"相机设备"`、`"显示与统计"`、`"硬件配置"`、`"算法模块"`、`"工具"`。这些中文直接显示在 CollapsibleSection 标题栏上。main 分支的 settings_panel.cpp 只有代码注释含中文，UI 文本本身是英文
+- **影响**：违反"GUI 全英文"要求（已内化到 main 版本）；中文文本在 CollapsibleSection 标题栏显示，与 main 版本的英文风格不一致；同时污染 QSettings key（BUG-8）
+- **根因**：Phase 3 CollapsibleSection 改造时，group 分组使用中文命名，未遵循全英文约定
+- **修复建议**：将 `panel_group()` 返回值改为英文：
+  - `"相机设备"` → `"Camera"`
+  - `"显示与统计"` → `"Display & Stats"`
+  - `"硬件配置"` → `"Hardware"`
+  - `"算法模块"` → `"Algorithms"`
+  - `"工具"` → `"Tools"`
+
+#### BUG-13：OpenEB 算法 ROI/preproc 参数无效（传参断裂）
+
+- **位置**：[algo_bridge.cpp:52-58](file:///home/justin/GUI-for-openEB/gui/algo_bridge/algo_bridge.cpp#L52-L58)（`AlgoInstance::set_param`）+ [algo_bridge.cpp:123-125](file:///home/justin/GUI-for-openEB/gui/algo_bridge/algo_bridge.cpp#L123-L125)（`push_events` 透传）
+- **描述**：OpenEB 包装算法的 `backend_` 为 nullptr（透传设计）。`AlgoInstance::set_param` 在 `backend_` 为空时只更新 `param_values_` map，不调用任何后端。`push_events` 在 `backend_` 为空时直接 return（透传给 filter_chain）。因此 GUI 通过 `apply_global_roi()` 对 OpenEB 算法设置的 `roi_x/y/w/h` 参数**永远不会生效**——OpenEB 算法的 ROI 由 filter_chain 处理，而 AlgoBridge 透传不经过 filter_chain 的 ROI
+- **影响**：用户在 AlgorithmsPanel 设置 ROI 后，OpenEB 算法（roi_filter, polarity_filter, refractory_filter 等）不应用该 ROI，导致输出与预期不符。同理，`apply_global_preproc` 对 OpenEB 算法也无效（BUG-2 的根本原因之一）
+- **严重性**：高——用户可感知的参数失效
+- **修复思路**：
+  1. 方案 A：在 AlgoBridge 透传路径中，对 OpenEB 算法的事件流应用 ROI 裁剪（在 `push_events` 中根据 `param_values_["roi_*"]` 过滤事件坐标）
+  2. 方案 B：GUI 层面明确区分——OpenEB 算法不显示 ROI/Preproc 控件，提示用户通过 PreprocessingPanel 控制
+  3. 推荐方案 B，因为 OpenEB 算法已有独立的 filter_chain 预处理体系，与自研算法的 Preprocessor 是两套独立机制
+
+#### BUG-14：refresh_mode_visibility 强制重置 ROI 和 output_fps
+
+- **位置**：[algorithms_panel.cpp:430-466](file:///home/justin/GUI-for-openEB/gui/panels/algorithms_panel.cpp#L430-L466)
+- **描述**：`refresh_mode_visibility` 在每次 event_to_video mode 切换时（包括 `build_ui` 首次构建时的初始化调用），强制设置 ROI 为 128×128、output_fps 为 24，并调用 `apply_global_roi()`。如果用户之前手动设置了不同的 ROI（如 256×256）或 fps（如 60），切换 mode 会覆盖用户设置
+- **影响**：用户自定义的 ROI/fps 在 mode 切换后丢失。虽然 project memory 要求 event_to_video 默认使用 128×128 ROI，但"默认"应只在首次启用时生效，用户修改后应保持
+- **修复建议**：添加标志位区分"首次初始化"和"用户主动切换 mode"。首次初始化时设置默认值；用户主动切换 mode 时只刷新参数可见性，不重置 ROI/fps
+
+### 9.6 自检结论
+
+| 类别 | 数量 | 状态 |
+|------|------|------|
+| 编译错误 | 0 | ✅ |
+| 测试失败 | 0 | ✅ |
+| 高严重性 BUG | 5 | ⚠️ 需修复（BUG-1/2/3/12/13） |
+| 中严重性 BUG | 5 | ⚠️ 建议修复（BUG-4/5/6/7/14） |
+| 低严重性/改进 | 4 | 💡 可后续处理（BUG-8/9/10/11） |
+
+**优先修复建议**：
+1. BUG-12（GUI 中文 UI 文本）——直接违反已内化的全英文要求，用户立即可感知
+2. BUG-13（OpenEB 算法参数无效）——用户可感知的参数失效
+3. BUG-1（RoiFilter::get_param 不完整）——影响 Overlay 算法 ROI zoom 正确性
+4. BUG-3（NoiseFilter 参数未暴露）——违反 project memory 明确约束
+5. BUG-14（mode 切换重置 ROI）——覆盖用户自定义设置
+6. BUG-2（apply_global_preproc 污染 OpenEB 算法）——BUG-13 的衍生问题
+
+---
+
+## 十、侧栏 VSCode 风格优化方案（用户反馈）
+
+### 10.1 当前问题
+
+当前侧栏设计（Phase 3 成果）：
+- QDockWidget 包含一个 QScrollArea，内嵌 5 个 CollapsibleSection 垂直堆叠
+- 所有 group 共享同一个 dock 标题 "Settings"
+- 用户需要滚动浏览所有折叠区
+
+**不足之处**（用户反馈）：
+1. 统一标题 "Settings" 不专业，不如 VSCode 的 Activity Bar 设计
+2. 所有功能堆叠在一个滚动区中，切换功能需要滚动查找
+3. 缺少功能图标，视觉辨识度低
+
+### 10.2 VSCode Activity Bar 设计参考
+
+VSCode 侧栏布局：
+```
+┌──┬─────────────────────┐
+│📎│ Explorer            │  ← Activity Bar (48px) + Sidebar Title
+│🔍│ ─────────────────── │
+│🔀│ <tree content>      │
+│▶ │                     │
+│⬇ │                     │
+└──┴─────────────────────┘
+```
+
+- **Activity Bar**（最左侧 48px 窄列）：一列 checkable 图标按钮，互斥选择
+- **Sidebar Title**：显示当前选中功能的名称
+- **Sidebar Content**：显示当前选中功能的内容
+- **Tooltip**：鼠标悬停图标显示功能描述
+
+### 10.3 优化方案
+
+> **历史注记**：本节方案中的 CollapsibleSection 组件已在 v1.0.9 重构后从代码库删除（见 §3.7 更新说明）。ActivityBar 的分组切换已完全替代 CollapsibleSection 的折叠功能。本节保留作历史记录。
+
+#### 10.3.1 布局重构
+
+```
+SettingsPanel (QHBoxLayout)
+├── ActivityBar (QFrame, fixedWidth=48px)
+│   └── QVBoxLayout
+│       ├── btn_camera    (checkable, icon=camera)
+│       ├── btn_display   (checkable, icon=bar-chart)
+│       ├── btn_hardware  (checkable, icon=cpu)
+│       ├── btn_algorithms(checkable, icon=cpu/blocks)
+│       ├── btn_tools     (checkable, icon=wrench)
+│       └── addStretch
+└── ContentArea (QStackedWidget or QScrollArea)
+    ├── page_camera     (CollapsibleSection: DevicesPanel + InformationPanel)
+    ├── page_display    (CollapsibleSection: DisplayPanel + StatisticsPanel)
+    ├── page_hardware   (CollapsibleSection: BiasesPanel + RoiPanel + EspPanel + TriggerPanel)
+    ├── page_algorithms (CollapsibleSection: AlgorithmsPanel + PreprocessingPanel)
+    └── page_tools      (CollapsibleSection: FileToolsPanel)
+```
+
+#### 10.3.2 实现要点
+
+1. **ActivityBar 类**（新增 `gui/widgets/activity_bar.h/.cpp`）：
+   - 继承 QFrame，固定宽度 48px
+   - QVBoxLayout 内含多个 checkable QPushButton，加入 QButtonGroup 实现互斥
+   - 每个按钮 36×36px，图标 20×20px
+   - 按钮添加 `setToolTip()` 显示功能描述
+   - 选中状态用 accent 色高亮（左侧 2px 竖条 + 背景着色）
+
+2. **ContentArea 切换**：
+   - 使用 QStackedWidget，每个 group 对应一页
+   - ActivityBar 按钮 clicked → `stacked_widget_->setCurrentIndex()`
+   - 每页内部仍用 CollapsibleSection 组织 panel（保持折叠能力）
+
+3. **动态标题**：
+   - SettingsPanel 暴露 `current_title()` 信号
+   - MainWindow 监听该信号，更新 `settings_dock_->setWindowTitle()`
+   - 标题随选中功能变化：Camera / Display & Stats / Hardware / Algorithms / Tools
+
+4. **图标选择**（复用现有 Lucide SVG 图标库）：
+   | Group | 图标 | Tooltip |
+   |-------|------|---------|
+   | Camera | `camera` | "Camera devices and connection info" |
+   | Display & Stats | `bar-chart` | "Display settings and statistics" |
+   | Hardware | `cpu` | "Biases, ROI, ESP and trigger configuration" |
+   | Algorithms | `blocks` | "Algorithm selection and preprocessing" |
+   | Tools | `wrench` | "File conversion and tools" |
+
+5. **状态持久化**：
+   - QSettings 保存 `sidebar/active_group`（用英文 key，非中文）
+   - 启动时恢复上次选中的 group
+
+#### 10.3.3 全英文化（配合 BUG-12 修复）
+
+Activity Bar 改造同时修复 BUG-12：
+- `panel_group()` 返回英文（用于内部分组逻辑）
+- ActivityBar 按钮 tooltip 使用英文
+- dock 标题使用英文
+- QSettings key 使用英文 group 名
+
+### 10.4 传参问题修复方案
+
+#### 10.4.1 OpenEB 算法参数失效（BUG-13）
+
+**推荐方案 B**：GUI 层面区分自研/OpenEB 算法
+
+- AlgorithmsPanel 的 ROI 控件和 Preproc 控件仅对自研算法（`source=="self"`）生效
+- OpenEB 算法启用时，隐藏 ROI/Preproc 控件或显示禁用状态
+- 添加提示文本："OpenEB algorithms use the Preprocessing panel for filter configuration"
+- `apply_global_roi()` 和 `apply_global_preproc()` 内部过滤 `source=="self"` 的 instance
+
+#### 10.4.2 RoiFilter::get_param 不完整（BUG-1）
+
+在 [backend_common.h:303-308](file:///home/justin/GUI-for-openEB/gui/algo_bridge/backends/backend_common.h#L303-L308) 补充 roi_x/roi_y/roi_w/roi_h 的 getter：
+
+```cpp
+std::string get_param(const std::string& k) const {
+    auto pp = preproc.get_param(k);
+    if (!pp.empty()) return pp;
+    if (k == "roi_enabled") return from_b(region.enabled);
+    if (k == "roi_x") return from_i(region.x);
+    if (k == "roi_y") return from_i(region.y);
+    if (k == "roi_w") return from_i(region.w);
+    if (k == "roi_h") return from_i(region.h);
+    return {};
+}
+```
+
+#### 10.4.3 NoiseFilter 参数暴露（BUG-3）
+
+在 `build_preproc_selector` 中，根据 `preproc_filter_mode_combo_` 的当前选中项，动态显示对应模式的参数控件：
+- 监听 mode combo 的 `currentIndexChanged`
+- 根据选中 mode 查询 `preproc_params()` 中 mode_filter 匹配的参数
+- 动态构建/隐藏参数控件（QSpinBox/QDoubleSpinBox/QComboBox）
+- 参数变更时调用 `apply_global_preproc(key, value)`
+
+#### 10.4.4 mode 切换不重置用户设置（BUG-14）
+
+- 添加 `bool first_init_` 标志位
+- `build_ui()` 调用 `refresh_mode_visibility` 时设为 true，执行默认 ROI/fps 设置
+- 用户主动切换 mode 时（combo 信号触发），`first_init_` 为 false，跳过 ROI/fps 重置
+- 只刷新参数控件可见性
+
+---
+
+## 十一、侧栏美化方案（第二轮用户反馈）
+
+> 日期：2026-07-13
+> 状态：**已实现**
+> **历史注记**：本节中涉及的 CollapsibleSection 组件已在后续重构中删除（见 §3.7）。ActivityBar 分组切换取代了 group 内部的折叠需求。本节保留作历史记录。
+
+### 11.1 背景
+
+第十章实现的 VSCode 风格 Activity Bar 解决了分组导航问题，但仍有以下不足：
+1. 每个 group 页面内部仍用 CollapsibleSection 包裹，折叠功能与 ActivityBar 的分组切换冗余
+2. ActivityBar 按钮间距过小（4px），视觉上不够分明
+3. 侧栏默认停靠右侧，与算法输出窗口抢占同一侧
+4. 侧栏最小宽度 320px 偏宽，输入框宽度分配过多
+5. 侧栏仍有标题栏（显示 group 名称），与 ActivityBar 的分组导航重复；顶栏的 toggle sidebar 与右边缘的 collapsed marker 也冗余
+6. Theme 菜单嵌套在 View 子菜单中，切换主题需要两次点击
+
+### 11.2 方案
+
+#### 11.2.1 移除 group 内部折叠功能（Point 1）
+
+ActivityBar 的分组切换已经实现了"只看一组"的效果，group 内部的 CollapsibleSection 折叠头冗余。移除 CollapsibleSection，每个 group 页面直接用 QVBoxLayout 堆叠 panel 的 QGroupBox。
+
+**改动**：[settings_panel.cpp](file:///home/justin/GUI-for-openEB/gui/panels/settings_panel.cpp) 中不再创建 CollapsibleSection，改为直接 `host_layout->addWidget(panel_groupbox)`。
+
+#### 11.2.2 调整 ActivityBar 按钮间距（Point 2）
+
+当前 `setSpacing(4)` 约为图标的 1/5。改为 `setSpacing(7)`（约图标 20px 的 1/3），并在按钮列底部添加 `addStretch` 将 toggle 按钮推到底部。
+
+#### 11.2.3 侧栏默认左侧，算法输出默认右侧（Point 3）
+
+- `settings_dock_`：`addDockWidget(Qt::RightDockWidgetArea, ...)` → `Qt::LeftDockWidgetArea`
+- AlgoWindow：`addDockWidget(Qt::LeftDockWidgetArea, w)` → `Qt::RightDockWidgetArea`
+
+#### 11.2.4 缩小侧栏宽度（Point 4）
+
+- `settings_dock_->setMinimumWidth(320)` → `260`
+- 基础 QSS 添加 `QSpinBox, QDoubleSpinBox, QComboBox, QLineEdit { max-width: 140px; }` 限制输入框宽度
+
+#### 11.2.5 移除侧栏标题栏，toggle 作为 ActivityBar 按钮（Point 5）
+
+**移除**：
+- `settings_dock_->setTitleBarWidget(new QWidget(this))` — 空标题栏 widget
+- View 菜单的 `a_toggle_sidebar_` action
+- 工具栏的 sidebar toggle 按钮
+- 右边缘的 `sidebar_tab_` collapsed marker toolbar
+
+**新增**：ActivityBar 底部添加 toggle 按钮（非 checkable）：
+- 侧栏停靠左侧且显示时：按钮图标 `chevron-left`，点击隐藏内容
+- 侧栏停靠左侧且隐藏时：按钮图标 `chevron-right`，点击展开内容
+- 侧栏停靠右侧且显示时：按钮图标 `chevron-right`，点击隐藏内容
+- 侧栏停靠右侧且隐藏时：按钮图标 `chevron-left`，点击展开内容
+
+**隐藏机制**：不隐藏整个 dock（否则 ActivityBar 也消失），而是隐藏 QStackedWidget 内容区 + 收缩 dock 宽度至 48px（仅 ActivityBar 可见）。展开时恢复用户之前的 dock 宽度。
+
+**需要新增图标**：`chevron-right.svg`（当前仅有 `chevron-left.svg`）
+
+#### 11.2.6 Theme 菜单独立为顶级下拉（Point 6）
+
+将 Theme 从 View 子菜单提取为独立顶级下拉按钮，位置在 View 右侧。菜单顺序变为：File | View | Theme | Camera | Tools | Help。
+
+### 11.3 涉及文件
+
+| 文件 | 改动 |
+|------|------|
+| [settings_panel.cpp](file:///home/justin/GUI-for-openEB/gui/panels/settings_panel.cpp) / [.h](file:///home/justin/GUI-for-openEB/gui/panels/settings_panel.h) | 移除 CollapsibleSection；添加 toggle 内容隐藏逻辑；调整宽度 |
+| [activity_bar.cpp](file:///home/justin/GUI-for-openEB/gui/widgets/activity_bar.cpp) / [.h](file:///home/justin/GUI-for-openEB/gui/widgets/activity_bar.h) | 调整间距；添加 toggle 按钮 + 图标切换逻辑 |
+| [main_window.cpp](file:///home/justin/GUI-for-openEB/gui/main_window.cpp) / [.h](file:///home/justin/GUI-for-openEB/gui/main_window.h) | 侧栏移至左侧；algo 输出移至右侧；移除 dock 标题栏；移除 toggle sidebar 菜单/工具栏/sidebar_tab；Theme 菜单独立 |
+| [base.qss.in](file:///home/justin/GUI-for-openEB/gui/resources/theme/base.qss.in) | 添加输入框 max-width |
+| gui/resources/icons/chevron-right.svg | **新增** |
+
+---
+
+## 十二、§11 落地后的 5 个遗留问题修复
+
+> 日期：2026-07-13
+> 状态：**已实现**
+
+### 12.1 背景
+
+§11 美化方案落实后，用户反馈了 5 个遗留问题：
+1. 删除标题栏后侧栏无法拖动（dock 不可移动）
+2. 切换 theme 时，ActivityBar 和侧栏其它部分颜色滞后（显示上一次 theme）
+3. 标题栏 "EB plus" 文字和相机图标颜色未与背景成反色
+4. 侧栏默认宽度仍偏大，输入框过宽
+5. Algorithms 面板中 analytics/calibration/computervision 区域有小滚轮，应全部展开
+
+### 12.2 修复方案
+
+#### 12.2.1 侧栏拖动（通过 ActivityBar 空白区域）
+
+**问题**：§11.2 point 5 设置 `NoDockWidgetFeatures` + 空标题栏后，QDockWidget 完全不可移动。
+
+**方案**：在 ActivityBar 的空白区域（按钮之间的间距 + stretch 区域）实现手动拖动：
+- `mousePressEvent`：检测点击是否落在空白区域（非 QPushButton 子控件），记录起始全局坐标
+- `mouseMoveEvent`：如果鼠标越过主窗口水平中线，将 dock 从当前区域移到对侧（Left↔Right）
+- `mouseReleaseEvent`：清除拖动状态
+- 空白区域设置 `Qt::OpenHandCursor` 提示可拖动
+
+**文件**：activity_bar.h/.cpp
+
+#### 12.2.2 theme 切换颜色滞后
+
+**问题**：`apply_stylesheet()` 先设 QSS 再设 palette，但 ActivityBar 的局部 `setStyleSheet()` 使用 `palette(window)` 等 Qt palette 引用，palette 变更后 QSS 不会自动重新求值。
+
+**方案**：
+- 在 `ActivityBar::refresh_icons()` 中调用 `style()->unpolish(this); style()->polish(this);` 强制重新求值 palette 引用
+- 在 `SettingsPanel::refresh_icons()` 中对整个 panel 做 unpolish/polish，确保所有子控件同步更新
+- 确保 `theme_changed` 信号的 `apply` lambda 中 `refresh_icons()` 在 palette 设置之后调用（当前已是此顺序）
+
+**文件**：activity_bar.cpp, settings_panel.cpp
+
+#### 12.2.3 标题栏文字/图标反色
+
+**问题**：`apply` lambda 中标题文字颜色通过 `setColors(bg, fg)` 正确更新，但相机图标只在 `build_title_bar_controls()` 中设置一次，theme 切换后不刷新。
+
+**方案**：在 `apply` lambda 中添加 `title_bar_->setAppIcon(IconProvider::get("camera"))` 重新渲染图标。
+
+**文件**：main_window.cpp
+
+#### 12.2.4 进一步减小侧栏宽度
+
+**问题**：§11.4 将 min width 从 320→260，但用户认为仍偏大。
+
+**方案**：
+- dock min width 260→200
+- 输入框 max-width 140→100（base.qss.in）
+- `on_sidebar_content_toggled` 恢复时的默认宽度 300→240
+
+**文件**：main_window.cpp, base.qss.in
+
+#### 12.2.5 Algorithms 面板移除内部滚轮
+
+**问题**：AlgorithmsPanel 在 ROI 选择器 + Preprocessing 选择器下方有一个 QScrollArea 包裹 analytics/calibration/computervision 三个分组，导致侧栏内出现嵌套滚轮。
+
+**方案**：移除内部 QScrollArea，将三个分组直接添加到 outer layout。外层 SettingsPanel 的 QScrollArea 已经提供滚动功能。
+
+**文件**：algorithms_panel.cpp
+
+### 12.3 文件变更表
+
+| 文件 | 变更 |
+|------|------|
+| gui/widgets/activity_bar.h | 新增 drag 相关成员 + mouse event override |
+| gui/widgets/activity_bar.cpp | 实现拖动逻辑 + refresh_icons unpolish/polish |
+| gui/panels/settings_panel.cpp | refresh_icons 中添加 unpolish/polish |
+| gui/main_window.cpp | apply lambda 中刷新图标 + 调整 min width |
+| gui/resources/theme/base.qss.in | max-width 140→100 |
+| gui/panels/algorithms_panel.cpp | 移除内部 QScrollArea |
 
 ---
 

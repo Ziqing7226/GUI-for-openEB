@@ -9,6 +9,7 @@
 #include <QSpinBox>
 #include <QSlider>
 #include <QString>
+#include <QStyle>
 // QScrollArea no longer needed — the BiasesPanel is hosted directly inside the
 // Basic tab's outer scroll area, so an inner scroll is redundant.
 
@@ -18,14 +19,14 @@
 
 namespace gui {
 
-BiasesPanel::BiasesPanel(QWidget* parent) : QWidget(parent) {
+BiasesPanel::BiasesPanel(QWidget* parent) : AbstractPanel(parent) {
     auto* outer = new QVBoxLayout(this);
     outer->setContentsMargins(0, 0, 0, 0);
-    outer->setSpacing(4);
+    outer->setSpacing(8);
 
     hint_label_ = new QLabel(tr("No live camera connected."), this);
     hint_label_->setWordWrap(true);
-    hint_label_->setStyleSheet("color: #888; font-style: italic;");
+    hint_label_->setProperty("class", "hint");
     outer->addWidget(hint_label_);
 
     // No inner QScrollArea — the BiasesPanel is already hosted inside the
@@ -35,8 +36,8 @@ BiasesPanel::BiasesPanel(QWidget* parent) : QWidget(parent) {
     // handle overflow naturally and gives every row its full height.
     container_ = new QWidget(this);
     rows_layout_ = new QVBoxLayout(container_);
-    rows_layout_->setContentsMargins(4, 4, 4, 4);
-    rows_layout_->setSpacing(4);
+    rows_layout_->setContentsMargins(8, 8, 8, 8);
+    rows_layout_->setSpacing(8);
     rows_layout_->addStretch(1);
     outer->addWidget(container_, 1);
 
@@ -44,26 +45,27 @@ BiasesPanel::BiasesPanel(QWidget* parent) : QWidget(parent) {
 }
 
 void BiasesPanel::on_camera_connected(CameraController* controller) {
-    controller_ = controller;
+    camera_ = controller;
     clear_rows();
     populate();
 }
 
 void BiasesPanel::on_camera_disconnected() {
-    controller_ = nullptr;
+    camera_ = nullptr;
     clear_rows();
     hint_label_->setText(tr("No live camera connected."));
-    hint_label_->setStyleSheet("color: #888; font-style: italic;");
+    hint_label_->setProperty("class", "hint");
+    restyle(hint_label_);
     container_->setEnabled(false);
     populated_ = false;
 }
 
 void BiasesPanel::save_to_file(const QString& path) {
-    if (!controller_) {
+    if (!camera_) {
         emit error_message(tr("No camera connected."));
         return;
     }
-    auto* b = controller_->biases_facility();
+    auto* b = camera_->biases_facility();
     if (!b) {
         emit error_message(tr("Bias facility unavailable on this camera."));
         return;
@@ -77,11 +79,11 @@ void BiasesPanel::save_to_file(const QString& path) {
 }
 
 void BiasesPanel::load_from_file(const QString& path) {
-    if (!controller_) {
+    if (!camera_) {
         emit error_message(tr("No camera connected."));
         return;
     }
-    auto* b = controller_->biases_facility();
+    auto* b = camera_->biases_facility();
     if (!b) {
         emit error_message(tr("Bias facility unavailable on this camera."));
         return;
@@ -112,11 +114,12 @@ void BiasesPanel::clear_rows() {
 }
 
 void BiasesPanel::populate() {
-    if (!controller_) return;
-    auto* biases = controller_->biases_facility();
+    if (!camera_) return;
+    auto* biases = camera_->biases_facility();
     if (!biases) {
         hint_label_->setText(tr("Biases not supported by this camera."));
-        hint_label_->setStyleSheet("color: #888; font-style: italic;");
+        hint_label_->setProperty("class", "hint");
+        restyle(hint_label_);
         container_->setEnabled(false);
         populated_ = false;
         return;
@@ -141,7 +144,8 @@ void BiasesPanel::populate() {
 
     hint_label_->setText(tr("%1 bias parameter(s) available. Edits apply immediately.")
                              .arg(all.size()));
-    hint_label_->setStyleSheet("color: #444;");
+    hint_label_->setProperty("class", "info");
+    restyle(hint_label_);
 
     // Insert rows before the trailing stretch.
     for (const auto& [name, value] : all) {
@@ -177,7 +181,7 @@ void BiasesPanel::populate() {
         hl->setSpacing(6);
 
         auto* label = new QLabel(QString::fromStdString(name), row_widget);
-        label->setMinimumWidth(110);
+        label->setMinimumWidth(70);
         label->setToolTip(description.isEmpty()
                               ? tr("No description available.")
                               : description);
@@ -197,7 +201,7 @@ void BiasesPanel::populate() {
             row.slider->setEnabled(false);
             row.spin->setEnabled(false);
             btn_reset->setEnabled(false);
-            label->setStyleSheet("color: #888;");
+            label->setProperty("class", "muted");
         }
 
         hl->addWidget(label, 0);
@@ -254,8 +258,8 @@ void BiasesPanel::populate() {
 }
 
 void BiasesPanel::apply_value(BiasRow& row, int value) {
-    if (!controller_) return;
-    auto* biases = controller_->biases_facility();
+    if (!camera_) return;
+    auto* biases = camera_->biases_facility();
     if (!biases) return;
     try {
         biases->set(row.name, value);
@@ -270,8 +274,8 @@ void BiasesPanel::apply_value(BiasRow& row, int value) {
 }
 
 void BiasesPanel::refresh_row_values() {
-    if (!controller_ || !populated_) return;
-    auto* biases = controller_->biases_facility();
+    if (!camera_ || !populated_) return;
+    auto* biases = camera_->biases_facility();
     if (!biases) return;
     std::map<std::string, int> all;
     try { all = biases->get_all_biases(); } catch (...) { return; }

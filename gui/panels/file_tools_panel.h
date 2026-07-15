@@ -8,6 +8,8 @@
 
 #include <QWidget>
 
+#include "abstract_panel.h"
+
 class QProgressBar;
 class QLabel;
 class QPushButton;
@@ -16,12 +18,34 @@ namespace gui {
 
 class FileConverter;
 
-class FileToolsPanel : public QWidget {
+class FileToolsPanel : public AbstractPanel {
     Q_OBJECT
 public:
     explicit FileToolsPanel(FileConverter* converter, QWidget* parent = nullptr);
 
-private slots:
+    QString panel_id() const override { return QStringLiteral("file_tools"); }
+    QString panel_title() const override { return tr("File Tools"); }
+    QString panel_group() const override { return QStringLiteral("Tools"); }
+
+    /// @brief Enable/disable the Start Recording button (enabled when a
+    /// camera is connected, disabled during recording).
+    void set_record_enabled(bool enabled);
+    /// @brief Enable/disable the Stop Recording button (enabled during
+    /// recording, disabled otherwise).
+    void set_stop_enabled(bool enabled);
+    /// @brief Enable/disable the Export button (enabled when a camera is
+    /// connected or a file is open).
+    void set_export_enabled(bool enabled);
+
+signals:
+    /// Emitted when the user clicks "Start Recording".
+    void record_start_requested();
+    /// Emitted when the user clicks "Stop Recording".
+    void record_stop_requested();
+    /// Emitted when the user clicks "Export...".
+    void export_requested();
+
+    private slots:
     void on_convert_hdf5();
     void on_convert_csv();
     void on_cutter();
@@ -30,11 +54,16 @@ private slots:
     void on_failed(const QString& msg);
 
 private:
+    void set_buttons_enabled(bool enabled);
+
     FileConverter* converter_;
     QPushButton* btn_hdf5_{nullptr};
     QPushButton* btn_csv_{nullptr};
     QPushButton* btn_cut_{nullptr};
     QPushButton* btn_info_{nullptr};
+    QPushButton* btn_record_{nullptr};
+    QPushButton* btn_stop_{nullptr};
+    QPushButton* btn_export_{nullptr};
     QProgressBar* progress_{nullptr};
     QLabel* lbl_status_{nullptr};
 };

@@ -80,9 +80,22 @@ public:
     /// combination of color_ + mode_. In dark mode this is the dark variant
     /// of the selected color, not a single black.
     QString effective_background_hex() const;
+    /// @brief Returns the effective panel color (hex) — slightly different
+    /// from the background, used for the title bar and status bar so they
+    /// share the same shade while staying distinct from the sidebar.
+    QString effective_panel_hex() const;
     /// @brief Returns the effective text color (hex) — black in light mode,
     /// white in dark mode.
     QString effective_text_hex() const;
+    /// @brief Returns the panel color (hex) for the current color choice but
+    /// the specified @p dark mode (instead of the effective mode). Used for
+    /// cross-mode color computations (e.g. the title bar's inverse-mode
+    /// rounded box background and the always-dark-mode title text color).
+    QString panel_hex(bool dark) const;
+
+    /// @brief Resolves the current Mode (+ system color scheme when
+    /// FollowSystem) to a concrete light/dark flag.
+    bool is_dark_mode() const;
 
 signals:
     /// @brief Emitted whenever the effective background/text color changes

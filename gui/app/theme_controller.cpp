@@ -5,6 +5,7 @@
 #include <QAction>
 #include <QActionGroup>
 #include <QApplication>
+#include <QFile>
 #include <QMainWindow>
 #include <QMenu>
 #include <QPalette>
@@ -12,31 +13,11 @@
 #include <QStyleHints>
 #include <QColor>
 
+#include "resources/theme/tokens.h"
+
 namespace gui {
 
 namespace {
-
-/// Light-mode background colors. The defaults are soft pastels so that
-/// black text remains readable on every choice.
-constexpr const char* kLightColors[] = {
-    "#E8E8E8",  // Light Gray (default)
-    "#D7EBD4",  // Light Green
-    "#FDF4D2",  // Light Yellow
-    "#F8D7DC",  // Light Pink
-    "#D4E6F1",  // Light Blue
-};
-
-/// Dark-mode background colors — each is the dark variant of the
-/// corresponding light color above. The user's color choice applies to BOTH
-/// light and dark mode, so dark mode is not a single black but a
-/// color-tinted dark background.
-constexpr const char* kDarkColors[] = {
-    "#2D2D30",  // Dark Gray (default)
-    "#1E3A22",  // Dark Green
-    "#3D3520",  // Dark Yellow (dark amber/olive)
-    "#3D2030",  // Dark Pink (dark rose)
-    "#1E2A3D",  // Dark Blue (dark navy)
-};
 
 /// Returns true if Qt exposes a system color-scheme hint (Qt 6.5+).
 /// Sets @p dark_out to the dark-mode flag when available.
@@ -113,28 +94,32 @@ QString ThemeController::mode_name(Mode m) {
 }
 
 QString ThemeController::effective_background_hex() const {
-    bool dark = false;
-    switch (mode_) {
-        case Mode::FollowSystem: dark = system_is_dark_; break;
-        case Mode::AlwaysLight:  dark = false; break;
-        case Mode::AlwaysDark:   dark = true; break;
-    }
-    const int idx = static_cast<int>(color_);
-    const int count = static_cast<int>(sizeof(dark ? kDarkColors : kLightColors) / sizeof(const char*));
-    if (idx < 0 || idx >= count) {
-        return dark ? QString::fromLatin1(kDarkColors[0])
-                    : QString::fromLatin1(kLightColors[0]);
-    }
-    return dark ? QString::fromLatin1(kDarkColors[idx])
-                : QString::fromLatin1(kLightColors[idx]);
+    return theme_tokens::lookup(static_cast<int>(color_), is_dark_mode(),
+                                theme_tokens::Token::BgPrimary);
+}
+
+QString ThemeController::effective_panel_hex() const {
+    return theme_tokens::lookup(static_cast<int>(color_), is_dark_mode(),
+                                theme_tokens::Token::BgPanel);
 }
 
 QString ThemeController::effective_text_hex() const {
-    QColor bg(effective_background_hex());
-    if (!bg.isValid()) return QStringLiteral("#000000");
-    // Standard relative-luminance threshold (W3C-style approximation).
-    const int luminance = (0.299 * bg.red() + 0.587 * bg.green() + 0.114 * bg.blue());
-    return (luminance < 128) ? QStringLiteral("#FFFFFF") : QStringLiteral("#000000");
+    return theme_tokens::lookup(static_cast<int>(color_), is_dark_mode(),
+                                theme_tokens::Token::FgPrimary);
+}
+
+QString ThemeController::panel_hex(bool dark) const {
+    return theme_tokens::lookup(static_cast<int>(color_), dark,
+                                theme_tokens::Token::BgPanel);
+}
+
+bool ThemeController::is_dark_mode() const {
+    switch (mode_) {
+        case Mode::FollowSystem: return system_is_dark_;
+        case Mode::AlwaysLight:  return false;
+        case Mode::AlwaysDark:   return true;
+    }
+    return false;
 }
 
 void ThemeController::build_menu(QMenu* parent_menu) {
@@ -205,63 +190,62 @@ void ThemeController::save_settings() const {
 
 void ThemeController::apply_stylesheet() {
     if (!window_) return;
-    const QString bg = effective_background_hex();
-    const QString fg = effective_text_hex();
+    const int color_idx = static_cast<int>(color_);
+    const bool dark = is_dark_mode();
+    using T = theme_tokens::Token;
 
-    QColor base(bg);
-    // Input/alternative shades derived from the base for both light & dark.
-    QColor input_bg = base.lighter(112);
-    if (input_bg == base) input_bg = base.darker(112);
-    QColor alt_bg = base.darker(108);
-    if (alt_bg == base) alt_bg = base.lighter(108);
-    // Title bar (QMenuBar) shade — slightly darker than the main background
-    // in light mode, slightly lighter in dark mode, so the title bar reads
-    // as a distinct visual band (VSCode pattern).
-    const int lum = (0.299 * base.red() + 0.587 * base.green() + 0.114 * base.blue());
-    QColor title_bg = (lum < 128) ? base.lighter(125) : base.darker(115);
-    if (title_bg == base) title_bg = (lum < 128) ? base.lighter(115) : base.darker(120);
-
-    const QString input_hex = input_bg.isValid() ? input_bg.name() : bg;
-    const QString alt_hex = alt_bg.isValid() ? alt_bg.name() : bg;
-    const QString title_hex = title_bg.isValid() ? title_bg.name() : alt_hex;
-    // "EB plus" label: bold, RGB-inverse of the title bar background.
-    const QColor title_inv(255 - title_bg.red(), 255 - title_bg.green(), 255 - title_bg.blue());
-    const QString title_inv_hex = title_inv.name();
-
-    const QString qss = QStringLiteral(
-        "QMainWindow, QWidget { background-color: %1; color: %2; }"
-        "QDockWidget, QTabWidget, QScrollArea, QGroupBox { background-color: %1; color: %2; }"
-        "QDockWidget::title { background-color: %4; padding: 4px; }"
-        "QTabBar::tab { background-color: %3; color: %2; padding: 4px 12px; border: 1px solid #888; }"
-        "QTabBar::tab:selected { background-color: %1; }"
-        "QPushButton { background-color: %3; color: %2; border: 1px solid #888; padding: 3px 10px; border-radius: 2px; }"
-        "QPushButton:hover { background-color: %4; }"
-        "QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QSlider { background-color: %3; color: %2; border: 1px solid #888; padding: 2px; }"
-        "QCheckBox, QRadioButton, QLabel { color: %2; }"
-        "QToolBar { background-color: %4; border: none; spacing: 2px; padding: 2px; }"
-        "QStatusBar { background-color: %4; color: %2; }"
-        "QMenuBar { background-color: %5; color: %2; }"
-        "QMenuBar::item:selected { background-color: %3; }"
-        "QMenu { background-color: %4; color: %2; border: 1px solid #888; }"
-        "QMenu::item:selected { background-color: %3; }"
-        "QListWidget, QTreeWidget, QTableWidget { background-color: %3; color: %2; }"
-        "QHeaderView::section { background-color: %4; color: %2; padding: 2px; border: 1px solid #888; }"
-        "QLabel#WindowTitleLabel { color: %6; font-weight: bold; }"
-    ).arg(bg, fg, input_hex, alt_hex, title_hex, title_inv_hex);
+    // Load the token-templated stylesheet from the Qt resource and inject the
+    // current theme's token values via placeholder replacement.
+    QString qss;
+    QFile tpl(QStringLiteral(":/theme/base.qss.in"));
+    if (tpl.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        qss = QString::fromUtf8(tpl.readAll());
+        const auto sub = [&qss, color_idx, dark](const char* ph, T t) {
+            qss.replace(QString::fromLatin1(ph),
+                        theme_tokens::lookup(color_idx, dark, t));
+        };
+        sub("%bg-primary%", T::BgPrimary);
+        sub("%bg-panel%", T::BgPanel);
+        sub("%bg-input%", T::BgInput);
+        sub("%bg-hover%", T::BgHover);
+        sub("%fg-primary%", T::FgPrimary);
+        sub("%fg-secondary%", T::FgSecondary);
+        sub("%fg-muted%", T::FgMuted);
+        sub("%accent%", T::Accent);
+        sub("%border%", T::Border);
+    }
     window_->setStyleSheet(qss);
 
-    // Also set the application palette so that palette-derived widgets pick
-    // up the theme.
+    // Mirror the token values into the application palette so palette-derived
+    // widgets (and IconProvider, which reads WindowText) follow the theme.
+    const QColor bg_primary(theme_tokens::lookup(color_idx, dark, T::BgPrimary));
+    const QColor fg_primary(theme_tokens::lookup(color_idx, dark, T::FgPrimary));
+    const QColor bg_input(theme_tokens::lookup(color_idx, dark, T::BgInput));
+    const QColor bg_panel(theme_tokens::lookup(color_idx, dark, T::BgPanel));
+    const QColor accent(theme_tokens::lookup(color_idx, dark, T::Accent));
+    const QColor bg_hover(theme_tokens::lookup(color_idx, dark, T::BgHover));
+    const QColor border(theme_tokens::lookup(color_idx, dark, T::Border));
+
     QPalette pal;
-    pal.setColor(QPalette::Window, base);
-    pal.setColor(QPalette::WindowText, QColor(fg));
-    pal.setColor(QPalette::Base, input_bg);
-    pal.setColor(QPalette::AlternateBase, alt_bg);
-    pal.setColor(QPalette::Text, QColor(fg));
-    pal.setColor(QPalette::Button, alt_bg);
-    pal.setColor(QPalette::ButtonText, QColor(fg));
-    pal.setColor(QPalette::ToolTipBase, alt_bg);
-    pal.setColor(QPalette::ToolTipText, QColor(fg));
+    pal.setColor(QPalette::Window, bg_primary);
+    pal.setColor(QPalette::WindowText, fg_primary);
+    pal.setColor(QPalette::Base, bg_input);
+    pal.setColor(QPalette::AlternateBase, bg_panel);
+    pal.setColor(QPalette::Text, fg_primary);
+    pal.setColor(QPalette::Button, bg_panel);
+    pal.setColor(QPalette::ButtonText, fg_primary);
+    pal.setColor(QPalette::ToolTipBase, bg_panel);
+    pal.setColor(QPalette::ToolTipText, fg_primary);
+    pal.setColor(QPalette::Highlight, accent);
+    pal.setColor(QPalette::HighlightedText, QColor(Qt::white));
+    // §15.4: set Mid/Midlight explicitly so QSS palette(midlight) references
+    // (e.g. ActivityBar :checked/:hover) use the theme's bg-hover token
+    // instead of Qt's auto-computed default which is far too bright in dark
+    // mode.
+    pal.setColor(QPalette::Midlight, bg_hover);
+    pal.setColor(QPalette::Mid, border);
+    pal.setColor(QPalette::Light, bg_hover);
+    pal.setColor(QPalette::Dark, border);
     if (auto* app = qobject_cast<QApplication*>(QCoreApplication::instance())) {
         app->setPalette(pal);
     }

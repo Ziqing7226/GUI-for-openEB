@@ -72,6 +72,7 @@ public:
             // Non-E2VID: buffer events at effective resolution for the
             // sliding-window data-term rebuild in get_frame().
             const int W = eff_w(), H = eff_h();
+            event_window_.reserve(event_window_.size() + n);
             for (std::size_t i = 0; i < n; ++i) {
                 const Event& e = events[i];
                 if (e.t > current_t_) current_t_ = e.t;
@@ -377,7 +378,8 @@ private:
         if (lambda <= 1e-9) { u = g; return; }
         const double tau = 1.0 / 16.0;  // <= 1/8 (Lipschitz constant of grad)
         const double inv_lambda = 1.0 / lambda;
-        std::vector<double> phi(N);
+        if (chambolle_phi_.size() != N) chambolle_phi_.resize(N);
+        auto& phi = chambolle_phi_;
         for (int iter = 0; iter < iters; ++iter) {
             // phi = div(p) - g/lambda.
             for (int y = 0; y < h; ++y) {
@@ -489,7 +491,9 @@ private:
         // L_t = (L - L_prev) / dt. Minimum-norm solution (Horn-Schunck style):
         // u_target = -L_t / |grad L|^2 * grad L.
         {
-            std::vector<double> utx(N), uty(N);
+            if (utx_.size() != N) { utx_.assign(N, 0.0); uty_.assign(N, 0.0); }
+            auto& utx = utx_;
+            auto& uty = uty_;
             const double inv_dt = 1.0 / std::max(dt, 1e-9);
             for (int y = 0; y < H; ++y) {
                 for (int x = 0; x < W; ++x) {
@@ -621,7 +625,8 @@ private:
         const std::vector<double>& V = log_intensity_;  // input map V
         // Clamp V to [-1, 1] — events represent ±theta=0.22 each; clamping
         // at ±1.0 allows ~4-5 events per pixel before saturation.
-        std::vector<double> Vc(N);
+        if (Vc_.size() != N) Vc_.resize(N);
+        auto& Vc = Vc_;
         for (std::size_t i = 0; i < N; ++i) {
             double v = V[i];
             Vc[i] = (v > 1.0) ? 1.0 : (v < -1.0 ? -1.0 : v);
@@ -768,7 +773,8 @@ private:
             }
         }
         // Extract I (W×H subgrid) to gray frame.
-        std::vector<double> I_out(N);
+        if (I_out_.size() != N) I_out_.resize(N);
+        auto& I_out = I_out_;
         for (int y = 0; y < H; ++y) {
             for (int x = 0; x < W; ++x) {
                 I_out[static_cast<std::size_t>(y) * W + x] =
@@ -908,6 +914,11 @@ private:
     std::vector<double> Cx_, Cy_, Cz_;  ///< Calibration map C (W x H, 3D).
     double im_Mat_[9] = {0};  ///< Precomputed sum(I - C C^T) for R least-squares.
     bool im_calib_dirty_{true};
+
+    // --- Reusable temporary buffers (avoid per-call allocation) ---
+    mutable std::vector<double> chambolle_phi_;  ///< chambolle_tv scratch (const method)
+    std::vector<double> utx_, uty_;              ///< reconstruct_bardow flow targets
+    std::vector<double> Vc_, I_out_;             ///< reconstruct_interacting scratch
 
     // E2VID parameters.
     std::string model_path_;

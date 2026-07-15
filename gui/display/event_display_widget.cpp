@@ -138,7 +138,13 @@ void EventDisplayWidget::paintGL() {
 
     // (Re)upload the texture if a new frame arrived.
     if (frame_dirty_ || !texture_) {
-        QImage img = frame_.convertToFormat(QImage::Format_RGB888);
+        // Skip the deep copy if the frame is already in the target format
+        // (the common path: FramePipeline/FileFrameGenerator both emit
+        // Format_RGB888). convertToFormat allocates a new buffer even when
+        // the format matches, which is a per-frame waste.
+        QImage img = (frame_.format() == QImage::Format_RGB888)
+                         ? frame_
+                         : frame_.convertToFormat(QImage::Format_RGB888);
         if (img.isNull()) {
             return;
         }

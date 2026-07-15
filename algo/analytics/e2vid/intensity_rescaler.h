@@ -106,19 +106,22 @@ private:
 
     static float median_scalar(
         const std::deque<std::pair<float, float>>& bounds, bool get_min) {
-        std::vector<float> vals;
+        static thread_local std::vector<float> vals;
+        vals.clear();
         vals.reserve(bounds.size());
         for (const auto& b : bounds) {
             vals.push_back(get_min ? b.first : b.second);
         }
-        std::sort(vals.begin(), vals.end());
         const std::size_t n = vals.size();
         if (n == 0) return get_min ? 0.0f : 1.0f;
+        const std::size_t mid = n / 2;
+        std::nth_element(vals.begin(), vals.begin() + mid, vals.end());
         // Match numpy.median: average the two middle elements for even n.
         if (n % 2 == 0) {
-            return (vals[n / 2 - 1] + vals[n / 2]) * 0.5f;
+            const float lo = *std::max_element(vals.begin(), vals.begin() + mid);
+            return (lo + vals[mid]) * 0.5f;
         }
-        return vals[n / 2];
+        return vals[mid];
     }
 
     bool auto_hdr_;

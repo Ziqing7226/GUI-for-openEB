@@ -107,7 +107,7 @@ private:
     QColor resolve(const QColor& c) const;
 
     double pen_width_{2.0};
-    QFont font_{QFont("Monospace", 9)};
+    QFont font_;
     QColor default_color_{QColor(255, 255, 0)};  // yellow
 };
 

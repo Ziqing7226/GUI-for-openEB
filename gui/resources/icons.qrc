@@ -1,0 +1,40 @@
+<RCC>
+    <qresource prefix="/">
+        <file>icons/blocks.svg</file>
+        <file>icons/calibration.svg</file>
+        <file>icons/camera-off.svg</file>
+        <file>icons/camera.svg</file>
+        <file>icons/chart.svg</file>
+        <file>icons/cpu.svg</file>
+        <file>icons/chevron-left.svg</file>
+        <file>icons/chevron-right.svg</file>
+        <file>icons/circle.svg</file>
+        <file>icons/clock.svg</file>
+        <file>icons/close.svg</file>
+        <file>icons/connect.svg</file>
+        <file>icons/export.svg</file>
+        <file>icons/filter.svg</file>
+        <file>icons/folder.svg</file>
+        <file>icons/fullscreen.svg</file>
+        <file>icons/info.svg</file>
+        <file>icons/layout.svg</file>
+        <file>icons/load.svg</file>
+        <file>icons/maximize.svg</file>
+        <file>icons/minimize.svg</file>
+        <file>icons/minus.svg</file>
+        <file>icons/pause.svg</file>
+        <file>icons/play.svg</file>
+        <file>icons/plus.svg</file>
+        <file>icons/record.svg</file>
+        <file>icons/refresh.svg</file>
+        <file>icons/restore.svg</file>
+        <file>icons/roi.svg</file>
+        <file>icons/save.svg</file>
+        <file>icons/settings.svg</file>
+        <file>icons/sidebar.svg</file>
+        <file>icons/step-back.svg</file>
+        <file>icons/step-forward.svg</file>
+        <file>icons/stop.svg</file>
+        <file>icons/tools.svg</file>
+    </qresource>
+</RCC>

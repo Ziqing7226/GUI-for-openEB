@@ -6,10 +6,12 @@
 #include <QComboBox>
 #include <QFormLayout>
 #include <QHBoxLayout>
+#include <QKeySequence>
 #include <QLabel>
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QSpinBox>
+#include <QStyle>
 
 #include <metavision/hal/facilities/i_roi.h>
 
@@ -17,7 +19,7 @@
 
 namespace gui {
 
-RoiPanel::RoiPanel(QWidget* parent) : QWidget(parent) {
+RoiPanel::RoiPanel(QWidget* parent) : AbstractPanel(parent) {
     auto* form = new QFormLayout(this);
     form->setContentsMargins(8, 8, 8, 8);
     form->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
@@ -44,22 +46,35 @@ RoiPanel::RoiPanel(QWidget* parent) : QWidget(parent) {
     form->addRow(tr("Height"), h_spin_);
 
     max_windows_label_ = new QLabel(QString(), this);
-    max_windows_label_->setStyleSheet("color: #888; font-style: italic;");
+    max_windows_label_->setProperty("class", "hint");
     form->addRow(QString(), max_windows_label_);
 
     hint_label_ = new QLabel(tr("No live camera connected."), this);
     hint_label_->setWordWrap(true);
-    hint_label_->setStyleSheet("color: #888; font-style: italic;");
+    hint_label_->setProperty("class", "hint");
     form->addRow(QString(), hint_label_);
 
-    auto* btn_row = new QWidget(this);
-    auto* bl = new QHBoxLayout(btn_row);
-    bl->setContentsMargins(0, 0, 0, 0);
-    apply_btn_ = new QPushButton(tr("Apply"), btn_row);
-    clear_btn_ = new QPushButton(tr("Clear Windows"), btn_row);
-    bl->addWidget(apply_btn_);
-    bl->addWidget(clear_btn_);
-    form->addRow(QString(), btn_row);
+    // Buttons on separate rows so the row width stays within the narrower
+    // sidebar (§13.3 — splitting wide rows).
+    apply_btn_ = new QPushButton(tr("Apply"), this);
+    clear_btn_ = new QPushButton(tr("Clear Windows"), this);
+    form->addRow(QString(), apply_btn_);
+    form->addRow(QString(), clear_btn_);
+
+    // --- Camera menu controls moved here (§14.5) ---
+    form->addRow(new QLabel(QString(), this)); // spacer
+    drag_check_ = new QCheckBox(tr("ROI Drag Mode"), this);
+    drag_check_->setToolTip(tr("Drag on the display to draw an ROI rectangle"));
+    drag_check_->setShortcut(QKeySequence("Ctrl+R"));
+    drag_check_->setEnabled(false);
+    form->addRow(tr("Display"), drag_check_);
+
+    preset_combo_ = new QComboBox(this);
+    preset_combo_->setEnabled(false);
+    preset_apply_btn_ = new QPushButton(tr("Apply Preset"), this);
+    preset_apply_btn_->setEnabled(false);
+    form->addRow(tr("Preset"), preset_combo_);
+    form->addRow(QString(), preset_apply_btn_);
 
     setEnabled(false);
 
@@ -70,8 +85,8 @@ RoiPanel::RoiPanel(QWidget* parent) : QWidget(parent) {
     connect(mode_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, [this]() { if (populated_) apply(); });
     connect(clear_btn_, &QPushButton::clicked, this, [this]() {
-        if (!controller_) return;
-        auto* roi = controller_->roi_facility();
+        if (!camera_) return;
+        auto* roi = camera_->roi_facility();
         if (!roi) return;
         try {
             roi->set_windows({});
@@ -85,20 +100,27 @@ RoiPanel::RoiPanel(QWidget* parent) : QWidget(parent) {
         emit roi_applied(0, 0, 0, 0, false);
         emit info_message(tr("ROI windows cleared."));
     });
+    connect(drag_check_, &QCheckBox::toggled, this, &RoiPanel::roi_drag_toggled);
+    connect(preset_apply_btn_, &QPushButton::clicked, this, [this]() {
+        const int idx = preset_combo_->currentIndex();
+        if (idx >= 0) emit preset_apply_requested(idx);
+    });
 }
 
 void RoiPanel::on_camera_connected(CameraController* controller) {
-    controller_ = controller;
+    camera_ = controller;
     populate();
 }
 
 void RoiPanel::on_camera_disconnected() {
-    controller_ = nullptr;
+    camera_ = nullptr;
     sensor_w_ = 0;
     sensor_h_ = 0;
     populated_ = false;
     setEnabled(false);
     hint_label_->setText(tr("No live camera connected."));
+    hint_label_->setProperty("class", "hint");
+    restyle(hint_label_);
     max_windows_label_->clear();
     QSignalBlocker b(enable_check_);
     enable_check_->setChecked(false);
@@ -125,8 +147,8 @@ void RoiPanel::set_roi_from_drag(int x, int y, int w, int h) {
 // ---------------------------------------------------------------------------
 
 void RoiPanel::populate() {
-    if (!controller_) return;
-    auto* roi = controller_->roi_facility();
+    if (!camera_) return;
+    auto* roi = camera_->roi_facility();
     if (!roi) {
         hint_label_->setText(tr("ROI not supported by this camera."));
         setEnabled(false);
@@ -134,7 +156,7 @@ void RoiPanel::populate() {
         return;
     }
 
-    const auto& info = controller_->sensor_info();
+    const auto& info = camera_->sensor_info();
     sensor_w_ = info.width;
     sensor_h_ = info.height;
     if (sensor_w_ <= 0 || sensor_h_ <= 0) {
@@ -181,14 +203,15 @@ void RoiPanel::populate() {
     } catch (...) {}
 
     hint_label_->setText(tr("Drag on the display or edit values, then Apply."));
-    hint_label_->setStyleSheet("color: #444;");
+    hint_label_->setProperty("class", "info");
+    restyle(hint_label_);
     setEnabled(true);
     populated_ = true;
 }
 
 void RoiPanel::toggle_enable(bool on) {
-    if (!controller_) return;
-    auto* roi = controller_->roi_facility();
+    if (!camera_) return;
+    auto* roi = camera_->roi_facility();
     if (!roi) return;
     // SDK contract (I_ROI::enable): at least one window must have been set
     // before enabling. Apply first, then enable. If apply() fails, do NOT
@@ -224,8 +247,8 @@ void RoiPanel::toggle_enable(bool on) {
 }
 
 bool RoiPanel::apply() {
-    if (!controller_ || !populated_) return false;
-    auto* roi = controller_->roi_facility();
+    if (!camera_ || !populated_) return false;
+    auto* roi = camera_->roi_facility();
     if (!roi) return false;
 
     const int x = x_spin_->value();
@@ -248,6 +271,25 @@ bool RoiPanel::apply() {
     }
     emit roi_applied(x, y, w, h, enable_check_->isChecked());
     return true;
+}
+
+void RoiPanel::set_roi_drag_checked(bool checked) {
+    QSignalBlocker b(drag_check_);
+    drag_check_->setChecked(checked);
+}
+
+void RoiPanel::set_roi_drag_enabled(bool enabled) {
+    drag_check_->setEnabled(enabled);
+}
+
+void RoiPanel::set_preset_names(const QStringList& names) {
+    preset_combo_->clear();
+    for (const auto& n : names) preset_combo_->addItem(n);
+}
+
+void RoiPanel::set_presets_enabled(bool enabled) {
+    preset_combo_->setEnabled(enabled);
+    preset_apply_btn_->setEnabled(enabled);
 }
 
 } // namespace gui

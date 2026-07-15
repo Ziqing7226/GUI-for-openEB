@@ -8,17 +8,23 @@
 
 #include <metavision/sdk/base/utils/timestamp.h>
 
+#include "abstract_panel.h"
+
 class QLabel;
 class QFormLayout;
 
 namespace gui {
 
-class StatisticsPanel : public QWidget {
+class StatisticsPanel : public AbstractPanel {
     Q_OBJECT
 public:
     explicit StatisticsPanel(QWidget* parent = nullptr);
 
-public slots:
+    QString panel_id() const override { return QStringLiteral("statistics"); }
+    QString panel_title() const override { return tr("Statistics"); }
+    QString panel_group() const override { return QStringLiteral("Display & Stats"); }
+
+    public slots:
     void set_rate(double rate_eps, double peak_eps, Metavision::timestamp t);
     void set_on_off(std::uint64_t on_count, std::uint64_t off_count, double on_ratio);
     void set_fps(double fps);

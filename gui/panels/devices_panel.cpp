@@ -10,7 +10,7 @@
 
 namespace gui {
 
-DevicesPanel::DevicesPanel(QWidget* parent) : QWidget(parent) {
+DevicesPanel::DevicesPanel(QWidget* parent) : AbstractPanel(parent) {
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(8, 8, 8, 8);
 

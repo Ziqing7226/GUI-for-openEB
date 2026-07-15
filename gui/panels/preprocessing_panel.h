@@ -10,6 +10,8 @@
 #include <QHash>
 #include <QString>
 
+#include "abstract_panel.h"
+
 class QCheckBox;
 class QSpinBox;
 class QDoubleSpinBox;
@@ -20,14 +22,18 @@ namespace gui {
 
 class CameraController;
 
-class PreprocessingPanel : public QWidget {
+class PreprocessingPanel : public AbstractPanel {
     Q_OBJECT
 public:
     explicit PreprocessingPanel(QWidget* parent = nullptr);
 
+    QString panel_id() const override { return QStringLiteral("preprocessing"); }
+    QString panel_title() const override { return tr("Preprocessing"); }
+    QString panel_group() const override { return QStringLiteral("Algorithms"); }
+
 public slots:
-    void on_camera_connected(CameraController* controller);
-    void on_camera_disconnected();
+    void on_camera_connected(CameraController* controller) override;
+    void on_camera_disconnected() override;
 
     /// @brief Menu-friendly accessor: sets the enable state of @p stage.
     void set_stage_enabled(const QString& stage, bool on);
@@ -35,8 +41,6 @@ public slots:
     bool is_stage_enabled(const QString& stage) const;
 
 signals:
-    void info_message(const QString& msg);
-    void error_message(const QString& msg);
     /// @brief Emitted when a stage's enabled state changes (user or program).
     /// MainWindow uses this to sync the Preprocess menu actions.
     void stage_toggled(const QString& stage, bool on);
@@ -45,7 +49,6 @@ private:
     void build_ui();
     void apply_stage(const QString& name);
 
-    CameraController* controller_{nullptr};
     QHash<QString, QCheckBox*> enables_;
     QHash<QString, QComboBox*> combos_;
     QHash<QString, QSpinBox*> spins_;

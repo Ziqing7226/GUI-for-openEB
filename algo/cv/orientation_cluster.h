@@ -94,7 +94,9 @@ public:
           use_opposite_polarity_(use_opposite_polarity),
           ori_history_enabled_(ori_history_enabled),
           vector_map_(static_cast<std::size_t>(width) * height),
-          history_map_(static_cast<std::size_t>(width) * height) {}
+          history_map_(static_cast<std::size_t>(width) * height) {
+        rebuild_unit_table();
+    }
 
     /// @brief Processes an event packet per-event; returns one
     /// `OrientationClusterResult` per event that passes the orientation filter.
@@ -143,39 +145,28 @@ public:
                     const float t = static_cast<float>(e.t - nb.ts) + 1.0f;
                     if (t >= dt_) continue;
 
-                    int xx = 0;
-                    int yy = 0;
+                    // Precomputed unit vector for this (w, h) offset.
+                    // OPT-29: (xx, yy) and vl depend only on (w, h, same_pol),
+                    // not on runtime event data — safe to precompute.
                     const bool same_pol = (cur.pol == nb.pol);
-                    if (!same_pol) {
-                        // Different polarity: the contrast gradient is
-                        // perpendicular to the edge → rotate by 90°.
-                        if (!use_opposite_polarity_) continue;
-                        if (w < 0) {
-                            // Left side → 90° CW.
-                            xx =  h; yy = -w;
-                        } else {
-                            // Right side → 90° CCW.
-                            xx = -h; yy =  w;
-                        }
-                    } else {
-                        // Same polarity: vectors point toward same-edge
-                        // neighbors; ensure a positive y-component.
-                        if (h < 0) {
-                            // Below the center → point-invert.
-                            xx = -w; yy = -h;
-                        } else {
-                            // Above / level → as-is.
-                            xx =  w; yy =  h;
-                        }
-                    }
+                    if (!same_pol && !use_opposite_polarity_) continue;
 
-                    // Normalized offset (xx, yy) weighted by factor/dt.
-                    const double vl = std::sqrt(static_cast<double>(xx) * xx +
-                                                static_cast<double>(yy) * yy);
-                    if (vl == 0.0) continue;
+                    const std::size_t uidx =
+                        static_cast<std::size_t>(h + rf_height_) *
+                            (2 * rf_width_ + 1) +
+                        static_cast<std::size_t>(w + rf_width_);
+                    const UnitVec& uv = unit_table_[uidx];
+                    if (!uv.valid) continue;  // vl == 0
+
+                    // Normalized offset weighted by factor/dt.
                     const double w_decay = factor_ / t;
-                    cur.vx += static_cast<float>((xx / vl) * w_decay);
-                    cur.vy += static_cast<float>((yy / vl) * w_decay);
+                    if (same_pol) {
+                        cur.vx += static_cast<float>(uv.same_x * w_decay);
+                        cur.vy += static_cast<float>(uv.same_y * w_decay);
+                    } else {
+                        cur.vx += static_cast<float>(uv.diff_x * w_decay);
+                        cur.vy += static_cast<float>(uv.diff_y * w_decay);
+                    }
 
                     // Neighborhood vector (optionally blended with history).
                     if (ori_history_enabled_) {
@@ -260,8 +251,8 @@ public:
 
     void set_dt(float v) { dt_ = v; }
     void set_factor(float v) { factor_ = v; }
-    void set_rf_width(int v) { rf_width_ = v; }
-    void set_rf_height(int v) { rf_height_ = v; }
+    void set_rf_width(int v) { rf_width_ = v; rebuild_unit_table(); }
+    void set_rf_height(int v) { rf_height_ = v; rebuild_unit_table(); }
     void set_tolerance(float v) { tolerance_deg_ = v; }
     void set_ori(float v) { ori_deg_ = v; }
     void set_neighbor_thr(float v) { neighbor_thr_ = v; }
@@ -285,6 +276,43 @@ public:
     void reset() {
         for (Cell& c : vector_map_) c = Cell{};
         for (Cell& c : history_map_) c = Cell{};
+    }
+
+    /// @brief Rebuilds the precomputed unit-vector lookup table for the
+    /// current receptive-field dimensions (OPT-29).
+    ///
+    /// For each (w, h) offset in the RF, precomputes the normalized offset
+    /// (xx/vl, yy/vl) for both same-polarity and different-polarity cases.
+    /// The (xx, yy) values depend only on (w, h) and the same_pol flag —
+    /// not on runtime event data — so they can be safely precomputed.
+    /// Stored as double to match the original arithmetic precision exactly.
+    void rebuild_unit_table() {
+        const int cols = 2 * rf_width_ + 1;
+        const int rows = 2 * rf_height_ + 1;
+        unit_table_.assign(static_cast<std::size_t>(cols) * rows, UnitVec{});
+        for (int hh = -rf_height_; hh <= rf_height_; ++hh) {
+            for (int ww = -rf_width_; ww <= rf_width_; ++ww) {
+                const std::size_t idx =
+                    static_cast<std::size_t>(hh + rf_height_) * cols +
+                    (ww + rf_width_);
+                // Same-polarity (xx, yy): ensure positive y-component.
+                int sx = (hh < 0) ? -ww : ww;
+                int sy = (hh < 0) ? -hh : hh;
+                // Different-polarity (xx, yy): rotate 90°.
+                int dx = (ww < 0) ?  hh : -hh;
+                int dy = (ww < 0) ? -ww :  ww;
+                // vl = sqrt(xx² + yy²) = sqrt(w² + h²), same for both cases.
+                const double vl = std::sqrt(static_cast<double>(sx) * sx +
+                                            static_cast<double>(sy) * sy);
+                if (vl > 0.0) {
+                    unit_table_[idx].same_x = sx / vl;
+                    unit_table_[idx].same_y = sy / vl;
+                    unit_table_[idx].diff_x = dx / vl;
+                    unit_table_[idx].diff_y = dy / vl;
+                    unit_table_[idx].valid = true;
+                }
+            }
+        }
     }
 
 private:
@@ -315,6 +343,15 @@ private:
     int min_events_{0};           ///< Stored, unused (backend compat).
     std::vector<Cell> vector_map_;
     std::vector<Cell> history_map_;
+
+    /// @brief Precomputed unit vectors for each RF offset (OPT-29).
+    /// Indexed by (h + rf_height_) * (2*rf_width_+1) + (w + rf_width_).
+    struct UnitVec {
+        double same_x{0.0}, same_y{0.0};  ///< Unit vec for same-polarity.
+        double diff_x{0.0}, diff_y{0.0};  ///< Unit vec for different-polarity.
+        bool valid{false};                 ///< false when (w,h) == (0,0).
+    };
+    std::vector<UnitVec> unit_table_;
 };
 
 } // namespace gui_algo

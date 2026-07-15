@@ -2,15 +2,15 @@
 
 #include "custom_title_bar.h"
 
-#include <QApplication>
 #include <QHBoxLayout>
 #include <QLabel>
-#include <QMenuBar>
+#include <QMenu>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPushButton>
-#include <QStyle>
 #include <QWindow>
+
+#include "app/icon_provider.h"
 
 namespace gui {
 
@@ -21,34 +21,60 @@ namespace gui {
 CustomTitleBar::CustomTitleBar(QWidget* parent)
     : QWidget(parent) {
     setAttribute(Qt::WA_StyledBackground, true);
-    setFixedHeight(32);
+    setFixedHeight(36);
 
     auto* layout = new QHBoxLayout(this);
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(0);
+    layout->setContentsMargins(8, 0, 0, 0);
+    layout->setSpacing(8);
 
-    // Title label (center) — created before the buttons so layout order is
-    // [menu_bar] [stretch] [title] [stretch] [min] [max] [close].
-    // menu_bar_ is inserted at index 0 later via setMenuBar().
-    title_label_ = new QLabel(this);
+    // Left cluster: [app name]. The title label gets the object name
+    // "AppTitle" so QSS can target it. The rounded-rectangle background
+    // (§13 — opposite-mode panel color) and the inverse title text color
+    // are applied in setColors() so they track the active theme.
+    title_label_ = new QLabel(QStringLiteral("EB plus"), this);
+    title_label_->setObjectName(QStringLiteral("AppTitle"));
+    title_label_->setAttribute(Qt::WA_StyledBackground, true);
+    // Keep the chip tight: Fixed vertical policy prevents the label from
+    // stretching to the full 36px bar height; AlignVCenter centers it.
+    // Maximum horizontal policy prevents horizontal expansion beyond the
+    // text + padding sizeHint.
+    title_label_->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Fixed);
     title_label_->setAlignment(Qt::AlignCenter);
-    title_label_->setStyleSheet(QStringLiteral("background: transparent; border: none;"));
 
-    // Window control buttons (right side).
-    const int btn_size = 32;
-    auto make_btn = [this, btn_size](QStyle::StandardPixmap pix, const QString& tip) {
+    layout->addWidget(title_label_, 0, Qt::AlignVCenter);
+
+    // Menu dropdown buttons. Populated via addMenu() from MainWindow's
+    // build_menus().
+    menu_layout_ = new QHBoxLayout();
+    menu_layout_->setContentsMargins(0, 0, 0, 0);
+    menu_layout_->setSpacing(2);
+    layout->addLayout(menu_layout_);
+
+    layout->addStretch(1);
+
+    // Window control buttons (right side, flush against each other). The icon
+    // names are stored so refresh_icons() can re-render them on theme change.
+    const int btn_size = 36;
+    auto make_btn = [this, btn_size](const QString& icon_name, const QString& tip) {
         auto* btn = new QPushButton(this);
-        btn->setIcon(style()->standardIcon(pix));
+        btn->setIcon(IconProvider::get(icon_name));
         btn->setFixedSize(btn_size, btn_size);
         btn->setToolTip(tip);
         btn->setCursor(Qt::ArrowCursor);
         btn->setFocusPolicy(Qt::NoFocus);
+        btn->setStyleSheet(QStringLiteral(
+            "QPushButton { background: transparent; border: none; }"
+            "QPushButton:hover { background-color: rgba(128,128,128,60); }"
+            "QPushButton:pressed { background-color: rgba(128,128,128,100); }"));
         return btn;
     };
 
-    btn_min_   = make_btn(QStyle::SP_TitleBarMinButton,  tr("Minimize"));
-    btn_max_   = make_btn(QStyle::SP_TitleBarMaxButton,  tr("Maximize"));
-    btn_close_ = make_btn(QStyle::SP_TitleBarCloseButton, tr("Close"));
+    min_icon_name_   = QStringLiteral("minimize");
+    max_icon_name_   = QStringLiteral("maximize");
+    close_icon_name_ = QStringLiteral("close");
+    btn_min_   = make_btn(min_icon_name_,   tr("Minimize"));
+    btn_max_   = make_btn(max_icon_name_,   tr("Maximize"));
+    btn_close_ = make_btn(close_icon_name_, tr("Close"));
 
     connect(btn_min_, &QPushButton::clicked, this, [this]() {
         if (auto* w = window()) w->showMinimized();
@@ -63,52 +89,111 @@ CustomTitleBar::CustomTitleBar(QWidget* parent)
         if (auto* w = window()) w->close();
     });
 
-    layout->addStretch(1);
-    layout->addWidget(title_label_, 0, Qt::AlignCenter);
-    layout->addStretch(1);
-    layout->addWidget(btn_min_);
-    layout->addWidget(btn_max_);
-    layout->addWidget(btn_close_);
+    auto* ctrl_layout = new QHBoxLayout();
+    ctrl_layout->setContentsMargins(0, 0, 0, 0);
+    ctrl_layout->setSpacing(0);
+    ctrl_layout->addWidget(btn_min_);
+    ctrl_layout->addWidget(btn_max_);
+    ctrl_layout->addWidget(btn_close_);
+    layout->addLayout(ctrl_layout);
 }
 
-void CustomTitleBar::setMenuBar(QMenuBar* menu_bar) {
-    if (!menu_bar) return;
-    menu_bar_ = menu_bar;
-    menu_bar_->setParent(this);
-    auto* layout = qobject_cast<QHBoxLayout*>(this->layout());
-    if (layout) {
-        layout->insertWidget(0, menu_bar_);
-    }
+QMenu* CustomTitleBar::addMenu(const QString& title) {
+    auto* btn = new QPushButton(title, this);
+    btn->setCursor(Qt::ArrowCursor);
+    btn->setFocusPolicy(Qt::NoFocus);
+    btn->setStyleSheet(QStringLiteral(
+        "QPushButton { background: transparent; border: none; padding: 0 8px; }"
+        "QPushButton:hover { background-color: rgba(128,128,128,60); }"
+        "QPushButton:pressed { background-color: rgba(128,128,128,100); }"));
+    auto* menu = new QMenu(title, btn);
+    btn->setMenu(menu);
+    menu_layout_->addWidget(btn);
+    return menu;
 }
 
 void CustomTitleBar::setTitle(const QString& title) {
     if (title_label_) title_label_->setText(title);
 }
 
-void CustomTitleBar::setColors(const QColor& bg, const QColor& fg) {
+void CustomTitleBar::refresh_icons() {
+    if (btn_min_   && !min_icon_name_.isEmpty())
+        btn_min_->setIcon(IconProvider::get(min_icon_name_));
+    if (btn_max_   && !max_icon_name_.isEmpty())
+        btn_max_->setIcon(IconProvider::get(max_icon_name_));
+    if (btn_close_ && !close_icon_name_.isEmpty())
+        btn_close_->setIcon(IconProvider::get(close_icon_name_));
+}
+
+void CustomTitleBar::setColors(const QColor& bg, const QColor& fg,
+                               const QColor& title_fg, const QColor& title_box) {
     bg_color_ = bg;
     fg_color_ = fg;
+    title_color_ = title_fg;
+    title_box_color_ = title_box;
+
+    // Separator line color — visible on both light and dark backgrounds:
+    // dark bg → lighter line, light bg → darker line (§15.1).
+    line_color_ = bg.lightness() < 128
+        ? bg.lighter(140)
+        : bg.darker(120);
 
     const QString bg_hex = bg.name();
     const QString fg_hex = fg.name();
+    const QString title_hex = title_fg.name();
+    const QString box_hex = title_box.name();
+    const QString line_hex = line_color_.name();
 
-    // Style the title bar itself, the embedded menu bar, and the window
-    // control buttons.  The buttons are transparent so the title bar
-    // background shows through; on hover they get a subtle overlay.
+    // §15.3: the background is painted manually in paintEvent() because the
+    // global QSS rule `QWidget { background-color: bg-primary; }` overrides
+    // the local `CustomTitleBar { ... }` rule in Qt's stylesheet cascade for
+    // widgets installed via setMenuWidget().  The QSS here only styles child
+    // widgets (labels, buttons, menus).
+    //
+    // §13: the title label "EB plus" gets a rounded-rectangle chip background
+    // (title_box — the opposite-mode panel color) with the title text color
+    // (RGB-inverse of title_box). The chip is styled inline on the label
+    // because the global QSS `QLabel` rule would otherwise override the
+    // background. Placeholder numbering is sequential (%1/%2/%3) to avoid
+    // ambiguity in Qt's arg() chaining.
     setStyleSheet(QStringLiteral(
-        "CustomTitleBar { background-color: %1; }"
-        "QMenuBar { background-color: %1; color: %2; }"
-        "QMenuBar::item { background-color: transparent; padding: 4px 10px; }"
-        "QMenuBar::item:selected { background-color: rgba(128,128,128,60); }"
-        "QMenu { background-color: %1; color: %2; border: 1px solid #888; }"
-        "QMenu::item:selected { background-color: rgba(128,128,128,80); }"
         "QLabel { color: %2; background: transparent; border: none; }"
-        "QPushButton { background-color: transparent; border: none; }"
-        "QPushButton:hover { background-color: rgba(128,128,128,60); }"
-        "QPushButton:pressed { background-color: rgba(128,128,128,100); }"
-    ).arg(bg_hex, fg_hex));
+        "QPushButton { color: %2; background: transparent; border: none; }"
+        "QPushButton#qt_menubar_ext_button { background: transparent; border: none; }"
+        "QMenu { background-color: %1; color: %2; border: 1px solid %3; }"
+        "QMenu::item { padding: 4px 20px; }"
+        "QMenu::item:selected { background-color: rgba(128,128,128,60); }"
+        "QMenu::separator { height: 1px; background: %3; margin: 2px 6px; }"
+    ).arg(bg_hex, fg_hex, line_hex));
 
+    // Apply the title chip styling inline so it wins over the global QSS
+    // `QLabel { background: transparent; }` rule (Qt gives inline
+    // setStyleSheet() higher priority in the cascade). Padding is tight so
+    // the chip just covers the text; border-radius gives uniform rounded
+    // corners on all four sides.
+    if (title_label_) {
+        title_label_->setStyleSheet(QStringLiteral(
+            "color: %1; background-color: %2; "
+            "border-radius: 4px; padding: 3px 5px; font-weight: bold;"
+        ).arg(title_hex, box_hex));
+    }
+
+    // Re-render window control icons so they track the new theme.
+    refresh_icons();
     update();
+}
+
+void CustomTitleBar::paintEvent(QPaintEvent*) {
+    QPainter p(this);
+    // Fill the title bar background — painted manually to bypass the global
+    // QSS `QWidget { background-color: bg-primary; }` which overrides the
+    // local stylesheet for setMenuWidget()-installed widgets (§15.3).
+    p.fillRect(rect(), bg_color_);
+    // Draw the bottom separator line (§15.1).
+    if (line_color_.isValid()) {
+        p.setPen(QPen(line_color_, 1));
+        p.drawLine(rect().bottomLeft(), rect().bottomRight());
+    }
 }
 
 void CustomTitleBar::mousePressEvent(QMouseEvent* event) {
@@ -133,12 +218,6 @@ void CustomTitleBar::mouseDoubleClickEvent(QMouseEvent* event) {
         }
     }
     QWidget::mouseDoubleClickEvent(event);
-}
-
-void CustomTitleBar::paintEvent(QPaintEvent* /*event*/) {
-    if (!bg_color_.isValid()) return;
-    QPainter p(this);
-    p.fillRect(rect(), bg_color_);
 }
 
 // ---------------------------------------------------------------------------

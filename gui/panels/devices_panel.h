@@ -6,17 +6,23 @@
 #include <QWidget>
 #include <QString>
 
+#include "abstract_panel.h"
+
 class QListWidget;
 class QPushButton;
 
 namespace gui {
 
-class DevicesPanel : public QWidget {
+class DevicesPanel : public AbstractPanel {
     Q_OBJECT
 public:
     explicit DevicesPanel(QWidget* parent = nullptr);
 
-public slots:
+    QString panel_id() const override { return QStringLiteral("devices"); }
+    QString panel_title() const override { return tr("Devices"); }
+    QString panel_group() const override { return QStringLiteral("Camera"); }
+
+    public slots:
     void refresh_sources(const std::vector<std::pair<QString, QString>>& sources);
     void set_connected(bool connected);
 

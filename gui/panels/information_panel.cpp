@@ -7,7 +7,7 @@
 
 namespace gui {
 
-InformationPanel::InformationPanel(QWidget* parent) : QWidget(parent) {
+InformationPanel::InformationPanel(QWidget* parent) : AbstractPanel(parent) {
     auto* form = new QFormLayout(this);
     form->setContentsMargins(8, 8, 8, 8);
     form->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
@@ -19,6 +19,7 @@ InformationPanel::InformationPanel(QWidget* parent) : QWidget(parent) {
         return lbl;
     };
 
+    // --- Camera metadata ---
     value_model_       = mk(tr("Model"));
     value_resolution_  = mk(tr("Resolution"));
     value_serial_      = mk(tr("Serial"));
@@ -27,6 +28,13 @@ InformationPanel::InformationPanel(QWidget* parent) : QWidget(parent) {
     value_encoding_    = mk(tr("Encoding"));
     value_firmware_    = mk(tr("Firmware"));
     value_source_      = mk(tr("Source"));
+
+    // --- Live performance ---
+    form->addRow(new QLabel(this));  // spacer
+    value_latency_        = mk(tr("Latency"));
+    value_throughput_     = mk(tr("Throughput"));
+    value_algo_status_    = mk(tr("Algorithms"));
+    value_drop_rate_      = mk(tr("Drop rate"));
 }
 
 void InformationPanel::set_info(const SensorInfo& info) {
@@ -45,9 +53,30 @@ void InformationPanel::set_info(const SensorInfo& info) {
     value_source_->setText(info.is_file ? tr("File playback") : tr("Live camera"));
 }
 
+void InformationPanel::set_performance(double latency_ms, double throughput_mbs) {
+    value_latency_->setText(QStringLiteral("%1 ms").arg(latency_ms, 0, 'f', 1));
+    value_throughput_->setText(QStringLiteral("%1 MB/s").arg(throughput_mbs, 0, 'f', 1));
+}
+
+void InformationPanel::set_algo_status(int active, int overloaded) {
+    if (overloaded > 0) {
+        value_algo_status_->setText(
+            QStringLiteral("%1 active, %2 overloaded").arg(active).arg(overloaded));
+    } else {
+        value_algo_status_->setText(
+            QStringLiteral("%1 active").arg(active));
+    }
+}
+
+void InformationPanel::set_drop_rate(double max_drop_pct) {
+    value_drop_rate_->setText(QStringLiteral("%1%").arg(max_drop_pct, 0, 'f', 1));
+}
+
 void InformationPanel::clear() {
     for (auto* lbl : {value_model_, value_resolution_, value_serial_, value_integrator_,
-                      value_plugin_, value_encoding_, value_firmware_, value_source_}) {
+                      value_plugin_, value_encoding_, value_firmware_, value_source_,
+                      value_latency_, value_throughput_, value_algo_status_,
+                      value_drop_rate_}) {
         lbl->setText(tr("—"));
     }
 }

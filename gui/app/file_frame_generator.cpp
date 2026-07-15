@@ -6,6 +6,8 @@
 
 #include <opencv2/imgproc.hpp>
 
+#include "algo_bridge/filter_chain.h"
+
 namespace gui {
 
 FileFrameGenerator::FileFrameGenerator(QObject* parent) : QObject(parent) {
@@ -90,6 +92,12 @@ void FileFrameGenerator::pause() {
 void FileFrameGenerator::seek(Metavision::timestamp t_us) {
     if (t_us < 0) t_us = 0;
     cursor_us_ = t_us;
+    // Notify listeners so stateful algorithms can reset their temporal state
+    // before the new (possibly earlier) events arrive. Without this, a
+    // backward seek leaves algorithm timestamps ahead of the new events,
+    // causing them to be ignored and the output to freeze — the same issue
+    // as looped() but triggered by user-initiated cursor jumps.
+    emit seeked(t_us);
     // Render immediately so the user sees the seeked frame.
     render_frame(cursor_us_, cursor_us_ + accumulation_us_);
     if (width_ > 0 && height_ > 0 && !frame_.empty()) {
@@ -156,6 +164,7 @@ void FileFrameGenerator::on_timer() {
     if (dur > 0 && cursor_us_ >= dur) {
         if (loop_) {
             cursor_us_ = 0;
+            emit looped();
         } else {
             timer_.stop();
             playing_ = false;
@@ -181,8 +190,10 @@ void FileFrameGenerator::render_frame(Metavision::timestamp start_us,
     const cv::Vec3b off  = Metavision::get_bgr_color(palette_, Metavision::ColorType::Negative);
     frame_.setTo(cv::Scalar(bg[0], bg[1], bg[2]));
 
-    // Collect the events in [start_us, end_us) for both rendering and for
-    // feeding algorithm instances synchronously with this frame.
+    // Collect the RAW events in [start_us, end_us). These are used both for
+    // rendering (after FilterChain transformation) and for feeding algorithm
+    // instances (RAW, unfiltered — matching live mode where the algo CD
+    // callback is separate from the CameraController's FilterChain callback).
     auto window_events = std::make_shared<std::vector<Metavision::EventCD>>();
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -199,21 +210,38 @@ void FileFrameGenerator::render_frame(Metavision::timestamp start_us,
                 [](const Metavision::EventCD& e, Metavision::timestamp t) {
                     return e.t < t;
                 });
-
-            // Render using palette colors.
-            const int h = static_cast<int>(height_);
-            const int w = static_cast<int>(width_);
-            for (auto it = begin_it; it != end_it; ++it) {
-                if (it->x >= w || it->y >= h) continue;
-                frame_.at<cv::Vec3b>(static_cast<int>(it->y),
-                                     static_cast<int>(it->x)) = it->p ? on : off;
-            }
             window_events->assign(begin_it, end_it);
         }
     }
 
-    // Emit the events in this window so algorithm instances can process
-    // them synchronously with the displayed frame. Emitted before
+    // Apply FilterChain to the window events for BOTH display rendering and
+    // algorithm feeding. This ensures flip/rotate/etc. take effect immediately
+    // during file playback (events are buffered raw and filtered per-frame),
+    // AND that algorithm output is also flipped — ReplaceStrategy replaces
+    // the display frame with the algorithm's output, so if algorithms receive
+    // raw (unflipped) events, the flip would be invisible when a Replace-mode
+    // algorithm is running.
+    //
+    // NOTE: process() clears its output vector before filling it. We must NOT
+    // pass *window_events as both input (begin/end) and output — out.clear()
+    // would invalidate the input iterators (aliasing UB). Use a separate
+    // vector and move the result back.
+    const int h = static_cast<int>(height_);
+    const int w = static_cast<int>(width_);
+    if (filter_chain_ && filter_chain_->has_enabled()) {
+        std::vector<Metavision::EventCD> filtered;
+        filter_chain_->process(window_events->data(),
+                               window_events->data() + window_events->size(),
+                               filtered);
+        *window_events = std::move(filtered);
+    }
+    for (const auto& ev : *window_events) {
+        if (ev.x < 0 || ev.x >= w || ev.y < 0 || ev.y >= h) continue;
+        frame_.ptr<cv::Vec3b>(static_cast<int>(ev.y))[ev.x] = ev.p ? on : off;
+    }
+
+    // Emit the (filtered) events in this window so algorithm instances can
+    // process them synchronously with the displayed frame. Emitted before
     // frame_ready so results are ready when the frame is displayed.
     emit events_window_ready(window_events, start_us);
 }

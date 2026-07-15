@@ -43,10 +43,22 @@ std::vector<std::pair<QString, QString>> CameraController::list_online_sources()
 bool CameraController::connect_first_available() {
     teardown();
     try {
-        auto cam = Metavision::Camera::from_first_available();
+        // Use from_serial("") instead of from_first_available(). The latter
+        // internally calls Camera::list_online_sources() (full local + remote
+        // scan) to locate a camera — redundant with the list already shown in
+        // the Devices panel. from_serial("") delegates to
+        // DeviceDiscovery::open("") which opens the first available *local*
+        // camera directly, skipping both the redundant scan and the slow
+        // remote discovery.
+        auto cam = Metavision::Camera::from_serial(std::string());
         setup_camera(std::move(cam), false);
         return true;
     } catch (const Metavision::CameraException& e) {
+        // teardown() already destroyed the previous camera/pipeline but never
+        // emits disconnected() — do so here so the UI cleans up its stale
+        // connection state (status bar, panels, playback controls) before
+        // the error dialog appears.
+        emit disconnected();
         emit error(QString::fromUtf8(e.what()));
         return false;
     }
@@ -59,6 +71,7 @@ bool CameraController::connect_serial(const std::string& serial) {
         setup_camera(std::move(cam), false);
         return true;
     } catch (const Metavision::CameraException& e) {
+        emit disconnected();
         emit error(QString::fromUtf8(e.what()));
         return false;
     }
@@ -77,6 +90,7 @@ bool CameraController::connect_file(const std::string& path) {
         setup_camera(std::move(cam), true);
         return true;
     } catch (const Metavision::CameraException& e) {
+        emit disconnected();
         emit error(QString::fromUtf8(e.what()));
         return false;
     }
@@ -271,7 +285,11 @@ void CameraController::setup_camera(Metavision::Camera&& cam, bool is_file) {
                 if (b != e) {
                     last_ts_.store((e - 1)->t, std::memory_order_relaxed);
                 }
-                if (filter_chain_.has_enabled()) {
+                // File mode: buffer RAW events — FilterChain is applied
+                // per-frame in FileFrameGenerator::render_frame() so that
+                // filter toggles take effect immediately during playback.
+                // Live mode: apply FilterChain here (CD callback) as before.
+                if (!is_file_ && filter_chain_.has_enabled()) {
                     std::vector<Metavision::EventCD> filtered;
                     filter_chain_.process(b, e, filtered);
                     if (!filtered.empty()) {
@@ -305,6 +323,7 @@ void CameraController::setup_camera(Metavision::Camera&& cam, bool is_file) {
     const std::uint16_t fps = frame_pipeline_.fps();
     const Metavision::timestamp acc = frame_pipeline_.accumulation_time_us();
     if (is_file) {
+        frame_pipeline_.set_file_filter_chain(&filter_chain_);
         if (!frame_pipeline_.start_file(w, h, fps, acc)) {
             emit runtime_warning(tr("Failed to start file frame pipeline."));
         }

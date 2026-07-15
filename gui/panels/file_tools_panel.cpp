@@ -8,6 +8,7 @@
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
+#include <QKeySequence>
 #include <QLabel>
 #include <QMessageBox>
 #include <QProgressBar>
@@ -20,7 +21,7 @@
 namespace gui {
 
 FileToolsPanel::FileToolsPanel(FileConverter* converter, QWidget* parent)
-    : QWidget(parent), converter_(converter) {
+    : AbstractPanel(parent), converter_(converter) {
     auto* outer = new QVBoxLayout(this);
     outer->setContentsMargins(0, 0, 0, 0);
     auto* gb = new QGroupBox(tr("File Tools"), this);
@@ -32,7 +33,19 @@ FileToolsPanel::FileToolsPanel(FileConverter* converter, QWidget* parent)
     btn_info_ = new QPushButton(tr("File Info..."), gb);
     progress_ = new QProgressBar(gb);
     progress_->setRange(0, 100);
+    // Hide the progress bar when idle so it doesn't look like an empty box
+    // (§14.6). It's shown only during conversion/cutting operations.
+    progress_->setVisible(false);
     lbl_status_ = new QLabel(tr("Ready."), gb);
+
+    // Recording + Export controls (moved from File menu / toolbar — §14.5).
+    btn_record_ = new QPushButton(tr("Start Recording..."), gb);
+    btn_record_->setShortcut(QKeySequence("R"));
+    btn_stop_   = new QPushButton(tr("Stop Recording"), gb);
+    btn_export_ = new QPushButton(tr("Export..."), gb);
+    btn_stop_->setEnabled(false);
+    btn_record_->setEnabled(false);
+    btn_export_->setEnabled(false);
 
     lay->addWidget(btn_hdf5_);
     lay->addWidget(btn_csv_);
@@ -40,6 +53,10 @@ FileToolsPanel::FileToolsPanel(FileConverter* converter, QWidget* parent)
     lay->addWidget(btn_info_);
     lay->addWidget(progress_);
     lay->addWidget(lbl_status_);
+    lay->addSpacing(8);
+    lay->addWidget(btn_record_);
+    lay->addWidget(btn_stop_);
+    lay->addWidget(btn_export_);
 
     outer->addWidget(gb);
 
@@ -47,6 +64,9 @@ FileToolsPanel::FileToolsPanel(FileConverter* converter, QWidget* parent)
     connect(btn_csv_,  &QPushButton::clicked, this, &FileToolsPanel::on_convert_csv);
     connect(btn_cut_,  &QPushButton::clicked, this, &FileToolsPanel::on_cutter);
     connect(btn_info_, &QPushButton::clicked, this, &FileToolsPanel::on_info);
+    connect(btn_record_, &QPushButton::clicked, this, &FileToolsPanel::record_start_requested);
+    connect(btn_stop_,   &QPushButton::clicked, this, &FileToolsPanel::record_stop_requested);
+    connect(btn_export_, &QPushButton::clicked, this, &FileToolsPanel::export_requested);
 
     if (converter_) {
         connect(converter_, &FileConverter::completed, this, &FileToolsPanel::on_completed);
@@ -57,7 +77,27 @@ FileToolsPanel::FileToolsPanel(FileConverter* converter, QWidget* parent)
     }
 }
 
+void FileToolsPanel::set_buttons_enabled(bool enabled) {
+    btn_hdf5_->setEnabled(enabled);
+    btn_csv_->setEnabled(enabled);
+    btn_cut_->setEnabled(enabled);
+    btn_info_->setEnabled(enabled);
+}
+
+void FileToolsPanel::set_record_enabled(bool enabled) {
+    btn_record_->setEnabled(enabled);
+}
+
+void FileToolsPanel::set_stop_enabled(bool enabled) {
+    btn_stop_->setEnabled(enabled);
+}
+
+void FileToolsPanel::set_export_enabled(bool enabled) {
+    btn_export_->setEnabled(enabled);
+}
+
 void FileToolsPanel::on_convert_hdf5() {
+    if (!converter_) return;
     const QString src = QFileDialog::getOpenFileName(
         this, tr("Source file"), QString(),
         tr("Event files (*.raw *.hdf5 *.h5 *.dat);;All files (*)"));
@@ -65,16 +105,15 @@ void FileToolsPanel::on_convert_hdf5() {
     const QString dst = QFileDialog::getSaveFileName(
         this, tr("Output HDF5"), QString(), tr("HDF5 (*.h5);;All files (*)"));
     if (dst.isEmpty()) return;
+    progress_->setVisible(true);
     progress_->setValue(0);
     lbl_status_->setText(tr("Converting to HDF5..."));
-    btn_hdf5_->setEnabled(false);
-    btn_csv_->setEnabled(false);
-    btn_cut_->setEnabled(false);
-    btn_info_->setEnabled(false);
+    set_buttons_enabled(false);
     converter_->convert(src, dst, FileConverter::Format::HDF5);
 }
 
 void FileToolsPanel::on_convert_csv() {
+    if (!converter_) return;
     const QString src = QFileDialog::getOpenFileName(
         this, tr("Source file"), QString(),
         tr("Event files (*.raw *.hdf5 *.h5 *.dat);;All files (*)"));
@@ -82,16 +121,15 @@ void FileToolsPanel::on_convert_csv() {
     const QString dst = QFileDialog::getSaveFileName(
         this, tr("Output CSV"), QString(), tr("CSV (*.csv);;All files (*)"));
     if (dst.isEmpty()) return;
+    progress_->setVisible(true);
     progress_->setValue(0);
     lbl_status_->setText(tr("Converting to CSV..."));
-    btn_hdf5_->setEnabled(false);
-    btn_csv_->setEnabled(false);
-    btn_cut_->setEnabled(false);
-    btn_info_->setEnabled(false);
+    set_buttons_enabled(false);
     converter_->convert(src, dst, FileConverter::Format::CSV);
 }
 
 void FileToolsPanel::on_cutter() {
+    if (!converter_) return;
     const QString src = QFileDialog::getOpenFileName(
         this, tr("Source file"), QString(),
         tr("Event files (*.raw *.hdf5 *.h5 *.dat);;All files (*)"));
@@ -119,16 +157,15 @@ void FileToolsPanel::on_cutter() {
     if (dst.isEmpty()) return;
     const auto start_us = static_cast<Metavision::timestamp>(spStart->value() * 1e6);
     const auto end_us = static_cast<Metavision::timestamp>(spEnd->value() * 1e6);
+    progress_->setVisible(true);
     progress_->setValue(0);
     lbl_status_->setText(tr("Cutting..."));
-    btn_hdf5_->setEnabled(false);
-    btn_csv_->setEnabled(false);
-    btn_cut_->setEnabled(false);
-    btn_info_->setEnabled(false);
+    set_buttons_enabled(false);
     converter_->cut(src, dst, start_us, end_us);
 }
 
 void FileToolsPanel::on_info() {
+    if (!converter_) return;
     const QString src = QFileDialog::getOpenFileName(
         this, tr("Source file"), QString(),
         tr("Event files (*.raw *.hdf5 *.h5 *.dat);;All files (*)"));
@@ -152,20 +189,16 @@ void FileToolsPanel::on_info() {
 
 void FileToolsPanel::on_completed(const QString& out) {
     progress_->setValue(100);
+    progress_->setVisible(false);
     lbl_status_->setText(tr("Done: %1").arg(out));
-    btn_hdf5_->setEnabled(true);
-    btn_csv_->setEnabled(true);
-    btn_cut_->setEnabled(true);
-    btn_info_->setEnabled(true);
+    set_buttons_enabled(true);
 }
 
 void FileToolsPanel::on_failed(const QString& msg) {
     progress_->reset();
+    progress_->setVisible(false);
     lbl_status_->setText(tr("Failed: %1").arg(msg));
-    btn_hdf5_->setEnabled(true);
-    btn_csv_->setEnabled(true);
-    btn_cut_->setEnabled(true);
-    btn_info_->setEnabled(true);
+    set_buttons_enabled(true);
 }
 
 } // namespace gui

@@ -18,6 +18,14 @@ StatisticsController::StatisticsController(QObject* parent) : QObject(parent) {
     connect(&on_off_timer_, &QTimer::timeout, this, [this]() {
         const std::uint64_t on = on_count_.load(std::memory_order_relaxed);
         const std::uint64_t off = off_count_.load(std::memory_order_relaxed);
+        // Skip the signal (and downstream label repaints) when no new events
+        // have arrived since the last tick. The ratio is derived from on/off,
+        // so unchanged counts imply an unchanged ratio.
+        if (on == last_on_ && off == last_off_) {
+            return;
+        }
+        last_on_ = on;
+        last_off_ = off;
         const std::uint64_t total = on + off;
         const double ratio = total == 0 ? 0.0 : static_cast<double>(on) / total;
         emit on_off_updated(on, off, ratio);

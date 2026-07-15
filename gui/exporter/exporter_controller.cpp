@@ -160,7 +160,7 @@ void ExporterController::run_avi(const ExportParams& p) {
     auto gen = std::make_unique<Metavision::CDFrameGenerator>(w, h);
     gen->set_color_palette(p.color ? Metavision::ColorPalette::Dark : Metavision::ColorPalette::Gray);
     gen->set_display_accumulation_time_us(
-        static_cast<Metavision::timestamp>(p.accumulation_ms * 1000.0));
+        static_cast<Metavision::timestamp>(p.accumulation_us));
 
     std::atomic<bool> done{false};
     // start() takes (fps, callback). The callback receives (timestamp, frame).

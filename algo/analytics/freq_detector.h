@@ -254,7 +254,9 @@ private:
                            Metavision::timestamp window_lo,
                            LightSource& out) const {
         // Gather timestamps from the region around the centroid.
-        std::vector<Metavision::timestamp> ts;
+        ts_.clear();
+        auto& ts = ts_;
+        ts_.reserve(64);
         for (const Event& e : buffer_) {
             if (e.t < window_lo) continue;
             if (std::abs(static_cast<int>(e.x) - u) <= region_radius_ &&
@@ -274,7 +276,8 @@ private:
             t_end - static_cast<Metavision::timestamp>(
                         static_cast<double>(N) * bin_dt);
         // Bin the timestamps.
-        std::vector<double> signal(N, 0.0);
+        signal_.assign(N, 0.0);
+        auto& signal = signal_;
         for (const Metavision::timestamp t : ts) {
             if (t < t_fft_start) continue;
             const int b = static_cast<int>(
@@ -282,13 +285,19 @@ private:
             if (b >= 0 && b < N) signal[b] += 1.0;
         }
         // Apply Hann window.
+        if (hann_N_ != N) {
+            hann_N_ = N;
+            hann_window_.resize(N > 0 ? N : 0);
+            for (int n = 0; n < N; ++n) {
+                hann_window_[n] = (N > 1)
+                    ? 0.5 * (1.0 - std::cos(2.0 * freq_detail::kPi *
+                                             static_cast<double>(n) /
+                                             static_cast<double>(N - 1)))
+                    : 1.0;
+            }
+        }
         for (int n = 0; n < N; ++n) {
-            const double w = (N > 1)
-                                 ? 0.5 * (1.0 - std::cos(2.0 * freq_detail::kPi *
-                                                          static_cast<double>(n) /
-                                                          static_cast<double>(N - 1)))
-                                 : 1.0;
-            signal[n] *= w;
+            signal[n] *= hann_window_[n];
         }
         // DFT magnitude over the frequency range of interest.
         const double fs = 1.0e6 / bin_dt;  // sampling rate in Hz
@@ -299,15 +308,20 @@ private:
         if (k_max <= k_min) return;
         int k_peak = -1;
         double mag_peak = 0.0;
-        std::vector<double> mag(k_max - k_min + 1, 0.0);
+        mag_.assign(k_max - k_min + 1, 0.0);
+        auto& mag = mag_;
+        std::vector<double> cos_tab(N), sin_tab(N);
+        for (int n = 0; n < N; ++n) {
+            const double phase = 2.0 * freq_detail::kPi * static_cast<double>(n) / static_cast<double>(N);
+            cos_tab[n] = std::cos(phase);
+            sin_tab[n] = std::sin(phase);
+        }
         for (int k = k_min; k <= k_max; ++k) {
             double re = 0.0, im = 0.0;
             for (int n = 0; n < N; ++n) {
-                const double phase = 2.0 * freq_detail::kPi *
-                                     static_cast<double>(k * n) /
-                                     static_cast<double>(N);
-                re += signal[n] * std::cos(phase);
-                im -= signal[n] * std::sin(phase);
+                const int idx = static_cast<int>((static_cast<std::size_t>(k) * static_cast<std::size_t>(n)) % static_cast<std::size_t>(N));
+                re += signal[n] * cos_tab[idx];
+                im -= signal[n] * sin_tab[idx];
             }
             const double m = std::sqrt(re * re + im * im);
             mag[k - k_min] = m;
@@ -361,6 +375,12 @@ private:
     std::vector<int> heatmap_;
     Metavision::timestamp latest_t_{0};
     Metavision::timestamp last_analyze_t_{0};
+
+    // --- Reusable temporary buffers (compute_frequency is const -> mutable) ---
+    mutable std::vector<Metavision::timestamp> ts_;
+    mutable std::vector<double> signal_, mag_;
+    mutable int hann_N_{0};
+    mutable std::vector<double> hann_window_;
 };
 
 } // namespace gui_algo

@@ -14,6 +14,7 @@
 #include <QLabel>
 #include <QSignalBlocker>
 #include <QSpinBox>
+#include <QStyle>
 #include <QVBoxLayout>
 
 #include <metavision/hal/facilities/i_antiflicker_module.h>
@@ -35,14 +36,14 @@ QGroupBox* make_group(QWidget* parent, const QString& title) {
 }
 } // namespace
 
-EspPanel::EspPanel(QWidget* parent) : QWidget(parent) {
+EspPanel::EspPanel(QWidget* parent) : AbstractPanel(parent) {
     auto* outer = new QVBoxLayout(this);
     outer->setContentsMargins(0, 0, 0, 0);
     outer->setSpacing(6);
 
-    hint_label_ = new QLabel(tr("No live camera connected."), this);
+    hint_label_ = new QLabel(tr("Connect a live camera to enable ESP settings."), this);
     hint_label_->setWordWrap(true);
-    hint_label_->setStyleSheet("color: #888; font-style: italic;");
+    hint_label_->setProperty("class", "hint");
     outer->addWidget(hint_label_);
 
     // --- Anti-Flicker -----------------------------------------------------
@@ -69,13 +70,10 @@ EspPanel::EspPanel(QWidget* parent) : QWidget(parent) {
     af_high_->setRange(1, 100000);
     af_high_->setSuffix(" Hz");
     af_high_->setValue(110);
-    auto* af_band_row = new QWidget(af_group_);
-    auto* af_bl = new QHBoxLayout(af_band_row);
-    af_bl->setContentsMargins(0, 0, 0, 0);
-    af_bl->addWidget(af_low_);
-    af_bl->addWidget(new QLabel("–", af_group_));
-    af_bl->addWidget(af_high_);
-    af_form->addRow(tr("Frequency band"), af_band_row);
+    // Low/high on separate rows so the row fits the narrower sidebar
+    // (§13.3 — splitting wide rows).
+    af_form->addRow(tr("Freq. low"), af_low_);
+    af_form->addRow(tr("Freq. high"), af_high_);
     af_duty_ = new QDoubleSpinBox(af_group_);
     af_duty_->setRange(0.0, 1.0);
     af_duty_->setSingleStep(0.05);
@@ -129,8 +127,8 @@ EspPanel::EspPanel(QWidget* parent) : QWidget(parent) {
     // --- Wire -------------------------------------------------------------
     // Anti-Flicker
     connect(af_enable_, &QCheckBox::toggled, this, [this](bool on) {
-        if (!controller_) return;
-        auto* af = controller_->anti_flicker_facility();
+        if (!camera_) return;
+        auto* af = camera_->anti_flicker_facility();
         if (!af) return;
         try { af->enable(on); } catch (const std::exception& e) {
             emit error_message(QString::fromUtf8(e.what()));
@@ -138,8 +136,8 @@ EspPanel::EspPanel(QWidget* parent) : QWidget(parent) {
         }
     });
     connect(af_mode_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this]() {
-        if (!controller_) return;
-        auto* af = controller_->anti_flicker_facility();
+        if (!camera_) return;
+        auto* af = camera_->anti_flicker_facility();
         if (!af) return;
         const auto m = static_cast<Metavision::I_AntiFlickerModule::AntiFlickerMode>(
             af_mode_->currentData().toInt());
@@ -154,15 +152,15 @@ EspPanel::EspPanel(QWidget* parent) : QWidget(parent) {
         if (idx == 1) { af_low_->setValue(90);  af_high_->setValue(110); }
         else          { af_low_->setValue(110); af_high_->setValue(130); }
         // Apply.
-        if (!controller_) return;
-        auto* af = controller_->anti_flicker_facility();
+        if (!camera_) return;
+        auto* af = camera_->anti_flicker_facility();
         if (!af) return;
         try { af->set_frequency_band(af_low_->value(), af_high_->value()); }
         catch (const std::exception& e) { emit error_message(QString::fromUtf8(e.what())); }
     });
     auto apply_band = [this]() {
-        if (!controller_) return;
-        auto* af = controller_->anti_flicker_facility();
+        if (!camera_) return;
+        auto* af = camera_->anti_flicker_facility();
         if (!af) return;
         const int lo = af_low_->value();
         const int hi = af_high_->value();
@@ -174,22 +172,22 @@ EspPanel::EspPanel(QWidget* parent) : QWidget(parent) {
     connect(af_low_,  QOverload<int>::of(&QSpinBox::valueChanged), this, apply_band);
     connect(af_high_, QOverload<int>::of(&QSpinBox::valueChanged), this, apply_band);
     connect(af_duty_, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, [this](double v) {
-        if (!controller_) return;
-        auto* af = controller_->anti_flicker_facility();
+        if (!camera_) return;
+        auto* af = camera_->anti_flicker_facility();
         if (!af) return;
         try { af->set_duty_cycle(static_cast<float>(v)); }
         catch (const std::exception& e) { emit error_message(QString::fromUtf8(e.what())); }
     });
     connect(af_start_thr_, QOverload<int>::of(&QSpinBox::valueChanged), this, [this](int v) {
-        if (!controller_) return;
-        auto* af = controller_->anti_flicker_facility();
+        if (!camera_) return;
+        auto* af = camera_->anti_flicker_facility();
         if (!af) return;
         try { af->set_start_threshold(static_cast<uint32_t>(v)); }
         catch (const std::exception& e) { emit error_message(QString::fromUtf8(e.what())); }
     });
     connect(af_stop_thr_, QOverload<int>::of(&QSpinBox::valueChanged), this, [this](int v) {
-        if (!controller_) return;
-        auto* af = controller_->anti_flicker_facility();
+        if (!camera_) return;
+        auto* af = camera_->anti_flicker_facility();
         if (!af) return;
         try { af->set_stop_threshold(static_cast<uint32_t>(v)); }
         catch (const std::exception& e) { emit error_message(QString::fromUtf8(e.what())); }
@@ -197,8 +195,8 @@ EspPanel::EspPanel(QWidget* parent) : QWidget(parent) {
 
     // Trail Filter
     connect(tf_enable_, &QCheckBox::toggled, this, [this](bool on) {
-        if (!controller_) return;
-        auto* tf = controller_->trail_filter_facility();
+        if (!camera_) return;
+        auto* tf = camera_->trail_filter_facility();
         if (!tf) return;
         try { tf->enable(on); } catch (const std::exception& e) {
             emit error_message(QString::fromUtf8(e.what()));
@@ -206,8 +204,8 @@ EspPanel::EspPanel(QWidget* parent) : QWidget(parent) {
         }
     });
     connect(tf_type_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this]() {
-        if (!controller_) return;
-        auto* tf = controller_->trail_filter_facility();
+        if (!camera_) return;
+        auto* tf = camera_->trail_filter_facility();
         if (!tf) return;
         const auto t = static_cast<Metavision::I_EventTrailFilterModule::Type>(
             tf_type_->currentData().toInt());
@@ -216,8 +214,8 @@ EspPanel::EspPanel(QWidget* parent) : QWidget(parent) {
         }
     });
     connect(tf_threshold_, QOverload<int>::of(&QSpinBox::valueChanged), this, [this](int v) {
-        if (!controller_) return;
-        auto* tf = controller_->trail_filter_facility();
+        if (!camera_) return;
+        auto* tf = camera_->trail_filter_facility();
         if (!tf) return;
         try { tf->set_threshold(static_cast<uint32_t>(v)); }
         catch (const std::exception& e) { emit error_message(QString::fromUtf8(e.what())); }
@@ -225,8 +223,8 @@ EspPanel::EspPanel(QWidget* parent) : QWidget(parent) {
 
     // ERC
     connect(erc_enable_, &QCheckBox::toggled, this, [this](bool on) {
-        if (!controller_) return;
-        auto* erc = controller_->erc_facility();
+        if (!camera_) return;
+        auto* erc = camera_->erc_facility();
         if (!erc) return;
         try { erc->enable(on); } catch (const std::exception& e) {
             emit error_message(QString::fromUtf8(e.what()));
@@ -234,8 +232,8 @@ EspPanel::EspPanel(QWidget* parent) : QWidget(parent) {
         }
     });
     connect(erc_rate_, QOverload<int>::of(&QSpinBox::valueChanged), this, [this](int v) {
-        if (!controller_) return;
-        auto* erc = controller_->erc_facility();
+        if (!camera_) return;
+        auto* erc = camera_->erc_facility();
         if (!erc) return;
         try { erc->set_cd_event_rate(static_cast<uint32_t>(v)); }
         catch (const std::exception& e) { emit error_message(QString::fromUtf8(e.what())); }
@@ -243,38 +241,43 @@ EspPanel::EspPanel(QWidget* parent) : QWidget(parent) {
 }
 
 void EspPanel::on_camera_connected(CameraController* controller) {
-    controller_ = controller;
+    camera_ = controller;
     populate();
 }
 
 void EspPanel::on_camera_disconnected() {
-    controller_ = nullptr;
+    camera_ = nullptr;
     set_all_enabled(false);
-    hint_label_->setText(tr("No live camera connected."));
-    hint_label_->setStyleSheet("color: #888; font-style: italic;");
+    hint_label_->setText(tr("Connect a live camera to enable ESP settings."));
+    hint_label_->setProperty("class", "hint");
+    restyle(hint_label_);
 }
 
 void EspPanel::populate() {
-    if (!controller_) return;
+    if (!camera_) return;
     populate_antiflicker();
     populate_trail();
     populate_erc();
 
-    const bool any = controller_->anti_flicker_facility() ||
-                     controller_->trail_filter_facility() ||
-                     controller_->erc_facility();
+    const bool any = camera_->anti_flicker_facility() ||
+                     camera_->trail_filter_facility() ||
+                     camera_->erc_facility();
     if (any) {
         hint_label_->setText(tr("ESP facilities loaded. Edits apply immediately."));
-        hint_label_->setStyleSheet("color: #444;");
+        hint_label_->setProperty("class", "info");
     } else {
         hint_label_->setText(tr("No ESP facilities available on this camera."));
-        hint_label_->setStyleSheet("color: #888; font-style: italic;");
+        hint_label_->setProperty("class", "hint");
     }
-    set_all_enabled(true);
+    restyle(hint_label_);
+    // Note: do NOT call set_all_enabled(true) here — each populate_* function
+    // already enables its group if the facility exists and disables it if
+    // not. Calling set_all_enabled(true) afterwards would override the
+    // disable, re-enabling groups whose facility is missing (BUG-2: N8).
 }
 
 void EspPanel::populate_antiflicker() {
-    auto* af = controller_ ? controller_->anti_flicker_facility() : nullptr;
+    auto* af = camera_ ? camera_->anti_flicker_facility() : nullptr;
     if (!af) { af_group_->setEnabled(false); return; }
     af_group_->setEnabled(true);
     QString err;
@@ -311,7 +314,7 @@ void EspPanel::populate_antiflicker() {
     try { sp = af->get_stop_threshold(); }
     catch (const std::exception& e) { first_err(e); }
     if (!err.isEmpty())
-        emit error_message(tr("Anti-Flicker init: %1").arg(err));
+        emit info_message(tr("Anti-Flicker init: %1").arg(err));
     QSignalBlocker b0(af_enable_); af_enable_->setChecked(enabled);
     QSignalBlocker b1(af_mode_);
     af_mode_->setCurrentIndex(mode == Metavision::I_AntiFlickerModule::BAND_PASS ? 1 : 0);
@@ -334,10 +337,16 @@ void EspPanel::populate_antiflicker() {
     af_stop_thr_->setRange(static_cast<int>(std::min<uint32_t>(sp_min, INT_MAX)),
                            static_cast<int>(std::min<uint32_t>(sp_max, INT_MAX)));
     af_stop_thr_->setValue(static_cast<int>(std::min<uint32_t>(sp, INT_MAX)));
+    // BUG-G7: restore the af_preset_ selection based on the camera's current
+    // band so the user can quickly identify the active mains frequency.
+    QSignalBlocker b7(af_preset_);
+    if (low_f == 90 && high_f == 110) af_preset_->setCurrentIndex(1);
+    else if (low_f == 110 && high_f == 130) af_preset_->setCurrentIndex(2);
+    else af_preset_->setCurrentIndex(0);
 }
 
 void EspPanel::populate_trail() {
-    auto* tf = controller_ ? controller_->trail_filter_facility() : nullptr;
+    auto* tf = camera_ ? camera_->trail_filter_facility() : nullptr;
     if (!tf) { tf_group_->setEnabled(false); return; }
     tf_group_->setEnabled(true);
     QString err;
@@ -360,7 +369,7 @@ void EspPanel::populate_trail() {
     try { thr = tf->get_threshold(); }
     catch (const std::exception& e) { first_err(e); }
     if (!err.isEmpty())
-        emit error_message(tr("Trail Filter init: %1").arg(err));
+        emit info_message(tr("Trail Filter init: %1").arg(err));
     // Rebuild the combo from scratch every time we connect — removing
     // unsupported entries in place would permanently shrink the combo
     // across reconnects to cameras with different filter support.
@@ -384,7 +393,7 @@ void EspPanel::populate_trail() {
 }
 
 void EspPanel::populate_erc() {
-    auto* erc = controller_ ? controller_->erc_facility() : nullptr;
+    auto* erc = camera_ ? camera_->erc_facility() : nullptr;
     if (!erc) { erc_group_->setEnabled(false); return; }
     erc_group_->setEnabled(true);
     QString err;
@@ -402,7 +411,7 @@ void EspPanel::populate_erc() {
     try { rate = erc->get_cd_event_rate(); }
     catch (const std::exception& e) { first_err(e); }
     if (!err.isEmpty())
-        emit error_message(tr("ERC init: %1").arg(err));
+        emit info_message(tr("ERC init: %1").arg(err));
     QSignalBlocker b0(erc_enable_); erc_enable_->setChecked(enabled);
     QSignalBlocker b1(erc_rate_);
     erc_rate_->setRange(static_cast<int>(std::min<uint32_t>(min_rate, INT_MAX)),
@@ -411,14 +420,14 @@ void EspPanel::populate_erc() {
 }
 
 void EspPanel::set_all_enabled(bool on) {
-    // Group boxes are individually disabled by populate_* when the facility
-    // is missing; here we only flip the top-level enable for the case where
-    // no camera is connected at all.
-    if (!on) {
-        af_group_->setEnabled(false);
-        tf_group_->setEnabled(false);
-        erc_group_->setEnabled(false);
-    }
+    // Used to disable all groups (on=false) when no camera is connected.
+    // The on=true case is intentionally NOT called from populate() — each
+    // populate_* function manages its own group's enable state based on
+    // facility availability (BUG-2: N8 fix caused set_all_enabled(true) to
+    // override populate_*'s facility-missing disables).
+    af_group_->setEnabled(on);
+    tf_group_->setEnabled(on);
+    erc_group_->setEnabled(on);
 }
 
 } // namespace gui

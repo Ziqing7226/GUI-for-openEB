@@ -1,17 +1,17 @@
 <div align="center">
 
-# EBplus
+# EB plus
 
-A polished Qt 6 desktop app for event cameras — built on [openEB](https://github.com/prophesee-ai/openeb) v5.2.0.
+A polished, open-source Qt 6 desktop app for event cameras — built on [openEB](https://github.com/prophesee-ai/openeb) v5.2.0.
 
-Real-time visualization · camera control · recording · playback · calibration · 30+ algorithms · customizable themes
+Real-time visualization · camera control · recording & playback · calibration · 59 algorithms · customizable themes
 
 ![License](https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-blue)
 ![Language](https://img.shields.io/badge/C%2B%2B17-Qt%206-orange)
 ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey)
-![Version](https://img.shields.io/badge/version-1.0.0-blue)
+![Version](https://img.shields.io/badge/version-1.9.0-blue)
 
-![Main Window](pic/1.0.0.png)
+![Main Window](pic/1.9.0.png)
 
 </div>
 
@@ -19,14 +19,16 @@ Real-time visualization · camera control · recording · playback · calibratio
 
 ## What is this?
 
-**EBplus** is a GUI for event cameras (Prophesee / CenturyArks). Event cameras don't capture frames — they report per-pixel brightness changes at microsecond resolution. EBplus lets you:
+**EB plus** is a beautiful, open-source, feature-rich GUI for event cameras (Prophesee / CenturyArks). Event cameras don't capture frames — they report per-pixel brightness changes at microsecond resolution. EB plus gives you a complete desktop workflow to work with this data:
 
 - **See** the event stream in real time (OpenGL, 60+ FPS)
-- **Control** the camera (biases, ROI, anti-flicker, triggers)
-- **Record & replay** RAW event files
+- **Control** the camera — biases, ROI, anti-flicker, triggers
+- **Record & replay** RAW event files with speed control and seek
 - **Run algorithms** — noise filtering, optical flow, object tracking, event-to-video, and more
 - **Calibrate** the camera with a chessboard wizard
 - **Export** to HDF5 / CSV / AVI
+
+The whole project is open source — feel free to fork it and adapt it to whatever you need.
 
 ---
 
@@ -49,41 +51,52 @@ That's it. The launcher handles Wayland compatibility, HAL plugin paths, and Ope
 
 ## Features
 
-### Display
+### Real-time Display
 - OpenGL-accelerated rendering with letterboxed viewport
-- 3 frame modes: Diff, Integration, Time Decay
+- 7 frame modes: Integration, Diff, Histogram, Time Decay, Contrast Map, Periodic, On-Demand
 - 4 color palettes: Dark, Light, CoolWarm, Gray
-- Live stats: event rate, ON/OFF ratio, FPS, timestamp
+- Live statistics: event rate, ON/OFF ratio, FPS, timestamp
 
 ### Camera Control
 - **Biases** — all HAL biases with slider + spinbox, save/load `.bias` files
-- **ROI** — drag-to-select on the display
+- **ROI** — multi-rectangle ROI / RONI, drag-to-select on the display
 - **ESP** — Anti-Flicker, Trail Filter, Event Rate Control
 - **Trigger** — Trigger In (per-channel) + Trigger Out
+
+All panels degrade gracefully when the device lacks the corresponding HAL facility (e.g. the four hardware panels auto-disable during file playback).
 
 ### Recording & Playback
 - RAW recording from live cameras
 - File playback with speed control, seek, pause/resume
-- File cutter — extract a time range
+- File cutter — extract a time range from an event file
 
 ### Export & Conversion
 - Convert between RAW, HDF5, and CSV
-- Export to AVI video
+- Export events to AVI video (configurable FPS, accumulation, quality, color mode)
 
-### Algorithms (30+)
+### Preprocessing Filter Chain
+8 stackable stages applied in a thread-safe pipeline: Polarity Filter, Polarity Invert, Flip X, Flip Y, Rotate, Transpose, Rescale, ROI Filter. Toggled from the sidebar.
+
+### Algorithms (59 total)
+EB plus ships **29 self-developed algorithms** plus **30 OpenEB-wrapped capabilities**, all registered in a single `AlgoBridge` registry.
+
 | Category | Examples |
 |----------|----------|
-| **Filtering** | Noise filter, refractory filter, spatial filter |
-| **Motion** | Optical flow (HSV visualization), motion detection |
-| **Detection** | Blob detector, Hough circle, particle counter |
-| **Tracking** | KLT tracker, active marker tracking |
-| **Reconstruction** | Event-to-video (E2VID default, BardowVariational, InteractingMaps) |
-| **Analytics** | Frequency detector, flow statistics, ISI analyzer |
-| **Calibration** | Intrinsic (chessboard), extrinsic |
+| **Filtering** | Hot Pixel Filter, Background Mask, Bandpass Filter, Trigger Synced |
+| **Motion** | Sparse Optical Flow (4 modes), Direction Selective, EIS / Optical Gyro |
+| **Detection** | Blob Detector, Corner Detector (Harris/FAST/AGAST), Line Segment (ELiSeD) |
+| **Tracking** | Object Tracker (RCT/Median/Kalman/MultiHypothesis), Hough Circle, Hough Line, Active Marker |
+| **Reconstruction** | Event-to-Video — **E2VID** (default, DL), BardowVariational, InteractingMaps |
+| **Analytics** | Frequency Detector, Flow Statistics, ISI Analyzer, Particle Counter, Auto Bias |
+| **Visualization** | Time Surface, XYT 3D Point Cloud, Ultra Slow Motion, Orientation Cluster |
+| **Calibration** | Intrinsic Calibration (chessboard / circle grid / aruco) |
 
-Algorithms are **mutually exclusive** — enabling one disables the previous. Each algorithm supports a **global ROI** (default: center 256×256) to bound computational cost. All algorithm parameters are adjusted exclusively in the **sidebar** (AlgorithmsPanel); the algorithm display windows show only the algorithm title and output, preventing parameter drift between two independent control panels.
+Algorithms are **mutually exclusive** — enabling one disables the previous. Each self-developed algorithm supports a **global ROI** (default: center 128×128) and a shared **"ROI → noise filter → 1/4 downsample"** preprocessing stage to bound computational cost. All algorithm parameters are adjusted exclusively in the **sidebar** (`AlgorithmsPanel`); algorithm display windows show only the title and output, preventing parameter drift between two independent control panels.
 
-#### E2VID Neural Network Reconstruction (Default Mode)
+#### Noise Filter (shared preprocessing)
+8 modes exposed in the sidebar based on the selected filter: BAF, STCF, Refractory, DWF, AgePolarity, Harmonic, Repetitious, SpatialBP.
+
+#### E2VID Neural Network Reconstruction (Default)
 
 The Event-to-Video algorithm defaults to **E2VID** — a deep-learning model that reconstructs grayscale images from raw event streams. It is ported from [rpg_e2vid](https://github.com/uzh-rpg/rpg_e2vid) and runs via ONNX Runtime (CPU, multi-threaded).
 
@@ -112,7 +125,7 @@ wget -P models/ http://rpg.ifi.uzh.ch/data/E2VID/models/E2VID_lightweight.pth.ta
 cmake --build build -- -j$(nproc)
 ```
 
-After setup, launch EBplus and enable **Algorithm → Event → Video** — it defaults to E2VID mode with 128×128 ROI, 24 fps, and 1/4 downsample (64×64 inference → upsampled to 128×128). The GUI exposes toggleable parameters (model path, auto-HDR, downsample, unsharp mask, bilateral filter).
+After setup, launch EB plus and enable **Algorithm → Event → Video** — it defaults to E2VID mode with 128×128 ROI, 30 fps, and 1/4 downsample (64×64 inference → upsampled to 128×128). The GUI exposes toggleable parameters (model path, auto-HDR, unsharp mask, bilateral filter).
 
 > **Without ONNX Runtime**: E2VID falls back to a heuristic mode (voxel-grid sum + sigmoid). BardowVariational and InteractingMaps modes work without any setup — BardowVariational jointly estimates optical flow and intensity via Chambolle-Pock primal-dual optimization (all six λ terms), and InteractingMaps uses six interconnected maps (I/G/V/F/C/R) with rotation estimation via least squares.
 
@@ -123,12 +136,11 @@ See [doc/design.md §4.4.2](doc/design.md) for full algorithm specifications.
 - **3 modes**: Follow System (default), Always Light, Always Dark
 - Dark mode uses a **dark variant of the chosen color** — not just black
 - Text color auto-adjusts (black on light, white on dark)
-- Settings persist across restarts
-- The menu bar follows the theme (native menu bar disabled)
+- Settings persist across restarts; the title bar follows the theme
 
-### Multi-Window
+### Multi-Window & Layout
 - XYT 3D event point cloud (GPU-accelerated)
-- Additional display windows (MDI)
+- Additional algorithm display windows (dockable)
 - Save/restore dock layout to JSON
 
 ---
@@ -138,19 +150,20 @@ See [doc/design.md §4.4.2](doc/design.md) for full algorithm specifications.
 ```
 GUI-for-openEB/
 ├── gui/              # Qt 6 application
-│   ├── main_window.*     # Main window: menus, docks, signal wiring
+│   ├── main_window.*     # Main window: title-bar menus, docks, signal wiring
 │   ├── display/          # OpenGL viewport, overlays, 3D cloud
-│   ├── panels/           # Sidebar panels (biases, ROI, algorithms, …)
+│   ├── panels/           # VSCode-style sidebar panels (5 groups, 11 panels)
 │   ├── app/              # Controllers (camera, pipeline, theme, …)
 │   ├── algo_bridge/      # Algorithm registry + filter chain
 │   ├── recorder/         # RAW recording & playback
 │   ├── exporter/         # HDF5/CSV/AVI export
 │   ├── calibration/      # Intrinsic wizard
-│   └── widgets/          # AlgoWindow, multi-window manager
-├── algo/              # Self-developed algorithm library
+│   └── widgets/          # Title bar, ActivityBar, AlgoWindow, pixel probe
+├── algo/              # Self-developed algorithm library (29 modules)
 ├── openeb/            # openEB SDK (Apache 2.0, v5.2.0)
+├── models/            # E2VID PyTorch → ONNX conversion
 ├── run.sh             # Launcher (sets env vars)
-├── doc/               # Design spec + build guide
+├── doc/               # Design spec + build guide + wiki
 └── pic/               # Screenshots
 ```
 
@@ -194,15 +207,9 @@ export QSG_RHI_BACKEND=opengl    # Qt 6 may default to Vulkan
 
 **Camera not detected** — Verify `MV_HAL_PLUGIN_PATH` matches your vendor. Run `metavision_hal_ls` to check.
 
-**"NonMonotonicTimeHigh" error** — This is a transient Evt3 protocol warning that occurs ~50% of the time on some Gen3.x cameras at startup. EBplus treats it as non-fatal and keeps the stream running. No action needed.
+**"NonMonotonicTimeHigh" error** — This is a transient Evt3 protocol warning that occurs ~50% of the time on some Gen3.x cameras at startup. EB plus treats it as non-fatal and keeps the stream running. No action needed.
 
 **Dark mode not following system** — Requires Qt 6.5+. On older Qt, use Theme → Mode → Dark.
-
----
-
-## Known Issues & Feedback
-
-EBplus is under active development and may still contain bugs. If you encounter any issue — crashes, rendering glitches, broken controls, or unexpected behavior — please [open an issue](../../issues). The project is continuously being improved, and bug reports from real users are the most direct help.
 
 ---
 
@@ -211,12 +218,15 @@ EBplus is under active development and may still contain bugs. If you encounter 
 | Shortcut | Action |
 |----------|--------|
 | `Ctrl+O` | Open file |
-| `Ctrl+C` | Connect camera |
-| `Ctrl+R` | ROI drag mode |
-| `R` | Start recording |
+| `Ctrl+Shift+P` | Toggle playback panel |
 | `F11` | Fullscreen |
-| `Ctrl+Shift+S` | Toggle sidebar |
 | `Ctrl+Q` | Quit |
+
+---
+
+## Known Issues & Feedback
+
+EB plus is under active development and may still contain bugs. If you encounter any issue — crashes, rendering glitches, broken controls, or unexpected behavior — please [open an issue](../../issues). Bug reports from real users are the most direct help.
 
 ---
 

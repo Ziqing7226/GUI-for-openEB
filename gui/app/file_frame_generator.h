@@ -40,6 +40,8 @@
 
 namespace gui {
 
+class FilterChain;  ///< Forward decl — applied at render time for file mode.
+
 class FileFrameGenerator : public QObject {
     Q_OBJECT
 public:
@@ -67,6 +69,13 @@ public:
 
     /// @brief Sets the color palette for rendering (matches CDFrameGenerator).
     void set_color_palette(Metavision::ColorPalette palette);
+
+    /// @brief Sets the FilterChain for event transformation (flip, rotate,
+    /// etc.) during file playback. Applied per-frame in render_frame() to
+    /// BOTH the display rendering and the events emitted via
+    /// events_window_ready, so that flip/rotate/etc. take effect immediately
+    /// and algorithm output is also transformed. nullptr = no filtering.
+    void set_filter_chain(FilterChain* fc) { filter_chain_ = fc; }
 
     // --- Playback control (GUI thread only) ---
 
@@ -110,9 +119,24 @@ signals:
     /// loop is off. The timer is stopped before emitting.
     void eof_reached();
 
-    /// @brief Emitted with the events in the current accumulation window
-    /// [start, end). Used to feed algorithm instances synchronously with
-    /// the displayed frame during file playback.
+    /// @brief Emitted when the cursor wraps back to 0 on loop. Algorithm
+    /// instances with temporal state (time_surface current_t_, E2VID
+    /// log_intensity_, etc.) must be reset to avoid stale-state freezes
+    /// where new events have timestamps < current_t_ and are ignored.
+    void looped();
+
+    /// @brief Emitted when seek() moves the cursor. Stateful algorithms
+    /// whose internal timestamps are ahead of the new cursor position must
+    /// be reset to avoid the same stale-state freeze as looped(). Emitted
+    /// BEFORE render_frame() so the reset takes effect before new events
+    /// are pushed.
+    void seeked(Metavision::timestamp t_us);
+
+    /// @brief Emitted with the (filtered) events in the current accumulation
+    /// window [start, end). Used to feed algorithm instances synchronously
+    /// with the displayed frame during file playback. When a FilterChain is
+    /// set, the events are already filtered (flip/rotate/etc. applied) so
+    /// algorithm output matches the display orientation.
     void events_window_ready(std::shared_ptr<std::vector<Metavision::EventCD>> events,
                              Metavision::timestamp ts);
 
@@ -142,6 +166,11 @@ private:
 
     // Reused render buffer (BGR)
     cv::Mat frame_;
+
+    // Filter chain (file mode). Applied in render_frame() to both the
+    // rendered pixels and the events emitted via events_window_ready, so
+    // algorithm output matches the display orientation.
+    FilterChain* filter_chain_{nullptr};
 };
 
 } // namespace gui

@@ -155,10 +155,16 @@ private:
                           std::vector<FlowVector>& out) {
         const Metavision::timestamp win = time_window_us_;
         const int r = spatial_radius_px_;
+        lp_xs_.reserve((2 * r + 1) * (2 * r + 1));
+        lp_ys_.reserve((2 * r + 1) * (2 * r + 1));
+        lp_ts_.reserve((2 * r + 1) * (2 * r + 1));
         for (std::size_t i = 0; i < count; ++i) {
             const Event& e = events[i];
             if (e.x >= width_ || e.y >= height_) continue;
-            std::vector<double> xs, ys, ts;
+            lp_xs_.clear(); lp_ys_.clear(); lp_ts_.clear();
+            auto& xs = lp_xs_;
+            auto& ys = lp_ys_;
+            auto& ts = lp_ts_;
             for (int dy = -r; dy <= r; ++dy) {
                 const int ny = e.y + dy;
                 if (ny < 0 || ny >= height_) continue;
@@ -594,12 +600,12 @@ private:
         if (w < 1 || h < 1) return src.clone();
         cv::Mat dst(h, w, src.type(), 0.0F);
         for (int y = 0; y < h; ++y) {
+            const float* sr0 = src.ptr<float>(y * 2);
+            const float* sr1 = src.ptr<float>(y * 2 + 1);
+            float* dr = dst.ptr<float>(y);
             for (int x = 0; x < w; ++x) {
-                const float v = src.at<float>(y * 2, x * 2)
-                              + src.at<float>(y * 2, x * 2 + 1)
-                              + src.at<float>(y * 2 + 1, x * 2)
-                              + src.at<float>(y * 2 + 1, x * 2 + 1);
-                dst.at<float>(y, x) = v * 0.25F;
+                dr[x] = (sr0[x * 2] + sr0[x * 2 + 1] +
+                         sr1[x * 2] + sr1[x * 2 + 1]) * 0.25F;
             }
         }
         return dst;
@@ -728,6 +734,11 @@ private:
 
     // Shared time surface (Surface of Active Events) ----------------------
     std::vector<Metavision::timestamp> sae_;
+
+    // LocalPlanes: reused per-event (x,y,t) sample buffers (OPT-24).
+    std::vector<double> lp_xs_;
+    std::vector<double> lp_ys_;
+    std::vector<double> lp_ts_;
 
     // LucasKanade: per-pixel per-polarity timestamp deques (event-count
     // histogram). Lazily allocated by ensure_lk_ts() when LK mode runs.

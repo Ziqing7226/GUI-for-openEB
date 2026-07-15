@@ -1,0 +1,112 @@
+/* base.qss.in — token-based Qt stylesheet template.
+ *
+ * %token% placeholders are replaced at runtime by
+ * ThemeController::apply_stylesheet() with the values from tokens.h for the
+ * currently selected (color, mode). Tokens:
+ *   %bg-primary%  %bg-panel%  %bg-input%  %bg-hover%
+ *   %fg-primary%  %fg-secondary%  %fg-muted%
+ *   %accent%  %border%
+ */
+
+QMainWindow, QWidget {
+    background-color: %bg-primary%;
+    color: %fg-primary%;
+}
+QDockWidget, QTabWidget, QScrollArea, QGroupBox {
+    background-color: %bg-primary%;
+    color: %fg-primary%;
+}
+QDockWidget::title { background-color: %bg-panel%; padding: 4px; }
+
+QTabBar::tab {
+    background-color: %bg-input%;
+    color: %fg-primary%;
+    padding: 4px 12px;
+    border: 1px solid %border%;
+    border-radius: 5px;
+}
+QTabBar::tab:selected { background-color: %bg-primary%; }
+
+QPushButton {
+    background-color: %bg-input%;
+    color: %fg-primary%;
+    border: 1px solid %border%;
+    border-radius: 5px;
+    padding: 6px 14px;
+    min-height: 26px;
+}
+QPushButton:hover    { background-color: %bg-hover%; }
+QPushButton:pressed  { background-color: %bg-panel%; }
+QPushButton:focus    { outline: 2px solid %accent%; outline-offset: 1px; }
+QPushButton:disabled { color: %fg-muted%; background-color: %bg-panel%; }
+
+QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {
+    background-color: %bg-input%;
+    color: %fg-primary%;
+    border: 1px solid %border%;
+    border-radius: 5px;
+    padding: 4px 8px;
+    min-height: 26px;
+    max-width: 110px;
+}
+QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus {
+    border: 1px solid %accent%;
+}
+QSlider { background-color: transparent; border: none; }
+
+QCheckBox, QRadioButton, QLabel { color: %fg-primary%; }
+QCheckBox:disabled, QRadioButton:disabled, QLabel:disabled { color: %fg-muted%; }
+
+QToolBar { background-color: %bg-panel%; border: none; spacing: 2px; padding: 2px; }
+QToolBar QToolButton {
+    background: transparent;
+    border: none;
+    border-radius: 5px;
+    padding: 6px;
+}
+QToolBar QToolButton:hover    { background-color: %bg-hover%; }
+QToolBar QToolButton:checked  { background-color: %accent%; color: white; }
+QToolBar QToolButton:disabled { color: %fg-muted%; }
+
+QStatusBar { background-color: %bg-panel%; color: %fg-primary%; }
+QStatusBar::item { border: none; }
+QStatusBar QWidget, QStatusBar QLabel { background-color: %bg-panel%; color: %fg-primary%; }
+
+QMenuBar { background-color: %bg-panel%; color: %fg-primary%; }
+QMenuBar::item:selected { background-color: %bg-input%; }
+QMenu { background-color: %bg-panel%; color: %fg-primary%; border: 1px solid %border%; }
+QMenu::item:selected { background-color: %bg-input%; }
+
+QListWidget, QTreeWidget, QTableWidget {
+    background-color: %bg-input%;
+    color: %fg-primary%;
+}
+QHeaderView::section {
+    background-color: %bg-panel%;
+    color: %fg-primary%;
+    padding: 2px;
+    border: 1px solid %border%;
+}
+
+QGroupBox {
+    border: 1px solid %border%;
+    border-radius: 5px;
+    margin-top: 8px;
+}
+QGroupBox::title { color: %fg-secondary%; subcontrol-origin: margin; left: 8px; }
+
+QScrollBar:vertical { background: %bg-panel%; width: 10px; }
+QScrollBar:horizontal { background: %bg-panel%; height: 10px; }
+QScrollBar::handle { background: %border%; border-radius: 3px; }
+QScrollBar::add-line, QScrollBar::sub-line { border: none; background: none; }
+
+QLabel#WindowTitleLabel { color: %fg-primary%; font-weight: bold; }
+
+/* Class-based hint/info/muted labels — replaces naked hex in panels. */
+QLabel[class="hint"]  { color: %fg-muted%; font-style: italic; }
+QLabel[class="info"]  { color: %fg-secondary%; }
+QLabel[class="muted"] { color: %fg-muted%; }
+
+/* Status bar indicators. */
+QLabel[class="status-conn"] { color: %fg-primary%; }
+QLabel[class="status-disc"] { color: %fg-muted%; }

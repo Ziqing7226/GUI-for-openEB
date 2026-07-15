@@ -116,6 +116,8 @@ private:
         int last_ri{0};
     };
 
+    struct Cand { int ti; int ri; float val; };  // candidate peak (OPT-33)
+
     void rebuild(int num_rho_bins_hint) {
         cos_.assign(static_cast<std::size_t>(num_theta_bins_), 0.0f);
         sin_.assign(static_cast<std::size_t>(num_theta_bins_), 0.0f);
@@ -171,8 +173,8 @@ private:
     /// @brief Finds local maxima above threshold, applies non-maximum
     /// suppression in (θ, ρ) space and associates persistent tracks.
     void find_peaks(std::vector<HoughLine>& out) {
-        struct Cand { int ti; int ri; float val; };
-        std::vector<Cand> cands;
+        cands_.clear();
+        auto& cands = cands_;
         for (int ti = 0; ti < num_theta_bins_; ++ti) {
             for (int ri = 0; ri < num_rho_bins_; ++ri) {
                 const float v = accum_[idx(ti, ri)];
@@ -286,6 +288,7 @@ private:
     std::vector<float> accum_;
     Metavision::timestamp last_t_{-1};
     std::vector<Track> tracks_;
+    std::vector<Cand> cands_;  // reused per-packet (OPT-33)
     int next_track_id_{0};
 };
 

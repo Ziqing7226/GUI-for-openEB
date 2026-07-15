@@ -3,10 +3,14 @@
 #include "settings_panel.h"
 
 #include <QGroupBox>
+#include <QHBoxLayout>
 #include <QLabel>
+#include <QSettings>
 #include <QScrollArea>
-#include <QTabWidget>
+#include <QStackedWidget>
+#include <QStyle>
 #include <QVBoxLayout>
+#include <utility>
 
 #include "algorithms_panel.h"
 #include "biases_panel.h"
@@ -21,105 +25,190 @@
 #include "trigger_panel.h"
 #include "algo_bridge/algo_bridge.h"
 #include "app/file_converter.h"
+#include "widgets/activity_bar.h"
 
 namespace gui {
+
+AbstractPanel* SettingsPanel::register_panel(std::unique_ptr<AbstractPanel> panel) {
+    AbstractPanel* raw = panel.get();
+    panel_index_[raw->panel_id()] = raw;
+    panels_.push_back(std::move(panel));
+    return raw;
+}
+
+AbstractPanel* SettingsPanel::find_panel(const QString& id) const {
+    auto it = panel_index_.find(id);
+    return it == panel_index_.end() ? nullptr : it->second;
+}
+
+std::vector<AbstractPanel*> SettingsPanel::panels_in_group(const QString& group) const {
+    std::vector<AbstractPanel*> out;
+    for (const auto& p : panels_) {
+        if (p->panel_group() == group) out.push_back(p.get());
+    }
+    return out;
+}
 
 SettingsPanel::SettingsPanel(AlgoBridge* bridge, FileConverter* converter,
                              QWidget* parent)
     : QWidget(parent) {
-    auto* outer = new QVBoxLayout(this);
+    // --- VSCode-style sidebar (gui_optimization.md §10.3 + §11) ---
+    // ActivityBar (48px icon column) on the left + QStackedWidget on the
+    // right. Each group becomes one page containing a QScrollArea with the
+    // group's panels stacked directly (no CollapsibleSection — the
+    // ActivityBar already handles group switching, so per-group collapse is
+    // redundant per §11.2 point 1). Selecting an ActivityBar entry switches
+    // the page. The active group is persisted under "sidebar/active_group".
+    auto* outer = new QHBoxLayout(this);
     outer->setContentsMargins(0, 0, 0, 0);
+    outer->setSpacing(0);
 
-    // 两个页面：基础功能 + 算法模块
-    tabs_ = new QTabWidget(this);
-    tabs_->setTabPosition(QTabWidget::North);
-    outer->addWidget(tabs_);
+    activity_bar_ = new ActivityBar(this);
+    outer->addWidget(activity_bar_);
 
-    // --- Tab 1: 基础功能 (Basic Features) ---
-    auto* basic_scroll = new QScrollArea(tabs_);
-    basic_scroll->setWidgetResizable(true);
-    basic_scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    auto* basic_host = new QWidget(basic_scroll);
-    auto* basic_layout = new QVBoxLayout(basic_host);
-    basic_layout->setContentsMargins(6, 6, 6, 6);
-    basic_layout->setSpacing(8);
+    stacked_ = new QStackedWidget(this);
+    outer->addWidget(stacked_, 1);
 
-    auto add_group = [&](const QString& title, QWidget* body, bool enabled = true) {
-        auto* gb = new QGroupBox(title, basic_host);
-        auto* gl = new QVBoxLayout(gb);
-        gl->setContentsMargins(6, 6, 6, 6);
-        gl->addWidget(body);
-        gb->setCheckable(false);
-        gb->setEnabled(enabled);
-        basic_layout->addWidget(gb);
-        return gb;
+    // Register every panel into the registry first (ownership via panels_).
+    // The unique_ptr is the authoritative owner; addWidget reparents each
+    // widget into the group page (Qt removes it from the old parent first),
+    // which is safe — deleting a QWidget removes it from its parent's child
+    // list, so the unique_ptr can destroy it later.
+    register_panel(std::make_unique<DevicesPanel>(nullptr));
+    register_panel(std::make_unique<InformationPanel>(nullptr));
+    register_panel(std::make_unique<StatisticsPanel>(nullptr));
+    register_panel(std::make_unique<DisplayPanel>(nullptr));
+    register_panel(std::make_unique<BiasesPanel>(nullptr));
+    register_panel(std::make_unique<RoiPanel>(nullptr));
+    register_panel(std::make_unique<EspPanel>(nullptr));
+    register_panel(std::make_unique<TriggerPanel>(nullptr));
+    register_panel(std::make_unique<PreprocessingPanel>(nullptr));
+    register_panel(std::make_unique<FileToolsPanel>(converter, nullptr));
+    register_panel(std::make_unique<AlgorithmsPanel>(bridge, nullptr));
+
+    // Group order, icon, and tooltip (design §3.7.3 table + §10.3.4 icon
+    // mapping). No default_collapsed — CollapsibleSection removed (§11.2).
+    struct GroupDef {
+        QString name;
+        QString icon;
+        QString tooltip;
+    };
+    const GroupDef groups[] = {
+        {QStringLiteral("Camera"),          QStringLiteral("camera"),
+         tr("Camera devices and connection info")},
+        {QStringLiteral("Display & Stats"), QStringLiteral("chart"),
+         tr("Display settings and statistics")},
+        {QStringLiteral("Hardware"),        QStringLiteral("cpu"),
+         tr("Biases, ROI, ESP and trigger configuration")},
+        {QStringLiteral("Algorithms"),      QStringLiteral("blocks"),
+         tr("Algorithm selection and preprocessing")},
+        {QStringLiteral("Tools"),           QStringLiteral("tools"),
+         tr("File conversion and tools")},
     };
 
-    auto add_placeholder = [&](const QString& title, const QString& note) {
-        auto* gb = new QGroupBox(title, basic_host);
-        auto* gl = new QVBoxLayout(gb);
-        gl->setContentsMargins(6, 6, 6, 6);
-        auto* lbl = new QLabel(note, gb);
-        lbl->setWordWrap(true);
-        lbl->setStyleSheet("color: #888; font-style: italic;");
-        gl->addWidget(lbl);
-        gb->setEnabled(false);
-        basic_layout->addWidget(gb);
-        return gb;
-    };
+    for (const auto& g : groups) {
+        const auto panels = panels_in_group(g.name);
+        if (panels.empty()) continue;
 
-    devices_ = new DevicesPanel(basic_host);
-    add_group(tr("Devices"), devices_);
+        // Each group lives in its own scrollable page so only one group is
+        // visible at a time (VSCode Activity Bar behavior). Panels are added
+        // directly to the page layout — no CollapsibleSection wrapper.
+        auto* scroll = new QScrollArea(stacked_);
+        scroll->setWidgetResizable(true);
+        scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        auto* host = new QWidget(scroll);
+        auto* host_layout = new QVBoxLayout(host);
+        host_layout->setContentsMargins(6, 6, 6, 6);
+        host_layout->setSpacing(8);
 
-    information_ = new InformationPanel(basic_host);
-    add_group(tr("Information"), information_);
+        for (auto* p : panels) {
+            host_layout->addWidget(p);
+        }
 
-    statistics_ = new StatisticsPanel(basic_host);
-    add_group(tr("Statistics"), statistics_);
+        // The Tools group also holds the Calibration placeholder (Phase 9
+        // install target for set_calibration_panel). The wizard itself is
+        // launched from the Tools menu; this group box just shows a hint.
+        if (g.name == QStringLiteral("Tools")) {
+            calibration_group_ = new QGroupBox(tr("Calibration"), host);
+            auto* gl = new QVBoxLayout(calibration_group_);
+            gl->setContentsMargins(6, 6, 6, 6);
+            auto* lbl = new QLabel(
+                tr("Open via menu: Tools → Intrinsic Wizard..."),
+                calibration_group_);
+            lbl->setWordWrap(true);
+            lbl->setProperty("class", "hint");
+            gl->addWidget(lbl);
+            calibration_group_->setEnabled(false);
+            host_layout->addWidget(calibration_group_);
+        }
 
-    display_ = new DisplayPanel(basic_host);
-    add_group(tr("Display"), display_);
+        host_layout->addStretch(1);
+        scroll->setWidget(host);
 
-    // Phase 2: camera control panels (Bias / ROI / ESP / Trigger).
-    biases_panel_  = new BiasesPanel(basic_host);
-    add_group(tr("Biases"), biases_panel_);
-    roi_     = new RoiPanel(basic_host);
-    add_group(tr("ROI"), roi_);
-    esp_     = new EspPanel(basic_host);
-    add_group(tr("ESP"), esp_);
-    trigger_ = new TriggerPanel(basic_host);
-    add_group(tr("Trigger"), trigger_);
+        stacked_->addWidget(scroll);
+        activity_bar_->add_button(g.icon, g.name, g.tooltip);
+    }
 
-    // Phase 5: event preprocessing.
-    preprocessing_ = new PreprocessingPanel(basic_host);
-    add_group(tr("Preprocessing"), preprocessing_);
+    // ActivityBar → QStackedWidget page switch.
+    connect(activity_bar_, &ActivityBar::group_selected, this,
+            [this](int index, const QString& title) {
+                if (index >= 0 && index < stacked_->count()) {
+                    stacked_->setCurrentIndex(index);
+                    QSettings().setValue(QStringLiteral("sidebar/active_group"),
+                                         index);
+                    emit current_title_changed(title);
+                }
+            });
 
-    file_tools_ = new FileToolsPanel(converter, basic_host);
-    add_group(tr("File Tools"), file_tools_, converter != nullptr);
+    // ActivityBar toggle button → hide/show sidebar content (§11.2 point 5).
+    connect(activity_bar_, &ActivityBar::toggle_clicked, this,
+            [this]() { toggle_content(); });
 
-    // Calibration — placeholder until CalibrationWizard is installed.
-    calibration_group_ = add_placeholder(tr("Calibration"),
-                                         tr("Open via menu: Calibration → Intrinsic Wizard..."));
-
-    basic_layout->addStretch(1);
-    basic_scroll->setWidget(basic_host);
-    tabs_->addTab(basic_scroll, tr("Basic"));
-
-    // --- Tab 2: Algorithms ---
-    // AlgorithmsPanel already contains the global Algorithm ROI selector at
-    // its top, followed by the scrollable algorithm list. All algorithm
-    // configuration lives here — the Algorithm menu bar is removed from
-    // MainWindow to avoid duplication.
-    auto* algo_scroll = new QScrollArea(tabs_);
-    algo_scroll->setWidgetResizable(true);
-    algo_scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    algorithms_ = new AlgorithmsPanel(bridge, algo_scroll);
-    algo_scroll->setWidget(algorithms_);
-    tabs_->addTab(algo_scroll, tr("Algorithms"));
-
-    // Default to the basic tab.
-    tabs_->setCurrentIndex(0);
+    // Restore the last active group (default 0 = Camera).
+    const int saved = QSettings()
+                          .value(QStringLiteral("sidebar/active_group"), 0)
+                          .toInt();
+    activity_bar_->select(saved);
 }
+
+QString SettingsPanel::current_title() const {
+    return activity_bar_ ? activity_bar_->title_at(activity_bar_->current_index())
+                         : QString();
+}
+
+void SettingsPanel::refresh_icons() {
+    if (activity_bar_) activity_bar_->refresh_icons();
+    // Force QSS re-polish on the entire panel so all child widgets pick up the
+    // new theme colors (§12.2.2 — theme color lag fix).
+    style()->unpolish(this);
+    style()->polish(this);
+    update();
+}
+
+void SettingsPanel::toggle_content() {
+    if (!stacked_) return;
+    const bool new_visible = !stacked_->isVisible();
+    stacked_->setVisible(new_visible);
+    emit content_toggled(new_visible);
+}
+
+bool SettingsPanel::is_content_visible() const {
+    return stacked_ && stacked_->isVisible();
+}
+
+// Type-safe accessors — each delegates to find_panel() + static_cast so the
+// registry (panels_ / panel_index_) is the single source of truth.
+InformationPanel*   SettingsPanel::information_panel()    const { return static_cast<InformationPanel*>(find_panel(QStringLiteral("information"))); }
+StatisticsPanel*    SettingsPanel::statistics_panel()     const { return static_cast<StatisticsPanel*>(find_panel(QStringLiteral("statistics"))); }
+DisplayPanel*       SettingsPanel::display_panel()        const { return static_cast<DisplayPanel*>(find_panel(QStringLiteral("display"))); }
+DevicesPanel*       SettingsPanel::devices_panel()        const { return static_cast<DevicesPanel*>(find_panel(QStringLiteral("devices"))); }
+BiasesPanel*        SettingsPanel::biases_panel()         const { return static_cast<BiasesPanel*>(find_panel(QStringLiteral("biases"))); }
+RoiPanel*           SettingsPanel::roi_panel()            const { return static_cast<RoiPanel*>(find_panel(QStringLiteral("roi"))); }
+EspPanel*           SettingsPanel::esp_panel()            const { return static_cast<EspPanel*>(find_panel(QStringLiteral("esp"))); }
+TriggerPanel*       SettingsPanel::trigger_panel()        const { return static_cast<TriggerPanel*>(find_panel(QStringLiteral("trigger"))); }
+PreprocessingPanel* SettingsPanel::preprocessing_panel() const { return static_cast<PreprocessingPanel*>(find_panel(QStringLiteral("preprocessing"))); }
+AlgorithmsPanel*    SettingsPanel::algorithms_panel()     const { return static_cast<AlgorithmsPanel*>(find_panel(QStringLiteral("algorithms"))); }
+FileToolsPanel*     SettingsPanel::file_tools_panel()     const { return static_cast<FileToolsPanel*>(find_panel(QStringLiteral("file_tools"))); }
 
 void SettingsPanel::set_calibration_panel(QWidget* panel) {
     if (!panel || !calibration_group_) return;

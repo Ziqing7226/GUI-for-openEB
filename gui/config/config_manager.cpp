@@ -8,6 +8,8 @@
 #include <QJsonObject>
 #include <QJsonValue>
 
+#include <map>
+
 #include <metavision/hal/facilities/i_antiflicker_module.h>
 #include <metavision/hal/facilities/i_erc_module.h>
 #include <metavision/hal/facilities/i_event_trail_filter_module.h>
@@ -441,26 +443,44 @@ bool ConfigManager::apply_algo_state(AlgoBridge* bridge, const QJsonObject& obj,
         return false;
     }
     // Apply parameter values to live instances. Instances not yet created by
-    // AlgorithmsPanel are skipped (they will get factory defaults when created).
+    // AlgorithmsPanel are cached via bridge->cache_algo_params() so they are
+    // replayed when the instance is eventually created (N1). Without this,
+    // loading a config before enabling an algorithm would silently discard
+    // all saved parameters.
     const auto algos = obj.value("algorithms").toObject();
     bool ok = true;
+    QStringList unknown_algos;
     for (auto it = algos.begin(); it != algos.end(); ++it) {
         const auto name = it.key().toStdString();
         if (!bridge->find(name)) {
-            // Unknown algorithm — skip but flag failure.
+            // Unknown algorithm — skip but flag failure with a descriptive
+            // message so the user knows which entries were rejected (BUG-R1).
             ok = false;
+            unknown_algos << it.key();
             continue;
         }
-        auto live = bridge->find_live(name);
-        if (!live) continue;  // no live instance to apply to
         const auto entry = it.value().toObject();
         const auto params = entry.value("params").toObject();
-        for (auto pit = params.begin(); pit != params.end(); ++pit) {
-            live->set_param(pit.key().toStdString(), pit.value().toString().toStdString());
+        auto live = bridge->find_live(name);
+        if (live) {
+            for (auto pit = params.begin(); pit != params.end(); ++pit) {
+                live->set_param(pit.key().toStdString(), pit.value().toString().toStdString());
+            }
+            if (entry.contains("enabled")) {
+                live->set_enabled(entry.value("enabled").toBool());
+            }
+        } else {
+            // No live instance — cache the params so create() can replay
+            // them when the algorithm is later enabled (N1).
+            std::map<std::string, std::string> cached;
+            for (auto pit = params.begin(); pit != params.end(); ++pit) {
+                cached[pit.key().toStdString()] = pit.value().toString().toStdString();
+            }
+            bridge->cache_algo_params(name, cached);
         }
-        if (entry.contains("enabled")) {
-            live->set_enabled(entry.value("enabled").toBool());
-        }
+    }
+    if (!unknown_algos.isEmpty()) {
+        err = tr("Unknown algorithm(s) in config: %1").arg(unknown_algos.join(", "));
     }
     return ok;
 }

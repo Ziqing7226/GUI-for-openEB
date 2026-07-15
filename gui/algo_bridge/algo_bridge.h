@@ -7,11 +7,12 @@
 // The bridge真正实例化并调用 algo/cv 与 algo/analytics 的真实算法类。
 // AlgoInstance 持有一个 AlgoBackend，push_events 时零拷贝 reinterpret_cast
 // EventCD→gui_algo::Event 后调用真实 process()/filter()，pull_result 返回
-// 过滤事件 + 叠加层 + 帧。注册表列出全部 31 个自研模块 + 30 个 openEB 能力。
+// 过滤事件 + 叠加层 + 帧。注册表列出全部 29 个自研模块 + 30 个 openEB 能力。
 
 #ifndef GUI_ALGO_BRIDGE_ALGO_BRIDGE_H
 #define GUI_ALGO_BRIDGE_ALGO_BRIDGE_H
 
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -22,7 +23,14 @@
 
 #include "algo_backend.h"  // AlgoBackend, AlgoResult, Overlay* structs
 
+class QImage;  // Qt forward declaration (used in apply_strategy signature).
+
 namespace gui {
+
+// Forward declarations to break the include cycle with gui/display/display_strategy.h
+// (which itself only forward-declares AlgoInstance/AlgoInfo/AlgoResult).
+class IDisplayStrategy;
+struct DisplayContext;
 
 /// How an algorithm's result is presented in the UI (design §5.6.1).
 enum class AlgoDisplayMode {
@@ -67,6 +75,11 @@ class AlgoInstance {
 public:
     explicit AlgoInstance(const AlgoInfo& info, int width = 1280, int height = 720);
 
+    // Defined out-of-line (in algo_bridge.cpp) so the std::unique_ptr<IDisplayStrategy>
+    // member can be destroyed with a complete type — IDisplayStrategy is only
+    // forward-declared in this header.
+    ~AlgoInstance();
+
     const AlgoInfo& info() const { return info_; }
 
     void set_param(const std::string& key, const std::string& value);
@@ -82,6 +95,15 @@ public:
     /// Clears the overload flag (called when the user re-enables the algo).
     void clear_overload();
 
+    /// @brief Total number of events pushed to this instance (received via
+    /// push_events) since it was last enabled. Thread-safe.
+    std::size_t total_pushed() const;
+
+    /// @brief Total number of events dropped by the flood guard (capped
+    /// batches, auto-disable) since the instance was last enabled.
+    /// Thread-safe. Drop rate = total_dropped() / total_pushed().
+    std::size_t total_dropped() const;
+
     /// Push events to the algorithm backend. Thread-safe.
     /// A flood guard caps the batch size and auto-disables the instance if
     /// events arrive far faster than the algo can process them, preventing
@@ -90,6 +112,13 @@ public:
 
     /// Pull the latest result (filtered events + overlay + frame).
     AlgoResult pull_result();
+
+    /// Dispatches the already-pulled @p result to this instance's display
+    /// strategy (selected at construction from info().display_mode). The
+    /// caller fills @p ctx with its display members; apply_strategy() then
+    /// sets ctx.instance = this and forwards to the strategy. Replaces the
+    /// former switch in MainWindow::process_algo_results() (design §3.5.4).
+    void apply_strategy(QImage& frame, AlgoResult& result, DisplayContext& ctx);
 
     /// Reset the underlying backend.
     void reset();
@@ -106,6 +135,9 @@ private:
     mutable std::mutex mutex_;
     std::unordered_map<std::string, std::string> param_values_;
     std::unique_ptr<AlgoBackend> backend_;
+    // Display strategy selected from info_.display_mode at construction
+    // (design §3.5.3). Owned by the instance; apply_strategy() forwards to it.
+    std::unique_ptr<IDisplayStrategy> strategy_;
     bool enabled_{false};
 
     // --- Flood guard (design §5.6.7) -------------------------------------
@@ -120,6 +152,16 @@ private:
     Metavision::timestamp last_batch_t_{0};
     static constexpr std::size_t kMaxBatchEvents = 50000;
     static constexpr int kFloodStrikes = 4;
+
+    // --- Drop-rate telemetry (design §5.6.7) ----------------------------
+    // total_pushed_ = events received via push_events (the denominator).
+    // total_dropped_ = events discarded by the flood guard (capped batches,
+    // auto-disable, or calls while disabled/overloaded). The ratio
+    // total_dropped_/total_pushed_ is surfaced in InformationPanel as the
+    // max drop rate across all live instances. Reset in set_enabled(true)
+    // so re-enabling gives a fresh session.
+    std::size_t total_pushed_{0};
+    std::size_t total_dropped_{0};
 };
 
 /// @brief Unified algorithm-call bridge (design §3.8).
@@ -147,6 +189,27 @@ public:
     /// @brief Sets the actual sensor dimensions so new instances are created
     /// with the correct width/height instead of the 1280x720 default.
     void set_sensor_dimensions(int width, int height);
+
+    /// @brief Applies a shared preprocessing parameter (preproc_*) to every
+    /// live self-developed instance. Preprocessing (noise filter + 1/4
+    /// downsample) is stackable and overlays on top of any main algorithm;
+    /// it is NOT mutually exclusive. Used by AlgorithmsPanel's preproc
+    /// selector so a single control updates all enabled algorithms.
+    void apply_global_preproc(const std::string& key, const std::string& value);
+
+    /// @brief Applies shared ROI parameters (roi_*) to every live
+    /// self-developed instance and caches them so future instances
+    /// created via create() inherit the current ROI settings (N3).
+    void apply_global_roi(const std::string& enabled, const std::string& x,
+                          const std::string& y, const std::string& w,
+                          const std::string& h);
+
+    /// @brief Caches per-algorithm parameters for an instance that is not
+    /// yet live. The cached values are replayed in create() so that
+    /// parameters loaded from a config file are not lost when the
+    /// algorithm is later enabled (N1).
+    void cache_algo_params(const std::string& name,
+                           const std::map<std::string, std::string>& params);
 
     /// @brief Looks up a live instance by name. Returns nullptr if no live
     /// instance exists (either never created or already destroyed).
@@ -179,6 +242,21 @@ private:
     mutable std::mutex live_mutex_;
     int sensor_w_{1280};
     int sensor_h_{720};
+    /// Cache of the latest global preproc_* parameter values (BUG-R4).
+    /// Replayed in create() so new instances inherit the shared
+    /// preprocessing state even when created by other code paths
+    /// (ConfigManager, calibration wizard).
+    std::unordered_map<std::string, std::string> preproc_cache_;
+
+    /// Cache of the latest global roi_* parameter values (N3). Replayed
+    /// in create() alongside preproc_cache_ so new instances inherit the
+    /// current ROI settings.
+    std::unordered_map<std::string, std::string> roi_cache_;
+
+    /// Per-algorithm parameter cache for instances not yet live (N1).
+    /// Populated by ConfigManager::apply_algo_state when an algorithm has
+    /// no live instance; replayed in create() so saved values are not lost.
+    std::unordered_map<std::string, std::map<std::string, std::string>> algo_param_cache_;
 };
 
 } // namespace gui

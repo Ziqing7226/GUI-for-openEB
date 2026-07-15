@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(GUI_for_openEB LANGUAGES CXX VERSION 0.1.0)
+project(GUI_for_openEB LANGUAGES CXX VERSION 1.9.0)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -27,9 +27,11 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTOUIC ON)
 set(CMAKE_AUTORCC ON)
 
+# --- Testing ---------------------------------------------------------------
+# enable_testing() must be called BEFORE add_subdirectory(gui) so that the
+# gui/tests gtest_discover_tests() calls (design §3.11) register with CTest.
+enable_testing()
+
 add_subdirectory(algo)
 add_subdirectory(gui)
-
-# --- Testing ---------------------------------------------------------------
-enable_testing()
 add_subdirectory(algo/tests)

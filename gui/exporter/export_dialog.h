@@ -9,7 +9,6 @@
 class QLineEdit;
 class QComboBox;
 class QSpinBox;
-class QDoubleSpinBox;
 class QCheckBox;
 class QProgressBar;
 class QPushButton;
@@ -40,7 +39,7 @@ private:
     QLineEdit* edt_output_{nullptr};
     QComboBox* cmb_format_{nullptr};
     QSpinBox* spn_fps_{nullptr};
-    QDoubleSpinBox* spn_accum_{nullptr};
+    QSpinBox* spn_accum_{nullptr};
     QSpinBox* spn_quality_{nullptr};
     QCheckBox* chk_color_{nullptr};
     QProgressBar* progress_{nullptr};

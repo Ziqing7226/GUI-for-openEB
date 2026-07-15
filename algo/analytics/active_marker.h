@@ -87,27 +87,20 @@ public:
         if (width_ <= 0 || height_ <= 0) return out;
         // Threshold the heatmap into a binary mask.
         cv::Mat mask(height_, width_, CV_8UC1, cv::Scalar(0));
+        // Determine max count for color normalization (merged with mask build).
+        int max_count = heatmap_threshold_;
         for (int y = 0; y < height_; ++y) {
+            auto* row = mask.ptr<std::uint8_t>(y);
+            const std::size_t row_offset = static_cast<std::size_t>(y) * width_;
             for (int x = 0; x < width_; ++x) {
-                const std::size_t idx =
-                    static_cast<std::size_t>(y) * width_ + x;
-                if (heatmap_[idx] >= heatmap_threshold_) {
-                    mask.at<std::uint8_t>(y, x) = 255;
-                }
+                const int cnt = heatmap_[row_offset + x];
+                if (cnt >= heatmap_threshold_) row[x] = 255;
+                if (cnt > max_count) max_count = cnt;
             }
         }
         cv::Mat labels, stats, centroids;
         const int n_labels =
             cv::connectedComponentsWithStats(mask, labels, stats, centroids, 8);
-        // Determine max count for color normalization.
-        int max_count = heatmap_threshold_;
-        for (int y = 0; y < height_; ++y) {
-            for (int x = 0; x < width_; ++x) {
-                const std::size_t idx =
-                    static_cast<std::size_t>(y) * width_ + x;
-                if (heatmap_[idx] > max_count) max_count = heatmap_[idx];
-            }
-        }
         for (int i = 1; i < n_labels; ++i) {
             const int area = stats.at<int>(i, cv::CC_STAT_AREA);
             if (area < min_cluster_area_) continue;
@@ -264,6 +257,7 @@ private:
     ///        ISI of events in the 3x3 region. Returns 0 if insufficient data.
     float estimate_frequency(int u, int v) const {
         std::vector<Metavision::timestamp> ts;
+        ts.reserve(64);
         for (const Event& e : buffer_) {
             if (std::abs(static_cast<int>(e.x) - u) <= 1 &&
                 std::abs(static_cast<int>(e.y) - v) <= 1) {

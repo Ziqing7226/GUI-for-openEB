@@ -13,6 +13,8 @@
 
 #include <QWidget>
 
+#include "abstract_panel.h"
+
 class QCheckBox;
 class QComboBox;
 class QSpinBox;
@@ -24,18 +26,18 @@ namespace gui {
 
 class CameraController;
 
-class EspPanel : public QWidget {
+class EspPanel : public AbstractPanel {
     Q_OBJECT
 public:
     explicit EspPanel(QWidget* parent = nullptr);
 
-public slots:
-    void on_camera_connected(CameraController* controller);
-    void on_camera_disconnected();
+    QString panel_id() const override { return QStringLiteral("esp"); }
+    QString panel_title() const override { return tr("ESP"); }
+    QString panel_group() const override { return QStringLiteral("Hardware"); }
 
-signals:
-    void info_message(const QString& msg);
-    void error_message(const QString& msg);
+public slots:
+    void on_camera_connected(CameraController* controller) override;
+    void on_camera_disconnected() override;
 
 private:
     void populate();
@@ -67,7 +69,6 @@ private:
     QSpinBox*     erc_rate_{nullptr};
 
     QLabel*       hint_label_{nullptr};
-    CameraController* controller_{nullptr};
 };
 
 } // namespace gui

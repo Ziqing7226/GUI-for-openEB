@@ -9,6 +9,7 @@
 #include <QLabel>
 #include <QSignalBlocker>
 #include <QSpinBox>
+#include <QStyle>
 #include <QVBoxLayout>
 
 #include <metavision/hal/facilities/i_trigger_in.h>
@@ -29,14 +30,14 @@ QString channel_label(Metavision::I_TriggerIn::Channel ch) {
 }
 } // namespace
 
-TriggerPanel::TriggerPanel(QWidget* parent) : QWidget(parent) {
+TriggerPanel::TriggerPanel(QWidget* parent) : AbstractPanel(parent) {
     auto* outer = new QVBoxLayout(this);
     outer->setContentsMargins(0, 0, 0, 0);
     outer->setSpacing(6);
 
     hint_label_ = new QLabel(tr("No live camera connected."), this);
     hint_label_->setWordWrap(true);
-    hint_label_->setStyleSheet("color: #888; font-style: italic;");
+    hint_label_->setProperty("class", "hint");
     outer->addWidget(hint_label_);
 
     // --- Trigger In -------------------------------------------------------
@@ -45,7 +46,7 @@ TriggerPanel::TriggerPanel(QWidget* parent) : QWidget(parent) {
     tin_layout_->setContentsMargins(8, 8, 8, 8);
     tin_hint_ = new QLabel(QString(), tin_group_);
     tin_hint_->setWordWrap(true);
-    tin_hint_->setStyleSheet("color: #888; font-style: italic;");
+    tin_hint_->setProperty("class", "hint");
     tin_layout_->addWidget(tin_hint_);
     outer->addWidget(tin_group_);
 
@@ -87,8 +88,8 @@ TriggerPanel::TriggerPanel(QWidget* parent) : QWidget(parent) {
     // --- Wire -------------------------------------------------------------
     // Trigger Out enable
     connect(tout_enable_, &QCheckBox::toggled, this, [this](bool on) {
-        if (!controller_) return;
-        auto* to = controller_->trigger_out_facility();
+        if (!camera_) return;
+        auto* to = camera_->trigger_out_facility();
         if (!to) return;
         try {
             if (on) to->enable(); else to->disable();
@@ -102,8 +103,8 @@ TriggerPanel::TriggerPanel(QWidget* parent) : QWidget(parent) {
         if (us <= 0) return;
         QSignalBlocker b(tout_freq_);
         tout_freq_->setValue(1.0e6 / static_cast<double>(us));
-        if (!controller_) return;
-        auto* to = controller_->trigger_out_facility();
+        if (!camera_) return;
+        auto* to = camera_->trigger_out_facility();
         if (!to) return;
         try { to->set_period(static_cast<uint32_t>(us)); }
         catch (const std::exception& e) { emit error_message(QString::fromUtf8(e.what())); }
@@ -119,16 +120,16 @@ TriggerPanel::TriggerPanel(QWidget* parent) : QWidget(parent) {
         tout_period_->setValue(us);
         // The period widget's signals are blocked above, so its handler will
         // NOT fire — we must apply to the hardware here.
-        if (!controller_) return;
-        auto* to = controller_->trigger_out_facility();
+        if (!camera_) return;
+        auto* to = camera_->trigger_out_facility();
         if (!to) return;
         try { to->set_period(static_cast<uint32_t>(us)); }
         catch (const std::exception& e) { emit error_message(QString::fromUtf8(e.what())); }
     });
     connect(tout_duty_, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this,
             [this](double v) {
-        if (!controller_) return;
-        auto* to = controller_->trigger_out_facility();
+        if (!camera_) return;
+        auto* to = camera_->trigger_out_facility();
         if (!to) return;
         try { to->set_duty_cycle(v); }
         catch (const std::exception& e) { emit error_message(QString::fromUtf8(e.what())); }
@@ -136,38 +137,40 @@ TriggerPanel::TriggerPanel(QWidget* parent) : QWidget(parent) {
 }
 
 void TriggerPanel::on_camera_connected(CameraController* controller) {
-    controller_ = controller;
+    camera_ = controller;
     populate();
 }
 
 void TriggerPanel::on_camera_disconnected() {
-    controller_ = nullptr;
+    camera_ = nullptr;
     clear_trigger_in_rows();
     tin_group_->setEnabled(false);
     tout_group_->setEnabled(false);
     tin_hint_->clear();
     hint_label_->setText(tr("No live camera connected."));
-    hint_label_->setStyleSheet("color: #888; font-style: italic;");
+    hint_label_->setProperty("class", "hint");
+    restyle(hint_label_);
 }
 
 void TriggerPanel::populate() {
-    if (!controller_) return;
+    if (!camera_) return;
     populate_trigger_in();
     populate_trigger_out();
 
-    const bool any = controller_->trigger_in_facility() || controller_->trigger_out_facility();
+    const bool any = camera_->trigger_in_facility() || camera_->trigger_out_facility();
     if (any) {
         hint_label_->setText(tr("Trigger facilities loaded."));
-        hint_label_->setStyleSheet("color: #444;");
+        hint_label_->setProperty("class", "info");
     } else {
         hint_label_->setText(tr("No trigger facilities available on this camera."));
-        hint_label_->setStyleSheet("color: #888; font-style: italic;");
+        hint_label_->setProperty("class", "hint");
     }
+    restyle(hint_label_);
 }
 
 void TriggerPanel::populate_trigger_in() {
     clear_trigger_in_rows();
-    auto* tin = controller_ ? controller_->trigger_in_facility() : nullptr;
+    auto* tin = camera_ ? camera_->trigger_in_facility() : nullptr;
     if (!tin) {
         tin_group_->setEnabled(false);
         tin_hint_->setText(tr("Trigger In not supported."));
@@ -190,8 +193,8 @@ void TriggerPanel::populate_trigger_in() {
         // Insert before the hint label (which is the first child); append after it.
         tin_layout_->addWidget(cb);
         connect(cb, &QCheckBox::toggled, this, [this, ch, cb](bool on) {
-            if (!controller_) return;
-            auto* tin = controller_->trigger_in_facility();
+            if (!camera_) return;
+            auto* tin = camera_->trigger_in_facility();
             if (!tin) return;
             try {
                 if (on) tin->enable(ch); else tin->disable(ch);
@@ -205,7 +208,7 @@ void TriggerPanel::populate_trigger_in() {
 }
 
 void TriggerPanel::populate_trigger_out() {
-    auto* to = controller_ ? controller_->trigger_out_facility() : nullptr;
+    auto* to = camera_ ? camera_->trigger_out_facility() : nullptr;
     if (!to) {
         tout_group_->setEnabled(false);
         return;

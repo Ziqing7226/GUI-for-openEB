@@ -23,19 +23,25 @@
 #include <vector>
 
 #include "algo_bridge/algo_bridge.h"  // for AlgoInfo + AlgoInstance
+#include "abstract_panel.h"
 
 // Forward declarations of Qt widgets (defined in the global namespace).
 class QLabel;
 class QComboBox;
+class QFormLayout;
 
 namespace gui {
 
 class AlgoBridge;
 
-class AlgorithmsPanel : public QWidget {
+class AlgorithmsPanel : public AbstractPanel {
     Q_OBJECT
 public:
     explicit AlgorithmsPanel(AlgoBridge* bridge, QWidget* parent = nullptr);
+
+    QString panel_id() const override { return QStringLiteral("algorithms"); }
+    QString panel_title() const override { return tr("Algorithms"); }
+    QString panel_group() const override { return QStringLiteral("Algorithms"); }
 
     /// @brief Programmatically sets the enable-checkbox state for @p name
     /// without emitting toggled signals. Used by MainWindow to keep the
@@ -43,7 +49,6 @@ public:
     void set_algo_enabled(const std::string& name, bool on);
 
 signals:
-    void info_message(const QString& msg);
     /// @brief Emitted when an algorithm's enable state changes.
     void algorithm_toggled(const QString& name, bool enabled);
     /// @brief Emitted when an algorithm is enabled from the sidebar and
@@ -63,8 +68,23 @@ private:
     /// algorithm instance. Called whenever the user edits the global ROI
     /// controls at the top of the panel.
     void apply_global_roi();
+    /// Applies a shared preprocessing parameter (preproc_*) to every live
+    /// algorithm instance via AlgoBridge::apply_global_preproc. Preprocessing
+    /// (noise filter + 1/4 downsample) is stackable and NOT mutually exclusive
+    /// with the main algorithm.
+    void apply_global_preproc(const std::string& key, const std::string& value);
     /// Builds the global Algorithm ROI selector group at the top of the panel.
     void build_roi_selector(QVBoxLayout* parent_layout);
+    /// Builds the global Preprocessing selector group (noise filter + 1/4
+    /// downsample). The checkboxes are NOT part of the algorithm mutex
+    /// (checkboxes_) — preprocessing overlays on top of any main algorithm.
+    void build_preproc_selector(QVBoxLayout* parent_layout);
+    /// Rebuilds the mode-specific NoiseFilter parameter rows in the
+    /// Preprocessing group based on the selected filter mode (BUG-3 fix).
+    /// Each of the 8 denoiser modes (BAF/STCF/Refractory/DWF/AgePolarity/
+    /// Harmonic/Repetitious/SpatialBP) has its own parameter set; only the
+    /// rows matching the current mode are shown.
+    void refresh_preproc_params();
     /// Shows/hides mode-scoped parameter rows for @p algo_name based on the
     /// currently selected index of its "mode" enum combobox. Params whose
     /// AlgoParamSpec::mode_filter does not contain the current mode index are
@@ -85,6 +105,7 @@ private:
     /// Per-algorithm UI state for mode-scoped parameter visibility.
     struct AlgoPanelState {
         QComboBox* mode_combo{nullptr};
+        QWidget* params_host{nullptr};  ///< Container widget for param rows
         std::vector<ParamRow> rows;
     };
 
@@ -113,6 +134,36 @@ private:
     QSpinBox* roi_y_sp_{nullptr};
     QSpinBox* roi_w_sp_{nullptr};
     QSpinBox* roi_h_sp_{nullptr};
+
+    /// Global Preprocessing controls (v1.1.0). The noise filter + 1/4
+    /// downsample are stackable stages applied AFTER the algorithm ROI
+    /// (order: ROI → filter → downsample). They overlay on top of any main
+    /// algorithm and are NOT mutually exclusive with it. These checkboxes
+    /// are intentionally NOT stored in checkboxes_ (the algorithm-mutex map)
+    /// so enabling preprocessing does not disable the main algorithm.
+    /// preproc_downsample defaults to checked (true) to preserve v1.0.0
+    /// behaviour (event_to_video had downsample=true).
+    QCheckBox* preproc_filter_cb_{nullptr};
+    QCheckBox* preproc_downsample_cb_{nullptr};
+    QComboBox* preproc_filter_mode_combo_{nullptr};
+
+    /// Container for mode-specific NoiseFilter parameter rows (BUG-3).
+    /// Rows are pre-created for all 8 modes and shown/hidden based on the
+    /// selected filter mode. Each entry: {label, field, mode_index}.
+    /// mode_index -1 = cross-mode (always visible when filter is on).
+    QFormLayout* preproc_params_form_{nullptr};
+    struct PreprocRow {
+        QLabel* label{nullptr};
+        QWidget* field{nullptr};
+        int mode{-1};  ///< -1 = cross-mode, 0-7 = specific filter mode
+        std::string key;
+    };
+    std::vector<PreprocRow> preproc_rows_;
+
+    /// Flag: true during build_ui() so refresh_mode_visibility knows to apply
+    /// default ROI/fps; set to false after build_ui completes so user-driven
+    /// mode switches don't clobber user-customised ROI/fps (BUG-14 fix).
+    bool first_init_{true};
 };
 
 } // namespace gui

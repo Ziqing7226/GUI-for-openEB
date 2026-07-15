@@ -1,11 +1,15 @@
 // gui/algo_bridge/algo_bridge.cpp
 //
 // AlgoInstance 持有真实的 AlgoBackend 实例，真正调用 algo/cv 与 algo/analytics
-// 的算法类。注册表列出全部 31 个自研模块 + 30 个 openEB 能力 = 61 项。
+// 的算法类。注册表列出全部 29 个自研模块 + 30 个 openEB 能力 = 59 项。
 
 #include "algo_bridge.h"
 
+#include <QImage>
+
 #include <mutex>
+
+#include "display/display_strategy.h"  // IDisplayStrategy + concrete strategies
 
 namespace gui {
 
@@ -26,13 +30,55 @@ AlgoInstance::AlgoInstance(const AlgoInfo& info, int width, int height)
             backend_->set_param(p.key, p.default_value);
         }
     }
+    // Select the display strategy from the declared display mode
+    // (design §3.5.3). The strategy is queried later via apply_strategy().
+    switch (info_.display_mode) {
+        case AlgoDisplayMode::Passive:    strategy_ = std::make_unique<PassiveStrategy>(); break;
+        case AlgoDisplayMode::Overlay:    strategy_ = std::make_unique<OverlayStrategy>(); break;
+        case AlgoDisplayMode::Replace:    strategy_ = std::make_unique<ReplaceStrategy>(); break;
+        case AlgoDisplayMode::Standalone: strategy_ = std::make_unique<StandaloneStrategy>(); break;
+    }
+}
+
+// Out-of-line so std::unique_ptr<IDisplayStrategy> destroys with a complete type.
+AlgoInstance::~AlgoInstance() = default;
+
+void AlgoInstance::apply_strategy(QImage& frame, AlgoResult& result,
+                                  DisplayContext& ctx) {
+    ctx.instance = this;
+    strategy_->apply(frame, result, info_, ctx);
 }
 
 void AlgoInstance::set_param(const std::string& key, const std::string& value) {
     std::lock_guard<std::mutex> lk(mutex_);
-    param_values_[key] = value;
+    // Only store known parameter keys to avoid map pollution from
+    // unknown/obsolete keys (BUG-G12). The backend still receives the
+    // call so it can handle backward-compat forwards (e.g. "downsample"
+    // -> "preproc_downsample" in EventToVideoBackend) and global
+    // preproc_* keys (handled by Preprocessor, not in info_.params).
+    bool known = false;
+    for (const auto& p : info_.params) {
+        if (p.key == key) { known = true; break; }
+    }
+    if (known) param_values_[key] = value;
     if (backend_) {
         backend_->set_param(key, value);
+        // BUG-G2/N11: after setting model_path (or num_bins itself) on an
+        // E2VID backend, the real num_bins is dictated by the loaded ONNX
+        // model's input channel count — the algo ignores the caller's value
+        // when a model is loaded (e2vid_inference.h set_num_bins). The
+        // backend re-syncs e2vid_num_bins_ from the algo; sync that
+        // authoritative value back into param_values_ so get_param("num_bins")
+        // returns the model-determined value, not the stale registry default
+        // ("5") or a stale cached value. We intentionally do NOT delegate
+        // get_param to the backend in general — that would change the string
+        // format of every param (backend uses std::to_string(double),
+        // producing "5.500000" instead of the registry's "5.5") and break
+        // ParamRoundTrip tests. This targeted sync keeps the fix minimal.
+        if (key == "model_path" || key == "num_bins") {
+            std::string nb = backend_->get_param("num_bins");
+            if (!nb.empty()) param_values_["num_bins"] = nb;
+        }
     }
 }
 
@@ -47,9 +93,19 @@ void AlgoInstance::set_enabled(bool e) {
     enabled_ = e;
     if (e) {
         // Re-enabling clears any prior overload state and resets the strike
-        // counter so the algo gets a fresh start.
+        // counter so the algo gets a fresh start. The backend's internal
+        // state (buffers/accumulators) is intentionally NOT reset here —
+        // this preserves the pause-resume workflow where the user temporarily
+        // disables an algorithm and later resumes with its accumulated state
+        // intact (e.g. E2VID log_intensity_, InteractingMaps I_map_). Full
+        // reset is performed separately by the caller when starting a new
+        // session (e.g. MainWindow::on_camera_connected calls inst->reset()
+        // for every live instance). Drop-rate counters are also reset so
+        // the InformationPanel shows fresh telemetry for the new session.
         overloaded_ = false;
         flood_strikes_ = 0;
+        total_pushed_ = 0;
+        total_dropped_ = 0;
     }
 }
 
@@ -69,15 +125,27 @@ void AlgoInstance::clear_overload() {
     flood_strikes_ = 0;
 }
 
+std::size_t AlgoInstance::total_pushed() const {
+    std::lock_guard<std::mutex> lk(mutex_);
+    return total_pushed_;
+}
+
+std::size_t AlgoInstance::total_dropped() const {
+    std::lock_guard<std::mutex> lk(mutex_);
+    return total_dropped_;
+}
+
 void AlgoInstance::push_events(const Metavision::EventCD* begin,
                                const Metavision::EventCD* end) {
     std::lock_guard<std::mutex> lk(mutex_);
+    const std::size_t n = static_cast<std::size_t>(end - begin);
+    total_pushed_ += n;
     if (!enabled_ || overloaded_) {
+        // Instance is disabled/overloaded — the entire batch is dropped.
+        total_dropped_ += n;
         return;
     }
     if (backend_) {
-        std::size_t n = static_cast<std::size_t>(end - begin);
-
         // Flood guard (design §5.6.7): cap each batch to the most recent
         // kMaxBatchEvents events. If a batch was capped, increment the strike
         // counter; kFloodStrikes consecutive capped batches mean the algo is
@@ -88,10 +156,13 @@ void AlgoInstance::push_events(const Metavision::EventCD* begin,
         if (n > kMaxBatchEvents) {
             // Keep the most recent events (drop older ones from the front).
             b = end - kMaxBatchEvents;
-            n = kMaxBatchEvents;
+            const std::size_t dropped_front = n - kMaxBatchEvents;
+            total_dropped_ += dropped_front;
             if (++flood_strikes_ >= kFloodStrikes) {
                 overloaded_ = true;
                 enabled_ = false;
+                // The capped batch is also dropped (backend never sees it).
+                total_dropped_ += kMaxBatchEvents;
                 return;
             }
         } else {
@@ -166,16 +237,70 @@ AlgoParamSpec pstring(const std::string& k, const std::string& disp,
 }
 
 /// Returns the 5 ROI parameters (design §5.6.6) shared by all self-developed
-/// algorithms. Defaults: enabled, center 256×256 (x/y=-1 = auto-center,
-/// w/h=256). When enabled the algorithm only processes events inside the
+/// algorithms. Defaults: enabled, center 128×128 (x/y=-1 = auto-center,
+/// w/h=128). When enabled the algorithm only processes events inside the
 /// ROI region; the main display frame draws a yellow ROI rectangle.
 std::vector<AlgoParamSpec> roi_params() {
     return {
         pbool("roi_enabled", "ROI enable", "true"),
         pint("roi_x", "ROI x (-1=center)", "-1", "-1", ""),
         pint("roi_y", "ROI y (-1=center)", "-1", "-1", ""),
-        pint("roi_w", "ROI w (0=full)", "256", "0", ""),
-        pint("roi_h", "ROI h (0=full)", "256", "0", ""),
+        pint("roi_w", "ROI w (0=full)", "128", "0", ""),
+        pint("roi_h", "ROI h (0=full)", "128", "0", ""),
+    };
+}
+
+/// Returns the shared preprocessing parameters (v1.0.9): a stackable noise
+/// filter + 1/4 downsample applied AFTER the algorithm ROI, in the order
+/// ROI → filter → downsample. These overlay on top of any main algorithm and
+/// are NOT mutually exclusive with it. preproc_downsample defaults to "true"
+/// to preserve v1.0.0 behaviour (event_to_video had downsample=true).
+/// preproc_filter_enabled defaults to "false" (opt-in). The preproc_filter_*
+/// params mirror the standalone NoiseFilter params (§4.3.5) so the same 8
+/// denoiser modes are available as a preprocessing stage.
+std::vector<AlgoParamSpec> preproc_params() {
+    return {
+        pbool("preproc_filter_enabled", "Preproc: noise filter", "false"),
+        pbool("preproc_downsample", "Preproc: 1/4 downsample", "true"),
+        penum("preproc_filter_mode", "Preproc: filter mode", "1",
+              {"0=BAF", "1=STCF", "2=Refractory", "3=DWF",
+               "4=AgePolarity", "5=Harmonic", "6=Repetitious", "7=SpatialBP"}),
+        // STCF (mode 1)
+        pfloat("preproc_filter_correlation_time_s", "Preproc STCF corr (s)", "0.005", "0.001", "0.1"),
+        pint("preproc_filter_min_neighbors", "Preproc STCF min nbr", "2", "1", "8"),
+        pbool("preproc_filter_require_polarity_match", "Preproc STCF pol match", "false"),
+        pbool("preproc_filter_allow_coincidence", "Preproc STCF coincide", "false"),
+        // BAF (mode 0)
+        pint("preproc_filter_baf_dt_us", "Preproc BAF dt (us)", "1000", "1000", "100000"),
+        pint("preproc_filter_baf_subsample_by", "Preproc BAF subsample", "0", "0", "4"),
+        // Refractory (mode 2)
+        pint("preproc_filter_refractory_us", "Preproc Refractory (us)", "1000", "100", "100000"),
+        // DWF (mode 3)
+        pint("preproc_filter_dwf_window_length", "Preproc DWF win len", "2", "1", "100"),
+        pint("preproc_filter_dwf_dist_threshold", "Preproc DWF dist", "2", "1", "1024"),
+        pint("preproc_filter_dwf_min_correlated", "Preproc DWF min corr", "2", "1", "8"),
+        pbool("preproc_filter_dwf_double_mode", "Preproc DWF double", "false"),
+        // AgePolarity (mode 4)
+        pint("preproc_filter_agep_tau_us", "Preproc AgePol tau (us)", "3000", "1000", "100000"),
+        pfloat("preproc_filter_age_threshold", "Preproc AgePol thresh", "2.0", "0.0", "8.0"),
+        pint("preproc_filter_agep_radius", "Preproc AgePol radius", "2", "1", "5"),
+        // Harmonic (mode 5)
+        penum("preproc_filter_line_freq_hz", "Preproc Harmonic Hz", "50", {"50", "60"}),
+        pfloat("preproc_filter_notch_q", "Preproc Harmonic Q", "5.0", "0.1", "100.0"),
+        pfloat("preproc_filter_harmonic_threshold", "Preproc Harmonic thresh", "0.1", "0.0", "1.0"),
+        // Repetitious (mode 6)
+        pint("preproc_filter_rep_period_us", "Preproc Rep period (us)", "5000", "1000", "1000000"),
+        pint("preproc_filter_rep_tolerance_us", "Preproc Rep tol (us)", "1000", "100", "10000"),
+        pint("preproc_filter_rep_ratio_shorter", "Preproc Rep ratio short", "10", "1", "100"),
+        pint("preproc_filter_rep_ratio_longer", "Preproc Rep ratio long", "10", "1", "100"),
+        pint("preproc_filter_rep_min_dt_to_store_us", "Preproc Rep min dt (us)", "1000", "0", "1000000"),
+        // SpatialBP (mode 7)
+        pint("preproc_filter_sbp_center_radius_px", "Preproc SBP center", "2", "1", "10"),
+        pint("preproc_filter_sbp_surround_radius_px", "Preproc SBP surround", "10", "5", "30"),
+        pint("preproc_filter_sbp_dt_surround_us", "Preproc SBP dt (us)", "10000", "100", "1000000"),
+        // Cross-mode flags
+        pbool("preproc_filter_filter_hot_pixels", "Preproc filter hot px", "false"),
+        pbool("preproc_filter_adaptive_correlation_time", "Preproc adaptive corr", "false"),
     };
 }
 
@@ -218,6 +343,31 @@ std::shared_ptr<AlgoInstance> AlgoBridge::create(const std::string& name) {
     {
         std::lock_guard<std::mutex> lk(live_mutex_);
         live_instances_[name] = inst;
+        // Replay per-algorithm cached params (N1) FIRST: values loaded from
+        // a config file for an algorithm that had no live instance. These
+        // include preproc_*/roi_* keys (because capture_algo_state saves
+        // all info.params). Then replay the global preproc_cache_/roi_cache_
+        // SECOND so they override the config's preproc_*/roi_* values —
+        // the user's latest global modifications take precedence over stale
+        // config values (BUG-1: N1+N6 interaction). Per-algo params like
+        // model_path/mode are unaffected since the global caches don't
+        // contain those keys. Skip calibration algos (BUG-R8).
+        auto pit = algo_param_cache_.find(name);
+        if (pit != algo_param_cache_.end()) {
+            for (const auto& [k, v] : pit->second) {
+                inst->set_param(k, v);
+            }
+            algo_param_cache_.erase(pit);
+        }
+        if (it->second.source == "self" &&
+            it->second.category != "calibration") {
+            for (const auto& [k, v] : preproc_cache_) {
+                inst->set_param(k, v);
+            }
+            for (const auto& [k, v] : roi_cache_) {
+                inst->set_param(k, v);
+            }
+        }
     }
     return inst;
 }
@@ -232,6 +382,71 @@ std::shared_ptr<AlgoInstance> AlgoBridge::find_or_create(const std::string& name
 void AlgoBridge::set_sensor_dimensions(int width, int height) {
     sensor_w_ = (width > 0) ? width : 1280;
     sensor_h_ = (height > 0) ? height : 720;
+}
+
+void AlgoBridge::apply_global_preproc(const std::string& key,
+                                      const std::string& value) {
+    // Apply the preproc_* parameter to every live self-developed instance.
+    // OpenEB wrapper algorithms (source=="openeb") have backend_==nullptr
+    // (pass-through); preproc_* params have no effect on them and would
+    // pollute their param_values_ map, so they are skipped.
+    std::lock_guard<std::mutex> lk(live_mutex_);
+    // Cache the value so instances created later (by other code paths) inherit
+    // the shared preprocessing state (BUG-R4).
+    preproc_cache_[key] = value;
+    for (auto it = live_instances_.begin(); it != live_instances_.end(); ) {
+        if (auto inst = it->second.lock()) {
+            // Skip calibration algorithms — they don't use preproc params
+            // and would just accumulate pollution in param_values_ (BUG-R8).
+            if (inst->info().source == "self" &&
+                inst->info().category != "calibration") {
+                inst->set_param(key, value);
+            }
+            ++it;
+        } else {
+            it = live_instances_.erase(it);
+        }
+    }
+}
+
+void AlgoBridge::apply_global_roi(const std::string& enabled,
+                                  const std::string& x,
+                                  const std::string& y,
+                                  const std::string& w,
+                                  const std::string& h) {
+    // Apply the roi_* parameters to every live self-developed instance and
+    // cache them so instances created later inherit the current ROI (N3).
+    // Same source/category filter as apply_global_preproc.
+    std::lock_guard<std::mutex> lk(live_mutex_);
+    roi_cache_["roi_enabled"] = enabled;
+    roi_cache_["roi_x"] = x;
+    roi_cache_["roi_y"] = y;
+    roi_cache_["roi_w"] = w;
+    roi_cache_["roi_h"] = h;
+    for (auto it = live_instances_.begin(); it != live_instances_.end(); ) {
+        if (auto inst = it->second.lock()) {
+            if (inst->info().source == "self" &&
+                inst->info().category != "calibration") {
+                inst->set_param("roi_enabled", enabled);
+                inst->set_param("roi_x", x);
+                inst->set_param("roi_y", y);
+                inst->set_param("roi_w", w);
+                inst->set_param("roi_h", h);
+            }
+            ++it;
+        } else {
+            it = live_instances_.erase(it);
+        }
+    }
+}
+
+void AlgoBridge::cache_algo_params(
+    const std::string& name,
+    const std::map<std::string, std::string>& params) {
+    // Store per-algorithm params for an instance that is not yet live (N1).
+    // create() will replay these when the instance is eventually created.
+    std::lock_guard<std::mutex> lk(live_mutex_);
+    algo_param_cache_[name] = params;
 }
 
 std::shared_ptr<AlgoInstance> AlgoBridge::find_live(const std::string& name) {
@@ -454,59 +669,23 @@ void AlgoBridge::register_openeb_utils() {
 
 // ---------------------------------------------------------------------------
 // Self-developed CV algorithms (design §4.3.5 - §4.3.27)
-// 23 modules, all with real algo_backend wiring.
+// 21 modules, all with real algo_backend wiring.
 // ---------------------------------------------------------------------------
 
 void AlgoBridge::register_self_cv() {
     auto add = [&](AlgoInfo a) {
         a.source = "self";
         a.category = "cv";
-        // All self-developed CV algorithms support ROI (design §5.6.6).
+        // All self-developed CV algorithms support ROI (design §5.6.6) and the
+        // shared preprocessing stage (v1.0.9: ROI → filter → downsample).
         for (auto& p : roi_params()) a.params.push_back(std::move(p));
+        for (auto& p : preproc_params()) a.params.push_back(std::move(p));
         registry_[a.name] = std::move(a);
     };
 
-    // §4.3.5 Noise Filter (8 modes)
-    add({"noise_filter", "Noise Filter", "cv", "self",
-         AlgoDisplayMode::Passive,
-         {penum("mode", "Mode", "1", {"0=BAF", "1=STCF", "2=Refractory",
-           "3=DWF", "4=AgePolarity", "5=Harmonic", "6=Repetitious", "7=SpatialBP"}),
-          // STCF (mode 1)
-          pfloat("correlation_time_s", "STCF corr time (s)", "0.005", "0.001", "0.1"),
-          pint("min_neighbors", "STCF min neighbors", "2", "1", "8"),
-          pbool("require_polarity_match", "STCF polarity match", "false"),
-          pbool("allow_coincidence", "STCF allow coincidence", "false"),
-          // BAF (mode 0)
-          pint("baf_dt_us", "BAF dt (us)", "1000", "1000", "100000"),
-          pint("baf_subsample_by", "BAF subsample by", "0", "0", "4"),
-          // Refractory (mode 2)
-          pint("refractory_us", "Refractory (us)", "1000", "100", "100000"),
-          // DWF (mode 3)
-          pint("dwf_window_length", "DWF window length", "2", "1", "100"),
-          pint("dwf_dist_threshold", "DWF dist threshold", "2", "1", "1024"),
-          pint("dwf_min_correlated", "DWF min correlated", "2", "1", "8"),
-          pbool("dwf_double_mode", "DWF double mode", "false"),
-          // AgePolarity (mode 4)
-          pint("agep_tau_us", "AgePol tau (us)", "3000", "1000", "100000"),
-          pfloat("age_threshold", "AgePol threshold", "2.0", "0.0", "8.0"),
-          pint("agep_radius", "AgePol radius", "2", "1", "5"),
-          // Harmonic (mode 5)
-          penum("line_freq_hz", "Harmonic line freq (Hz)", "50", {"50", "60"}),
-          pfloat("notch_q", "Harmonic notch Q", "5.0", "0.1", "100.0"),
-          pfloat("harmonic_threshold", "Harmonic threshold", "0.1", "0.0", "1.0"),
-          // Repetitious (mode 6)
-          pint("rep_period_us", "Rep period (us)", "5000", "1000", "1000000"),
-          pint("rep_tolerance_us", "Rep tolerance (us)", "1000", "100", "10000"),
-          pint("rep_ratio_shorter", "Rep ratio shorter", "10", "1", "100"),
-          pint("rep_ratio_longer", "Rep ratio longer", "10", "1", "100"),
-          pint("rep_min_dt_to_store_us", "Rep min dt store (us)", "1000", "0", "1000000"),
-          // SpatialBP (mode 7)
-          pint("sbp_center_radius_px", "SBP center radius", "2", "1", "10"),
-          pint("sbp_surround_radius_px", "SBP surround radius", "10", "5", "30"),
-          pint("sbp_dt_surround_us", "SBP dt surround (us)", "10000", "100", "1000000"),
-          // Cross-mode flags
-          pbool("filter_hot_pixels", "Filter hot pixels", "false"),
-          pbool("adaptive_correlation_time", "Adaptive corr time", "false")}});
+    // §4.3.5 Noise Filter — removed as a standalone algorithm in v1.0.9; the
+    // noise filter is now a stackable preprocessing stage (see preproc_params)
+    // shared by all self-developed algorithms (ROI → filter → downsample).
 
     // §4.3.6 Hot Pixel Filter
     add({"hot_pixel_filter", "Hot Pixel Filter", "cv", "self",
@@ -606,19 +785,35 @@ void AlgoBridge::register_self_cv() {
     // §4.3.17 Orientation Cluster
     add({"orientation_cluster", "Orientation Cluster", "cv", "self",
          AlgoDisplayMode::Overlay,
-         {pint("min_events", "Min events", "20", "5", "500")}});
+         {pint("min_events", "Min events", "20", "5", "500"),
+          pfloat("dt", "dt (us)", "10000", "100", "1000000"),
+          pfloat("factor", "Factor", "1000", "1", "100000"),
+          pint("rf_width", "RF width", "1", "1", "64"),
+          pint("rf_height", "RF height", "1", "1", "64"),
+          pfloat("tolerance", "Tolerance (deg)", "10", "0", "180"),
+          pfloat("ori", "Ori (deg)", "45", "0", "180"),
+          pfloat("neighbor_thr", "Neighbor thr", "10", "0", "1000"),
+          pfloat("thr_gradient", "Thr gradient", "0", "0", "100"),
+          pfloat("history_factor", "History factor", "1", "0", "10"),
+          pbool("use_opposite_polarity", "Use opposite polarity", "true"),
+          pbool("ori_history_enabled", "Ori history enabled", "false"),
+          pint("display_length", "Display length", "10", "1", "500")}});
 
     // §4.3.18 Cluster LIF
     add({"cluster_lif", "Cluster LIF", "cv", "self",
          AlgoDisplayMode::Overlay,
          {pfloat("tau_ms", "Tau (ms)", "10", "1", "1000"),
-          pfloat("threshold", "Threshold", "1.0", "0.1", "10.0")}});
+          pfloat("threshold", "Threshold", "1.0", "0.1", "10.0"),
+          pint("receptive_field_size_pixels", "Receptive field (px)", "8", "2", "128"),
+          pfloat("initial_potential_percent", "Initial potential (%)", "50", "0", "100"),
+          pfloat("jump_after_firing_percent", "Jump after firing (%)", "10", "0", "100")}});
 
     // §4.3.19 Background Mask Filter
     add({"background_mask", "Background Mask Filter", "cv", "self",
          AlgoDisplayMode::Replace,
          {pfloat("learning_rate", "Learning rate", "0.05", "0.001", "1.0"),
-          pfloat("threshold", "Threshold", "10", "1", "100")}});
+          pfloat("threshold", "Threshold", "10", "1", "100"),
+          pint("erosion_size", "Erosion size", "0", "0", "20")}});
 
     // §4.3.20 Perspective Undistort
     add({"perspective_undistort", "Perspective Undistort", "cv", "self",
@@ -629,7 +824,9 @@ void AlgoBridge::register_self_cv() {
     // §4.3.21 Trigger Synced Filter
     add({"trigger_synced", "Trigger Synced Filter", "cv", "self",
          AlgoDisplayMode::Passive,
-         {pint("window_us", "Window (us)", "10000", "1000", "1000000")}});
+         {pint("window_us", "Window (us)", "10000", "1000", "1000000"),
+          pint("t0_us", "T0 delay (us)", "500", "0", "1000"),
+          pint("trigger_channel", "Trigger channel", "0", "0", "7")}});
 
     // §4.3.22 Bandpass Filter
     add({"bandpass_filter", "Bandpass Filter", "cv", "self",
@@ -677,8 +874,10 @@ void AlgoBridge::register_self_analytics() {
     auto add = [&](AlgoInfo a) {
         a.source = "self";
         a.category = "analytics";
-        // All self-developed analytics algorithms support ROI (design §5.6.6).
+        // All self-developed analytics algorithms support ROI (design §5.6.6)
+        // and the shared preprocessing stage (v1.0.9: ROI → filter → downsample).
         for (auto& p : roi_params()) a.params.push_back(std::move(p));
+        for (auto& p : preproc_params()) a.params.push_back(std::move(p));
         registry_[a.name] = std::move(a);
     };
 
@@ -698,7 +897,7 @@ void AlgoBridge::register_self_analytics() {
           pint("output_fps", "Output fps", "30", "1", "120"),
           // --- Shared non-DL params (mode 0,1) ---
           pfloat("window_ms", "Window (ms)", "50", "10", "500", "0,1"),
-          pfloat("decay_tau_ms", "Decay tau (ms)", "0", "0", "5000", "0,1"),
+          pfloat("decay_tau_ms", "Decay tau (ms)", "500", "0", "5000", "0,1"),
           // --- BardowVariational (mode 0) ---
           pfloat("delta_t_ms", "Delta t (ms)", "15", "1", "50", "0"),
           pfloat("theta", "Theta", "0.22", "0.05", "0.5", "0"),
@@ -717,7 +916,8 @@ void AlgoBridge::register_self_analytics() {
           pstring("model_path", "Model path (ONNX)", "models/e2vid_lightweight.onnx", "2"),
           pint("num_bins", "Num bins", "5", "1", "20", "2"),
           pbool("auto_hdr", "Auto HDR", "false", "2"),
-          pbool("downsample", "1/4 Downsample", "true"),
+          // 1/4 downsample is now a shared preprocessing stage
+          // (preproc_downsample) — removed the per-algo downsample param.
           pfloat("unsharp_amount", "Unsharp amount", "0.3", "0.0", "2.0", "2"),
           pfloat("unsharp_sigma", "Unsharp sigma", "1.0", "0.1", "5.0", "2"),
           pfloat("bilateral_sigma", "Bilateral sigma", "0.0", "0.0", "10.0", "2")}});

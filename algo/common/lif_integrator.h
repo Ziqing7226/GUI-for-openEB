@@ -140,7 +140,9 @@ public:
         // jAER setMPThreshold which only updates thresholdMP).
         initial_potential_ = compute_initial_potential();
     }
-    void set_tau_us(Metavision::timestamp tau) { tau_us_ = tau; }
+    void set_tau_us(Metavision::timestamp tau) {
+        tau_us_ = tau;
+    }
     void set_initial_potential_percent(double p) {
         initial_potential_percent_ = p;
         initial_potential_ = compute_initial_potential();

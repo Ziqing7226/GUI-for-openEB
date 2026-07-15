@@ -16,9 +16,15 @@
 #include <random>
 #include <vector>
 
-#include "kmeans.h"  // Point2D
-
 namespace gui_algo {
+
+/// @brief 2D point used by particle filter, spline, and other utilities.
+struct Point2D {
+    double x{0.0};
+    double y{0.0};
+    Point2D() = default;
+    Point2D(double x_, double y_) : x(x_), y(y_) {}
+};
 
 /// @brief 2D particle filter for single-target tracking.
 class ParticleFilter {
@@ -41,6 +47,7 @@ public:
         : n_(n_particles), q_std_(process_noise_std),
           r_std_(measurement_noise_std), dt_(dt), rng_(seed) {
         particles_.resize(n_);
+        next_.resize(n_);
     }
 
     /// @brief Initialises all particles around a seed position with zero velocity.
@@ -88,7 +95,7 @@ public:
         std::uniform_real_distribution<double> u01(0.0, 1.0);
         const double r = u01(rng_) / static_cast<double>(n_);
         double c = particles_[0].weight;
-        std::vector<Particle> next(n_);
+        auto& next = next_;
         std::size_t i = 0;
         for (std::size_t m = 0; m < n_; ++m) {
             double u = r + static_cast<double>(m) / static_cast<double>(n_);
@@ -122,6 +129,7 @@ private:
     double dt_;
     std::mt19937_64 rng_;
     std::vector<Particle> particles_;
+    std::vector<Particle> next_;
 };
 
 } // namespace gui_algo
