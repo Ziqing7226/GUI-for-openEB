@@ -5,6 +5,8 @@
 #include <opencv2/calib3d.hpp>
 #include <opencv2/imgproc.hpp>
 
+#include <opencv2/core/persistence.hpp>
+
 namespace gui_algo {
 
 IntrinsicCalibration::IntrinsicCalibration() = default;
@@ -228,6 +230,38 @@ void IntrinsicCalibration::reset() {
     undistort_map_y_.release();
     event_undistort_lut_.clear();
     event_lut_size_ = cv::Size(0, 0);
+}
+
+bool load_intrinsics_yml(const std::string& path,
+                         cv::Mat& K, cv::Mat& dist_coeffs,
+                         cv::Size& image_size) {
+    cv::FileStorage fs(path, cv::FileStorage::READ);
+    if (!fs.isOpened()) return false;
+    cv::Mat k_in, dist_in;
+    int w = 0, h = 0;
+    fs["image_width"]  >> w;
+    fs["image_height"] >> h;
+    fs["camera_matrix"]           >> k_in;
+    fs["distortion_coefficients"] >> dist_in;
+    fs.release();
+    if (k_in.empty() || dist_in.empty() || w <= 0 || h <= 0) return false;
+    // Normalise to the canonical types used by IntrinsicCalibration /
+    // cv::undistortPoints (CV_64F for K, CV_64F 1xN for dist).
+    if (k_in.type() != CV_64F) {
+        cv::Mat tmp;
+        k_in.convertTo(tmp, CV_64F);
+        k_in = tmp;
+    }
+    if (dist_in.type() != CV_64F) {
+        cv::Mat tmp;
+        dist_in.convertTo(tmp, CV_64F);
+        dist_in = tmp;
+    }
+    if (k_in.rows != 3 || k_in.cols != 3) return false;
+    K = k_in;
+    dist_coeffs = dist_in;
+    image_size = cv::Size(w, h);
+    return true;
 }
 
 } // namespace gui_algo

@@ -11,7 +11,7 @@ The `CustomTitleBar` (36 px tall) shows the "EB plus" chip on the left, followed
 | **File** | Open File, Open Recent, Save/Load Camera Config, Save/Load Biases, Save/Load Algo Params, Exit |
 | **View** | Toggle Playback Panel, Reset/Save/Load Layout, Fullscreen |
 | **Theme** | Color submenu (5 colors) + Mode submenu (Follow System / Light / Dark) |
-| **Tools** | Intrinsic Wizard (calibration) |
+| **Tools** | Intrinsic Wizard (calibration), Sharpness |
 | **Help** | About, About Qt |
 
 Window control buttons (minimize / maximize / close) are on the right. The title bar follows the active theme.
@@ -53,7 +53,7 @@ All hardware panels auto-disable during file playback (no HAL facility available
 
 ### Algorithms group
 - **File Tools** — RAW recording, file cutter, format conversion (RAW ↔ HDF5 ↔ CSV), AVI export.
-- **Algorithms** — algorithm selection + shared preprocessing (ROI, noise filter, 1/4 downsample) + per-algorithm parameters. See [Algorithms](Algorithms.md).
+- **Algorithms** — algorithm selection + shared preprocessing (ROI, noise filter, 1/4 downsample, undistort) + per-algorithm parameters. See [Algorithms](Algorithms.md).
 
 ## Display
 
@@ -87,6 +87,30 @@ Thread-safe pipeline of 8 stackable stages, toggled from the Preprocessing panel
 8. ROI Filter (X0, Y0, X1, Y1)
 
 The filter chain is applied to both display rendering and algorithm event windows, so flipped/rotated/filtered events stay consistent everywhere.
+
+## Tools Menu
+
+The **Tools** dropdown menu (in the custom title bar) hosts two calibration-adjacent utilities:
+
+### Intrinsic Wizard
+
+A dialog that calibrates the camera intrinsics using only events (no APS frames). Workflow:
+
+1. **Show Chessboard** — opens an independent fullscreen window displaying a black-and-white chessboard that inverts at 20 Hz (one flip every 50 ms). The board geometry is computed from the target screen's pixel dimensions and physical DPI, so the reported square size in millimeters is physically meaningful for `cv::calibrateCamera`'s object-point scale. Press **F** to toggle fullscreen, **Esc** to close.
+2. **Start Auto-Capture** — the wizard subscribes to CD events via `CameraController::cd_events_ready`, accumulates them in a 1 ms / 50 ms windowed buffer, and on each 50 ms tick picks the 1 ms sub-window with the most events (the one aligned with the chessboard flip burst). It renders that window to a grayscale frame (ON events white, OFF black, background grey), runs `cv::findChessboardCorners`, and rejects duplicates via MSE against the last accepted frame (default threshold 50.0).
+3. **Auto-end + Export** — when the captured frame count reaches the target (default 30), the wizard stops capture, runs `cv::calibrateCamera`, and enables the **Export...** button. The export dialog defaults to `~/Documents/EBplus/calibration/intrinsic.yml` (identical to the undistort preprocessor's default path) and writes `image_width`, `image_height`, `camera_matrix`, `distortion_coefficients`, `rms`.
+
+Controls: target screen selector, inner-corner cols/rows (default 9×6), target frames (default 30), duplicate MSE threshold (default 50.0), progress bar, live preview of the last accepted frame.
+
+### Sharpness
+
+A dialog that plots the **variance of Laplacian** of the current event visualization frame as a rolling 2-second line chart, polled at 10 Hz. Higher values = sharper. Useful for bias tuning and lens focus: point the camera at a high-contrast static scene and watch the line climb as focus improves.
+
+The chart's Y-axis uses a **fixed ceiling** computed from the current frame resolution rather than auto-scaling: the algorithm estimates the theoretical maximum variance for an ideal single-pixel checkerboard under `cv::Laplacian` (ksize=3, `BORDER_REPLICATE`) — `σ²_max = [n_int·1020² + n_edge·765² + n_corner·510²] / (W·H)` — so the scale stays stable across time and the line never jumps as the data range shifts. The ceiling converges to `1020² = 1 040 400` for large sensors and is recomputed each tick from the live frame dimensions.
+
+### Undistort Preprocessing
+
+Not a menu item, but related: in the **Algorithms** panel's Preprocessing group, the **Undistort (apply calibration)** checkbox loads the YAML written by the Intrinsic Wizard and applies a forward event-address LUT (via `cv::undistortPoints`, with K adjusted for the ROI origin and downsample factor) to every event after filter + downsample. Default path: `~/Documents/EBplus/calibration/intrinsic.yml` — identical to the wizard's default export path, so the two defaults always point at the same file. Click **Browse...** to point at any other YAML.
 
 ## Recording & Playback
 

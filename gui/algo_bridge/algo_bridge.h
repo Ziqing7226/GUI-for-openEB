@@ -232,7 +232,6 @@ private:
     void register_openeb_utils();
     void register_self_cv();
     void register_self_analytics();
-    void register_self_calibration();
 
     std::unordered_map<std::string, AlgoInfo> registry_;
     /// Weak references to live instances so ConfigManager can query/apply

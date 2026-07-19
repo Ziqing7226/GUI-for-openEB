@@ -125,23 +125,6 @@ SettingsPanel::SettingsPanel(AlgoBridge* bridge, FileConverter* converter,
             host_layout->addWidget(p);
         }
 
-        // The Tools group also holds the Calibration placeholder (Phase 9
-        // install target for set_calibration_panel). The wizard itself is
-        // launched from the Tools menu; this group box just shows a hint.
-        if (g.name == QStringLiteral("Tools")) {
-            calibration_group_ = new QGroupBox(tr("Calibration"), host);
-            auto* gl = new QVBoxLayout(calibration_group_);
-            gl->setContentsMargins(6, 6, 6, 6);
-            auto* lbl = new QLabel(
-                tr("Open via menu: Tools → Intrinsic Wizard..."),
-                calibration_group_);
-            lbl->setWordWrap(true);
-            lbl->setProperty("class", "hint");
-            gl->addWidget(lbl);
-            calibration_group_->setEnabled(false);
-            host_layout->addWidget(calibration_group_);
-        }
-
         host_layout->addStretch(1);
         scroll->setWidget(host);
 
@@ -209,33 +192,5 @@ TriggerPanel*       SettingsPanel::trigger_panel()        const { return static_
 PreprocessingPanel* SettingsPanel::preprocessing_panel() const { return static_cast<PreprocessingPanel*>(find_panel(QStringLiteral("preprocessing"))); }
 AlgorithmsPanel*    SettingsPanel::algorithms_panel()     const { return static_cast<AlgorithmsPanel*>(find_panel(QStringLiteral("algorithms"))); }
 FileToolsPanel*     SettingsPanel::file_tools_panel()     const { return static_cast<FileToolsPanel*>(find_panel(QStringLiteral("file_tools"))); }
-
-void SettingsPanel::set_calibration_panel(QWidget* panel) {
-    if (!panel || !calibration_group_) return;
-    if (panel == calibration_installed_) return;
-    // Remove the previously-installed panel if any; otherwise remove the
-    // placeholder label. Using findChildren with FindDirectChildrenOnly
-    // avoids recursively deleting QLabels inside an already-installed panel
-    // (which the previous implementation did, corrupting the UI on the
-    // second call).
-    if (calibration_installed_) {
-        calibration_installed_->deleteLater();
-        calibration_installed_ = nullptr;
-    } else {
-        const auto old_lbls = calibration_group_->findChildren<QLabel*>(
-            QString(), Qt::FindDirectChildrenOnly);
-        for (auto* l : old_lbls) l->deleteLater();
-    }
-    auto* gl = qobject_cast<QVBoxLayout*>(calibration_group_->layout());
-    if (gl) {
-        gl->addWidget(panel);
-    } else {
-        auto* ngl = new QVBoxLayout(calibration_group_);
-        ngl->setContentsMargins(6, 6, 6, 6);
-        ngl->addWidget(panel);
-    }
-    calibration_group_->setEnabled(true);
-    calibration_installed_ = panel;
-}
 
 } // namespace gui

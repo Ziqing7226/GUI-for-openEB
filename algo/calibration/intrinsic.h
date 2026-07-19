@@ -127,6 +127,17 @@ private:
     std::vector<cv::Point3f> make_object_grid() const;
 };
 
+/// @brief Loads intrinsic calibration (K, distCoeffs, image_size) from a YAML
+///        file written by CalibrationWizard::on_intrinsic_save() or any
+///        OpenCV-compatible YAML with the same keys:
+///          image_width, image_height, camera_matrix, distortion_coefficients
+///        (rms optional). Used by the calibration wizard (round-trip) and by
+///        the Preprocessor undistort stage (consumes the wizard's output).
+/// @return true on success; on failure leaves outputs unchanged.
+bool load_intrinsics_yml(const std::string& path,
+                         cv::Mat& K, cv::Mat& dist_coeffs,
+                         cv::Size& image_size);
+
 } // namespace gui_algo
 
 #endif // GUI_ALGO_CALIBRATION_INTRINSIC_H

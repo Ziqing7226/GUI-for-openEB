@@ -87,9 +87,6 @@ public:
     AlgorithmsPanel*    algorithms_panel()     const;
     FileToolsPanel*     file_tools_panel()     const;
 
-    /// @brief Installs an externally-built calibration panel (Phase 9).
-    void set_calibration_panel(QWidget* panel);
-
     /// @brief Returns the title of the currently-active group, used by
     /// MainWindow to update the dock window title.
     QString current_title() const;
@@ -129,13 +126,6 @@ private:
     // QStackedWidget shows one group's panels directly (no CollapsibleSection).
     ActivityBar* activity_bar_{nullptr};
     QStackedWidget* stacked_{nullptr};
-
-    // Phase 9 — calibration placeholder group box and any panel installed
-    // into it. Tracked by pointer so set_calibration_panel can replace the
-    // placeholder cleanly without recursive findChildren() searches that
-    // would delete QLabels inside an already-installed panel.
-    QGroupBox* calibration_group_{nullptr};
-    QWidget* calibration_installed_{nullptr};
 };
 
 } // namespace gui

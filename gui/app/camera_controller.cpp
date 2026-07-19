@@ -205,6 +205,10 @@ facility::TriggerOut* CameraController::trigger_out_facility() {
     return camera_->get_device().get_facility<facility::TriggerOut>();
 }
 
+void CameraController::set_cd_broadcast(bool enabled) {
+    cd_broadcast_.store(enabled, std::memory_order_relaxed);
+}
+
 // ---------------------------------------------------------------------------
 // Internals
 // ---------------------------------------------------------------------------
@@ -299,6 +303,15 @@ void CameraController::setup_camera(Metavision::Camera&& cam, bool is_file) {
                 } else {
                     frame_pipeline_.add_events(b, e);
                 }
+                // Optional CD broadcast for calibration tools. The atomic
+                // check is cheap; the copy only happens when a listener has
+                // explicitly opted in via set_cd_broadcast(true). The emit
+                // crosses to the GUI thread via Qt's queued-connection
+                // machinery (the shared_ptr is captured by value).
+                if (cd_broadcast_.load(std::memory_order_relaxed) && b != e) {
+                    auto batch = std::make_shared<std::vector<Metavision::EventCD>>(b, e);
+                    emit cd_events_ready(batch);
+                }
             } catch (const std::exception& ex) {
                 QMetaObject::invokeMethod(this, [this, msg = std::string(ex.what())]() {
                     emit runtime_warning(QString::fromUtf8(msg.c_str()));
@@ -341,6 +354,8 @@ void CameraController::teardown() {
     //    FramePipeline / FilterChain / StatisticsController. Without this,
     //    stopping the pipeline (which resets generator_) races with the CD
     //    callback's frame_pipeline_.add_events() — a use-after-free.
+    // Also disable CD broadcast so no in-flight emit references the camera.
+    cd_broadcast_.store(false, std::memory_order_relaxed);
     if (camera_) {
         if (cd_cb_id_) {
             camera_->cd().remove_callback(*cd_cb_id_);

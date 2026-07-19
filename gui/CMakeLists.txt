@@ -23,6 +23,7 @@ set(GUI_LIB_SOURCES
     algo_bridge/backends/openeb_preproc_backends.cpp
     algo_bridge/backends/openeb_util_backends.cpp
     algo_bridge/backends/backend_factory.cpp
+    algo_bridge/backends/backend_common.cpp
     algo_bridge/filter_chain.cpp
     config/config_manager.cpp
     display/event_display_widget.cpp
@@ -47,10 +48,13 @@ set(GUI_LIB_SOURCES
     recorder/recorder_controller.cpp
 )
 
-# Phase 9 — calibration wizard (built when sources are present).
+# Phase 9 — calibration wizard + tools (built when sources are present).
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/calibration/calibration_wizard.cpp")
     list(APPEND GUI_LIB_SOURCES
         calibration/calibration_wizard.cpp
+        calibration/chessboard_display.cpp
+        calibration/calibration_event_tap.cpp
+        calibration/sharpness_dialog.cpp
     )
 endif()
 

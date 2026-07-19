@@ -317,7 +317,6 @@ AlgoBridge::AlgoBridge() {
     register_openeb_utils();
     register_self_cv();
     register_self_analytics();
-    register_self_calibration();
 }
 
 std::vector<AlgoInfo> AlgoBridge::list_algos() const {
@@ -962,27 +961,6 @@ void AlgoBridge::register_self_analytics() {
         a.display_mode = AlgoDisplayMode::Standalone;
         registry_[a.name] = std::move(a);
     }
-}
-
-// ---------------------------------------------------------------------------
-// Self-developed calibration (design §4.5) — unchanged
-// ---------------------------------------------------------------------------
-
-void AlgoBridge::register_self_calibration() {
-    auto add = [&](AlgoInfo a) {
-        a.source = "self";
-        a.category = "calibration";
-        a.display_mode = AlgoDisplayMode::Standalone;
-        registry_[a.name] = std::move(a);
-    };
-
-    add({"intrinsic_calibration", "Intrinsic Calibration", "calibration", "self",
-         AlgoDisplayMode::Standalone,
-         {penum("board_type", "Board type", "chessboard",
-                {"chessboard", "circle_grid", "aruco"}),
-          pint("squares_x", "Squares X", "9", "2", "30"),
-          pint("squares_y", "Squares Y", "6", "2", "30"),
-          pfloat("square_size_mm", "Square size (mm)", "25", "1", "200")}});
 }
 
 } // namespace gui

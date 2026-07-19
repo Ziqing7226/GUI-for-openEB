@@ -2,7 +2,7 @@
 
 EB plus ships **59 algorithms** registered in a single `AlgoBridge` registry (`gui/algo_bridge/algo_bridge.cpp`):
 
-- **29 self-developed** algorithms under `algo/` (21 Computer Vision + 7 Analytics + 1 Calibration)
+- **29 self-developed** algorithms under `algo/` (21 Computer Vision + 8 Analytics). `intrinsic_calibration` was removed from the registry — it is now a **Tools → Intrinsic Wizard** dialog. Undistortion is available as a stackable preprocessing checkbox in the Algorithms panel (`preproc_undistort_enabled` / `preproc_undistort_path`).
 - **30 OpenEB-wrapped** capabilities (10 filters + 7 frame modes + 7 preprocessors + 6 utilities)
 
 Algorithms are **mutually exclusive** — enabling one disables the previous. Each self-developed algorithm supports a global ROI (default: center 128×128) and a shared preprocessing stage. All parameters are adjusted exclusively in the sidebar's **Algorithms** panel; algorithm display windows show only the title and output.

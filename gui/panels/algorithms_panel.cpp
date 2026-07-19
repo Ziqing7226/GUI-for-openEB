@@ -3,8 +3,12 @@
 #include "algorithms_panel.h"
 
 #include <QCheckBox>
+#include <QDir>
+#include <QFileDialog>
+#include <QFileInfo>
 #include <QGroupBox>
 #include <QLabel>
+#include <QPushButton>
 #include <QSpinBox>
 #include <QDoubleSpinBox>
 #include <QComboBox>
@@ -13,6 +17,7 @@
 #include <QHBoxLayout>
 #include <QLineEdit>
 #include <QMap>
+#include <QStandardPaths>
 
 #include "algo_bridge/algo_bridge.h"
 
@@ -346,7 +351,7 @@ void AlgorithmsPanel::apply_global_preproc(const std::string& key,
 }
 
 void AlgorithmsPanel::build_preproc_selector(QVBoxLayout* parent_layout) {
-    auto* gb = new QGroupBox(tr("Preprocessing (ROI > filter > downsample)"), this);
+    auto* gb = new QGroupBox(tr("Preprocessing (ROI > filter > downsample > undistort)"), this);
     auto* form = new QFormLayout(gb);
     form->setContentsMargins(6, 6, 6, 6);
 
@@ -360,6 +365,29 @@ void AlgorithmsPanel::build_preproc_selector(QVBoxLayout* parent_layout) {
     preproc_downsample_cb_ = new QCheckBox(tr("1/4 Downsample"), gb);
     preproc_downsample_cb_->setChecked(true);
     form->addRow(preproc_downsample_cb_);
+
+    // Undistort (default off). Applied AFTER filter + downsample. Loads the
+    // YAML written by Tools → Intrinsic Wizard and builds a forward event LUT
+    // (cv::undistortPoints with K adjusted for ROI origin + downsample factor).
+    // Default path is identical to the wizard's default export path.
+    preproc_undistort_cb_ = new QCheckBox(tr("Undistort (apply calibration)"), gb);
+    preproc_undistort_cb_->setChecked(false);
+    form->addRow(preproc_undistort_cb_);
+
+    preproc_undistort_path_ = new QLineEdit(gb);
+    const QString docs = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
+    const QString base = docs.isEmpty() ? QDir::homePath() : docs;
+    preproc_undistort_path_->setText(base + QStringLiteral("/EBplus/calibration/intrinsic.yml"));
+    preproc_undistort_path_->setToolTip(tr(
+        "Path to the YAML written by Tools → Intrinsic Wizard. "
+        "Default path is identical to the wizard's export default."));
+    preproc_undistort_browse_ = new QPushButton(tr("Browse..."), gb);
+    auto* undistort_row = new QWidget(gb);
+    auto* undistort_layout = new QHBoxLayout(undistort_row);
+    undistort_layout->setContentsMargins(0, 0, 0, 0);
+    undistort_layout->addWidget(preproc_undistort_path_, 1);
+    undistort_layout->addWidget(preproc_undistort_browse_, 0);
+    form->addRow(tr("Calibration file"), undistort_row);
 
     // Filter mode (8 modes, default STCF=1).
     preproc_filter_mode_combo_ = new QComboBox(gb);
@@ -494,6 +522,22 @@ void AlgorithmsPanel::build_preproc_selector(QVBoxLayout* parent_layout) {
     });
     connect(preproc_downsample_cb_, &QCheckBox::toggled, this, [this](bool on) {
         apply_global_preproc("preproc_downsample", on ? "true" : "false");
+    });
+    connect(preproc_undistort_cb_, &QCheckBox::toggled, this, [this](bool on) {
+        apply_global_preproc("preproc_undistort_enabled", on ? "true" : "false");
+    });
+    connect(preproc_undistort_path_, &QLineEdit::textChanged, this, [this](const QString& text) {
+        apply_global_preproc("preproc_undistort_path", text.toStdString());
+    });
+    connect(preproc_undistort_browse_, &QPushButton::clicked, this, [this]() {
+        const QString start = preproc_undistort_path_->text();
+        const QString path = QFileDialog::getOpenFileName(
+            this, tr("Select calibration YAML"),
+            QFileInfo(start).absolutePath(),
+            tr("YAML (*.yml *.yaml);;All Files (*)"));
+        if (!path.isEmpty()) {
+            preproc_undistort_path_->setText(path);
+        }
     });
     connect(preproc_filter_mode_combo_,
             QOverload<int>::of(&QComboBox::currentIndexChanged), this,

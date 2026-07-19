@@ -29,6 +29,8 @@
 class QLabel;
 class QComboBox;
 class QFormLayout;
+class QLineEdit;
+class QPushButton;
 
 namespace gui {
 
@@ -146,6 +148,13 @@ private:
     QCheckBox* preproc_filter_cb_{nullptr};
     QCheckBox* preproc_downsample_cb_{nullptr};
     QComboBox* preproc_filter_mode_combo_{nullptr};
+
+    /// Undistort stage (applied AFTER filter + downsample). Loads the YAML
+    /// produced by Tools → Intrinsic Wizard and applies a forward event LUT.
+    /// Default path matches the wizard's default export directory.
+    QCheckBox* preproc_undistort_cb_{nullptr};
+    QLineEdit* preproc_undistort_path_{nullptr};
+    QPushButton* preproc_undistort_browse_{nullptr};
 
     /// Container for mode-specific NoiseFilter parameter rows (BUG-3).
     /// Rows are pre-created for all 8 modes and shown/hidden based on the

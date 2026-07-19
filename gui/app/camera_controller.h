@@ -116,6 +116,14 @@ public:
     facility::TriggerIn*   trigger_in_facility();
     facility::TriggerOut*  trigger_out_facility();
 
+    /// @brief Enables/disables broadcasting of every CD batch via
+    /// cd_events_ready(). When false (default), the CD callback takes the
+    /// fast path with zero extra copies. Calibration tools flip this to true
+    /// on start and back to false on stop so the SDK thread only pays the
+    /// copy cost while a consumer is actively listening.
+    void set_cd_broadcast(bool enabled);
+    bool is_cd_broadcast() const { return cd_broadcast_.load(std::memory_order_relaxed); }
+
 signals:
     void connected(const SensorInfo& info);
     void disconnected();
@@ -123,6 +131,11 @@ signals:
     void stopped();
     void error(const QString& message);
     void runtime_warning(const QString& message);
+    /// @brief Emitted from the SDK CD callback (cross-thread, queued) when
+    /// cd_broadcast_ is true. Carries a shared_ptr copy of the batch so
+    /// listeners on the GUI thread can process it safely. Used by the
+    /// calibration wizard's 1 ms event accumulator.
+    void cd_events_ready(std::shared_ptr<std::vector<Metavision::EventCD>> events);
 
 private:
     /// @brief Sets up callbacks + pipeline for a new camera. Calls
@@ -144,6 +157,9 @@ private:
     FramePipeline frame_pipeline_;
     StatisticsController statistics_;
     FilterChain filter_chain_;
+    /// @brief When true, the CD callback emits cd_events_ready() with a copy
+    /// of every batch. Off by default so non-calibration usage pays nothing.
+    std::atomic<bool> cd_broadcast_{false};
 };
 
 } // namespace gui

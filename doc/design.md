@@ -79,8 +79,11 @@ GUI-for-openEB/
 │   │   ├── icon_provider.h / .cpp       # SVG 图标缓存（QHash + 主题适配）
 │   │   ├── theme_controller.h / .cpp    # 主题控制器（LightGray/LightBlue × Light/Dark/FollowSystem）
 │   │   └── statistics_controller.h / .cpp # 统计数据采集
-│   ├── calibration/             # 标定向导
-│   │   └── calibration_wizard.h / .cpp  # 内参标定向导（条件编译）
+│   ├── calibration/             # 标定向导 + 工具
+│   │   ├── calibration_wizard.h / .cpp  # 内参标定向导（20Hz 闪烁棋盘 + 1ms/50ms 自动抓拍）
+│   │   ├── chessboard_display.h / .cpp  # 全屏闪烁棋盘（屏幕 DPI 自适应）
+│   │   ├── calibration_event_tap.h / .cpp # 1ms 事件累积 + max-window 选取
+│   │   └── sharpness_dialog.h / .cpp   # 锐度计（Laplacian 方差，10Hz 实时）
 │   ├── recorder/               # 录制/回放控制
 │   ├── exporter/               # 数据导出
 │   ├── config/                 # 配置序列化（JSON）+ 布局管理
@@ -884,11 +887,11 @@ public:
 | **algo/common/** | 20 | 事件 POD/包、环形/LIFO 缓冲、帧生成器与事件分帧器、FREME 模板、数据加载器（HDF5/RAW）、IIR 滤波器集、Kalman/KMeans/粒子滤波、周期样条、环形直方图、LIF 积分器、性能剖析、时间限制器、事件率估计 |
 | **algo/cv/** | 22 | 🆕 全部自研：噪声过滤（8 模式）、热像素过滤、4 朝向边缘检测、8 方向运动估计、光流估计（4 模式）、团块检测、目标跟踪（4 模式）、角点检测（3 模式）、ELiSeD 线段、霍夫直线/圆跟踪、方向共识、LIF 神经元聚类、背景掩码、透视去畸变、触发同步、带通滤波、电子稳定 EIS、超高速回放、XYT 3D 事件点云、Time Surface 窗口、可视化叠加（详见 4.3） |
 | **algo/analytics/** | 8 | 🆕 主动标记跟踪（滑动窗口聚类）、事件→灰度重建（2 种非 DL + DL 可选）、光流评估、ISI 直方图、颗粒计数器、闪烁频率检测、自适应 Bias、Sensor 自检（坏点 + 不应期） |
-| **algo/calibration/** | 1 | 🆕 单相机内参标定（含事件去畸变 LUT） |
+| **algo/calibration/** | 0 (Tools 向导) | 🆕 单相机内参标定向导（CalibrationWizard：闪烁棋盘 + 1ms/50ms 自动抓拍 + 事件去畸变 LUT），不再注册为算法 |
 | **algo/tests/** | 2 | 🆕 降噪评测框架（注入泊松+漏噪声，统计 TP/FP/TN/FN）、信号/噪声标注事件 |
 | **gui/algo_bridge/** | （封装层） | 🔄 直接调用 openEB 30 项已有能力（10 事件过滤 + 7 帧生成 + 7 预处理器 + 6 工具），不重复实现 |
 
-> **总计**：`AlgoBridge` 注册全部 30 个自研算法（cv 21 + analytics 8 + calibration 1；common/tests 模块为工具库不注册，noise_filter v1.0.9 起改为共享预处理阶段）+ 30 项 openEB 封装能力，共 60 项可通过 `list_algos()` 枚举。
+> **总计**：`AlgoBridge` 注册全部 29 个自研算法（cv 21 + analytics 8；calibration 已移至 Tools 菜单向导，不再注册为算法；common/tests 模块为工具库不注册，noise_filter v1.0.9 起改为共享预处理阶段）+ 30 项 openEB 封装能力，共 59 项可通过 `list_algos()` 枚举。
 > **数据约束**：仅支持单相机纯事件流 (x,y,p,t)，不含 DAVIS APS 帧、IMU、双目立体。所有模块均在纯事件输入下工作。
 > **算法来源**：噪声过滤、跟踪、光流、朝向、霍夫等核心思路借鉴 jAER（见 1.6 节对照表），全部以 C++17 重写并集成到 openEB 事件流回调中，不引入 Java 依赖。
 
@@ -1385,20 +1388,38 @@ openEB 未提供光流算法，需自研。结果以箭头/颜色图叠加到主
 
 **关闭行为**：用户关闭显示窗口时自动停用算法实例，并弹出 `QMessageBox` 报告：不应期统计（min/max/mean/median/p90，单位 us）+ 触发/测量/坏点像素数 + 疑似坏点坐标列表（上限 50 个，超出则显示"还有 N 个"）。
 
-### 4.5 algo/calibration/ — 相机标定
+### 4.5 algo/calibration/ — 相机标定（Tools 菜单向导）
 
-#### 4.5.1 内参标定 (IntrinsicCalibration)
+标定不再注册为算法，而是通过 **Tools → Intrinsic Wizard** 菜单启动 `CalibrationWizard` 对话框完成。整个流程针对纯事件相机优化（无 APS 帧），核心思路：屏幕上绘制 20 Hz 闪烁棋盘，每次翻转在棋盘边缘产生事件突发，1 ms 累积窗口对齐翻转即可"免费"捕获棋盘图案。
 
-借鉴 jAER `SingleCameraCalibration`（见 1.6.7），含事件去畸变 LUT 预计算。
+#### 4.5.1 内参标定向导 (CalibrationWizard)
 
 | 子模块 | 方案 | 借鉴 |
 |--------|------|------|
-| 标定板检测 | 棋盘格 / 圆形网格 / ArUco 标记板 | — |
-| 多帧采集 | 从事件流自动/手动采集多姿态帧 | — |
+| 标定板显示 | `ChessboardDisplay`：全屏黑白棋盘，20 Hz 翻转（50 ms 周期），根据屏幕物理 DPI 计算 square_size_mm | — |
+| 事件订阅 | `CameraController::cd_events_ready` 信号（cross-thread queued），`CalibrationEventTap` 缓冲批次 | — |
+| 自动抓拍 | 50 ms 周期取 1 ms 窗口中事件最多的一帧（O(N) 单遍扫描），`render_event_window` 渲染为灰度图（ON=255, OFF=0, 背景=128） | — |
+| 标定板检测 | `cv::findChessboardCorners`（棋盘格） | — |
+| 去重 | 与最近合格帧的 MSE < 阈值（默认 50.0）则丢弃（同姿态） | — |
+| 自动结束 | 达到目标帧数（默认 30）自动停止抓拍并运行标定 | — |
 | 内参计算 | Zhang 法（`cv::calibrateCamera`） | — |
-| 畸变模型 | k1,k2,p1,p2,k3（+ 可选 k4-k6 / 鱼眼） | — |
-| **事件去畸变 LUT** | 标定完成后预计算 HxW 的映射 LUT，运行时供 4.3.20 `PerspectiveUndistort` O(1) 查表 | `SingleCameraCalibration` LUT |
-| 输出 | K(3×3), distCoeffs, RMS, undistort_map_x (cv::Mat), undistort_map_y (cv::Mat) | — |
+| 畸变模型 | k1,k2,p1,p2,k3 | — |
+| 导出 | `QFileDialog` 弹窗，默认路径 `~/Documents/EBplus/calibration/intrinsic.yml`（与去畸变预处理默认路径一致），写入 image_width/image_height/camera_matrix/distortion_coefficients/rms | — |
+
+#### 4.5.2 锐度工具 (SharpnessDialog)
+
+**Tools → Sharpness** 菜单启动，10 Hz 轮询 `EventDisplayWidget::current_frame()`，计算当前事件可视化累积帧的 Laplacian 方差（标准锐度度量，越高越清晰），以滚动 2 秒折线图实时绘制（`SharpnessChart`）。用于 bias 调优和镜头对焦：将相机对准高对比度静态场景，观察曲线随对焦改善而上升。
+
+#### 4.5.3 事件去畸变预处理阶段 (Preprocessor undistort stage)
+
+可叠加预处理阶段，在侧栏 **Algorithms** 面板的 Preprocessing 组中勾选 "Undistort (apply calibration)" 启用。执行顺序：ROI → filter → downsample → **undistort**。
+
+| 子模块 | 方案 | 借鉴 |
+|--------|------|------|
+| 参数加载 | `load_intrinsics_yml()` 读取向导导出的 YAML（camera_matrix / distortion_coefficients / image_size） | — |
+| LUT 预计算 | `cv::undistortPoints` 正向映射（distorted → undistorted），K 按 ROI 原点 + downsample 因子调整（fx/fy /= factor, cx = (cx-roi_x)/factor, cy = (cy-roi_y)/factor） | `SingleCameraCalibration` LUT (L700-718) |
+| 运行时 | 每个事件查 LUT 得到去畸变后的坐标，越界事件丢弃 | JAER `undistortEvent` |
+| 默认路径 | `~/Documents/EBplus/calibration/intrinsic.yml`（与向导默认输出目录一致） | — |
 
 ---
 
