@@ -85,6 +85,7 @@ target_link_libraries(gui_core PUBLIC
     Qt6::Widgets
     Qt6::OpenGL
     Qt6::OpenGLWidgets
+    Qt6::Svg
     gui_algo
 )
 

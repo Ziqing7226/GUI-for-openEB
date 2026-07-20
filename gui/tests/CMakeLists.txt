@@ -24,6 +24,20 @@ target_link_libraries(test_theme_tokens PRIVATE
 target_compile_options(test_theme_tokens PRIVATE ${GUI_TEST_COMPILE_OPTS})
 gtest_discover_tests(test_theme_tokens)
 
+# --- test_icon_provider: embedded SVGs render through QtSvg. ---
+add_executable(test_icon_provider
+    test_icon_provider.cpp
+    ../resources/icons.qrc
+)
+target_link_libraries(test_icon_provider PRIVATE
+    gui_core
+    GTest::GTest
+)
+target_compile_options(test_icon_provider PRIVATE ${GUI_TEST_COMPILE_OPTS})
+gtest_discover_tests(test_icon_provider
+    PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
 # --- test_algo_bridge: registry, idempotent find_or_create, flood guard. ---
 add_executable(test_algo_bridge
     test_algo_bridge.cpp

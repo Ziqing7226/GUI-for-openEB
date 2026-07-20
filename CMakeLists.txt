@@ -25,7 +25,7 @@ if(APPLE)
 endif()
 
 # --- External dependencies -------------------------------------------------
-find_package(Qt6 REQUIRED COMPONENTS Widgets OpenGL OpenGLWidgets)
+find_package(Qt6 REQUIRED COMPONENTS Widgets OpenGL OpenGLWidgets Svg)
 find_package(MetavisionSDK 5.2.0 REQUIRED COMPONENTS base core stream)
 find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs calib3d videoio)
 
