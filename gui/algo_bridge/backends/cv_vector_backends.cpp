@@ -281,6 +281,15 @@ public:
         // skipped, which silently dropped the events between scans AND
         // stretched the decay dt (collapsing the accumulator by ~0.2× per
         // kept packet).
+        //
+        // §11.2-H: pass passthrough_.back().t explicitly to accumulate_only
+        // so the algo's last_t_ stays monotonic even when ROI/preproc
+        // filtering removes the packet's tail event or empties the packet
+        // entirely. Without this, last_t_ stalls on the filtered tail and
+        // the next non-empty packet sees an inflated dt, distorting the
+        // decay factor (1/(0.0001*decay*dt)).
+        const Metavision::timestamp cur_t =
+            passthrough_.empty() ? last_process_t_ : passthrough_.back().t;
         const auto* ev = as_events(passthrough_.data());
         std::size_t n = passthrough_.size();
         if (roi_.enabled && roi_.rw > 0 && roi_.rh > 0) {
@@ -294,9 +303,7 @@ public:
             n = m;
         }
         gui_algo::EventPacket pkt(ev, n);
-        algo_->accumulate_only(pkt);
-        const Metavision::timestamp cur_t =
-            passthrough_.empty() ? last_process_t_ : passthrough_.back().t;
+        algo_->accumulate_only(pkt, cur_t);
         if (last_process_t_ > 0 && cur_t - last_process_t_ < kMinProcessIntervalUs) {
             return;  // keep last_ cached result
         }

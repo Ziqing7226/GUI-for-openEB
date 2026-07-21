@@ -88,14 +88,25 @@ public:
     }
 
     /// 衰减 + 事件累积，不做峰值扫描（供节流路径每包调用）。
-    void accumulate_only(const EventPacket& packet) {
-        if (packet.empty()) return;
-        if (width_ <= 0 || height_ <= 0) return;
-
-        const Metavision::timestamp cur_t = packet[packet.size() - 1].t;
+    ///
+    /// @param cur_t 显式时间戳供衰减计算使用。审计 §11.2-H：当 ROI/预处理
+    /// 滤掉了包尾事件、或整个包被滤空时，algo 的 last_t_ 会停滞，下一包
+    /// 的 dt 被夸大、衰减失真。调用方（HoughCircleBackend）应传
+    /// passthrough_.back().t 以保证 last_t_ 单调推进。默认 -1 = 用
+    /// packet.back().t（向后兼容 process() 与单元测试）。
+    void accumulate_only(const EventPacket& packet,
+                         Metavision::timestamp cur_t = -1) {
+        // Resolve cur_t: if not provided, use packet.back().t. If neither is
+        // available (empty packet, no explicit cur_t), bail — nothing to do.
+        if (cur_t < 0) {
+            if (packet.empty()) return;
+            cur_t = packet[packet.size() - 1].t;
+        }
 
         // jAER non-exponential decay: factor = 1/(0.0001*decay*dt).
-        if (decay_mode_ && decay_ > 0.0f) {
+        // Apply even when the packet is empty (cur_t provided) so last_t_
+        // stays monotonic across ROI-filtered empty packets (§11.2-H).
+        if (width_ > 0 && height_ > 0 && decay_mode_ && decay_ > 0.0f) {
             const float dt = static_cast<float>(cur_t - last_t_);
             if (dt > 0.0f) {
                 const float decay_factor = 1.0f / (0.0001f * decay_ * dt);
@@ -103,6 +114,11 @@ public:
             }
         }
         last_t_ = cur_t;
+
+        // Empty packet (with explicit cur_t): timestamp advanced, nothing
+        // else to do.
+        if (packet.empty()) return;
+        if (width_ <= 0 || height_ <= 0) return;
 
         // Reset running maxima for this packet (jAER resets maxValue, keeps
         // maxCoordinate so the last known position persists across packets).
