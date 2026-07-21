@@ -101,6 +101,16 @@ bool PlaybackController::open_file(const QString& path) {
     // the new file loaded but never playing — audit §六-P1).
     playing_ = false;
     at_eof_ = false;
+    // §12.2-A #1 / §11.4-P0-1(b): set loop mode BEFORE start() so the
+    // FileFrameGenerator is configured correctly before any events arrive.
+    // Previously set_file_loop was called after start(), creating a window
+    // where on_timer could fire with stale loop_ and hit the wrong EOF/loop
+    // branch — for short files that triggered runtime_error during start(),
+    // the EOF callback set loading_complete_ before loop mode was applied,
+    // causing loop files to stop instead of wrap.
+    if (auto* fp = controller_->frame_pipeline()) {
+        fp->set_file_loop(loop_);
+    }
     // Start the camera so events flow into the FileFrameGenerator buffer.
     // With real_time_playback=false, all events arrive in ~10ms regardless
     // of file duration.
@@ -113,7 +123,6 @@ bool PlaybackController::open_file(const QString& path) {
     duration_us_ = query_duration();
     if (auto* fp = controller_->frame_pipeline()) {
         fp->set_file_duration_us(duration_us_);
-        fp->set_file_loop(loop_);
     }
     at_eof_ = false;
     // Auto-start playback.

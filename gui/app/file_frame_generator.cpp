@@ -187,14 +187,21 @@ void FileFrameGenerator::on_timer() {
     //     progress: wait silently (no advance, no EOF, no wrap — wrapping
     //     only makes sense for a complete file) until more events are
     //     buffered or loading completes. playing_ stays true.
+    //
+    // §12.2-A #1 fix: loading_complete_ gates ONLY the non-loop EOF-stop
+    // path, NOT the loop-wrap path. Baseline loop was robust without this
+    // gate; gating loop-wrap caused loop failure when loading_complete_
+    // was never set (runtime_error filtered as glitch, stale callback,
+    // etc.) or racy (QueuedConnection vs on_timer). Loop-wrap simply
+    // replays [0, dur) — safe regardless of loading state.
     if (dur > 0 && cursor_us_ >= dur) {
-        if (!loading_complete_.load(std::memory_order_acquire)) {
-            return;
-        }
         if (loop_) {
             cursor_us_ = 0;
             emit looped();
         } else {
+            if (!loading_complete_.load(std::memory_order_acquire)) {
+                return;
+            }
             timer_.stop();
             playing_ = false;
             emit eof_reached();
