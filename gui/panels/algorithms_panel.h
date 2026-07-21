@@ -188,6 +188,21 @@ private:
     /// One-shot guard for the E2VID "model failed to load" warning
     /// (audit §5-H1) so the user is not spammed on every model_path edit.
     bool e2vid_model_error_shown_{false};
+
+    /// Tracks whether the user has manually toggled preproc_downsample.
+    /// While false, enabling an algorithm auto-sets downsample based on
+    /// whether the algorithm's backend halves coordinates (§11.2-I):
+    ///   - event_to_video / isi_analyzer / time_surface / hough_line /
+    ///     hough_circle: downsample ON (halves coords, project memory)
+    ///   - all others: downsample OFF (avoids 4× input loss, §5-F1)
+    /// Once the user manually toggles, this flips true and auto-setting
+    /// stops — the user's choice is respected thereafter.
+    bool preproc_downsample_user_touched_{false};
+
+    /// Returns true if the named algorithm's backend halves event
+    /// coordinates when 1/4 downsample is enabled (vs. just thinning
+    /// events). Used by the auto-toggle logic (§11.2-I).
+    static bool algo_halves_coords(const std::string& algo_name);
 };
 
 } // namespace gui

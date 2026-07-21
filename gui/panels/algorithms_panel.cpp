@@ -265,6 +265,21 @@ void AlgorithmsPanel::build_ui() {
                         // guaranteed to match the sidebar state even if no
                         // widget signal fired since app start.
                         apply_global_roi();
+                        // Auto-set 1/4 downsample based on algorithm type
+                        // (§11.2-I): coordinate-halving backends (E2VID,
+                        // ISI, TimeSurface, HoughLine, HoughCircle) default
+                        // ON per project memory; all others default OFF to
+                        // avoid 4× input loss (§5-F1). Only auto-set while
+                        // the user has not manually toggled the checkbox.
+                        if (!preproc_downsample_user_touched_) {
+                            const bool want = algo_halves_coords(algo_name);
+                            if (preproc_downsample_cb_->isChecked() != want) {
+                                QSignalBlocker b(preproc_downsample_cb_);
+                                preproc_downsample_cb_->setChecked(want);
+                                apply_global_preproc(
+                                    "preproc_downsample", want ? "true" : "false");
+                            }
+                        }
                         emit info_message(tr("Algorithm enabled: %1")
                                               .arg(QString::fromStdString(a->display_name)));
                         // Request MainWindow to open the AlgoWindow so Standalone
@@ -388,7 +403,10 @@ void AlgorithmsPanel::build_preproc_selector(QVBoxLayout* parent_layout) {
     // 1/4 downsample (default OFF — audit §5-F1): for most backends this
     // only THINS events (coordinates unchanged, 3/4 of the input silently
     // discarded); only the E2VID/ISI/TimeSurface/Hough backends actually
-    // halve coordinates. Default-ON was a silent 4× input loss.
+    // halve coordinates. The checkbox is auto-set on algorithm enable
+    // (§11.2-I): ON for coordinate-halving backends (project memory),
+    // OFF for all others. Once the user manually toggles, auto-setting
+    // stops.
     preproc_downsample_cb_ = new QCheckBox(tr("1/4 Downsample"), gb);
     preproc_downsample_cb_->setChecked(false);
     preproc_downsample_cb_->setToolTip(tr(
@@ -560,6 +578,9 @@ void AlgorithmsPanel::build_preproc_selector(QVBoxLayout* parent_layout) {
     });
     connect(preproc_downsample_cb_, &QCheckBox::toggled, this, [this](bool on) {
         apply_global_preproc("preproc_downsample", on ? "true" : "false");
+        // Mark as user-touched so the auto-toggle on algorithm enable
+        // (§11.2-I) stops overriding the user's explicit choice.
+        preproc_downsample_user_touched_ = true;
     });
     connect(preproc_undistort_cb_, &QCheckBox::toggled, this, [this](bool on) {
         apply_global_preproc("preproc_undistort_enabled", on ? "true" : "false");
@@ -692,10 +713,11 @@ void AlgorithmsPanel::refresh_mode_visibility(const std::string& algo_name) {
 
     // Auto-set mode-appropriate ROI and output_fps only during initial build
     // (design §4.4.2): all three event_to_video modes default to a 128×128
-    // center ROI. The shared 1/4 downsample now defaults to OFF (audit
-    // §5-F1) — enable it explicitly for E2VID to reconstruct at 64×64.
-    // 24 fps is a comfortable target across all modes.
-    // Only event_to_video has a "mode" enum, so this code only runs for it.
+    // center ROI. The shared 1/4 downsample defaults to OFF here; it is
+    // auto-enabled on algorithm enable via algo_halves_coords() (§11.2-I),
+    // NOT in this first_init_ path. 24 fps is a comfortable target across
+    // all modes. Only event_to_video has a "mode" enum, so this code only
+    // runs for it.
     // BUG-14 fix: skip ROI/fps reset on user-driven mode switches so
     // user-customised values are preserved.
     if (!first_init_) return;
@@ -770,6 +792,19 @@ void AlgorithmsPanel::set_algo_enabled(const std::string& name, bool on) {
             emit algorithm_toggled(QString::fromStdString(other_name), false);
         }
     }
+}
+
+bool AlgorithmsPanel::algo_halves_coords(const std::string& algo_name) {
+    // These backends set preproc_.halve_coords_ = true in their constructor,
+    // meaning 1/4 downsample halves event coordinates (correct behavior:
+    // the algorithm runs at half resolution). For all other backends,
+    // downsample only thins events (3/4 discarded, coordinates unchanged) —
+    // a silent 4× input loss (§5-F1).
+    return algo_name == "event_to_video" ||
+           algo_name == "isi_analyzer" ||
+           algo_name == "time_surface" ||
+           algo_name == "hough_line" ||
+           algo_name == "hough_circle";
 }
 
 } // namespace gui
