@@ -31,6 +31,7 @@
 #include <QPointer>
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <deque>
 #include <memory>
@@ -147,6 +148,14 @@ private:
     QPushButton* in_stop_btn_{nullptr};
     QPushButton* in_reset_btn_{nullptr};
     QPushButton* in_save_btn_{nullptr};
+
+    /// §12.2-A #3: HUD status throttle. The worker posts set_status at up to
+    /// 20Hz (one per flip); each setText on the chessboard HUD label triggers
+    /// a repaint that competes with the flip repaint, causing visual jank.
+    /// Throttle HUD updates to 5Hz (200ms) + dedup on text. The wizard's own
+    /// in_status_ label updates immediately (separate window, no interference).
+    QString last_hud_text_;
+    std::chrono::steady_clock::time_point last_hud_time_{};
 
     std::unique_ptr<gui_algo::IntrinsicCalibration> intrinsic_;
     gui_algo::IntrinsicResult intrinsic_result_;

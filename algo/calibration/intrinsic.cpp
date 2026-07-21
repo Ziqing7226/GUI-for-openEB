@@ -121,6 +121,42 @@ DetectionResult IntrinsicCalibration::add_frame(const cv::Mat& frame, bool annot
     return result;
 }
 
+DetectionResult IntrinsicCalibration::add_frame(const cv::Mat& frame, bool annotate,
+                                                 std::vector<cv::Point2f> hint_corners) {
+    // Fall back to internal detection when no hint is provided or the pattern
+    // is not chessboard (the wizard's pre-detection only covers chessboard).
+    if (hint_corners.empty() || pattern_ != CalibrationPattern::Chessboard) {
+        return add_frame(frame, annotate);
+    }
+
+    DetectionResult result;
+    if (frame.empty()) {
+        result.found = false;
+        return result;
+    }
+    if (image_size_.area() == 0) {
+        image_size_ = frame.size();
+    }
+
+    // Reuse the caller's pre-detected + sub-pixel-refined corners — skip the
+    // expensive findChessboardCorners + cornerSubPix (audit §12.2-A #2).
+    result.found = true;
+    result.points = std::move(hint_corners);
+
+    if (annotate) {
+        if (frame.channels() == 1) {
+            cv::cvtColor(frame, result.image, cv::COLOR_GRAY2BGR);
+        } else {
+            result.image = frame.clone();
+        }
+        cv::drawChessboardCorners(result.image, board_size_, result.points, true);
+    }
+
+    image_points_.push_back(result.points);
+    object_points_.push_back(make_object_grid());
+    return result;
+}
+
 IntrinsicResult IntrinsicCalibration::run() {
     IntrinsicResult result;
     if (image_points_.size() < 3) {

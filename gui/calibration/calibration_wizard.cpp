@@ -431,6 +431,12 @@ void CalibrationWizard::worker_loop() {
         // we pre-detect corners here (worker thread, cost acceptable) and
         // only forward non-duplicates to add_frame(). Skipped for the very
         // first frame (no reference yet).
+        //
+        // §12.2-A #2: the pre-detected corners are passed to add_frame() as
+        // hint_corners, skipping its internal findChessboardCorners — this
+        // halves the per-frame detection cost and was a major source of
+        // chessboard flicker at 20Hz.
+        std::vector<cv::Point2f> hint_corners;
         if (!last_corners.empty()) {
             std::vector<cv::Point2f> corners;
             const bool found = cv::findChessboardCorners(gray, board, corners,
@@ -459,9 +465,10 @@ void CalibrationWizard::worker_loop() {
                     continue;
                 }
             }
+            hint_corners = std::move(corners);
         }
 
-        auto res = intrinsic_->add_frame(gray, true);
+        auto res = intrinsic_->add_frame(gray, true, std::move(hint_corners));
         if (!res.found) {
             post_to_gui([this, n_events]() {
                 set_status(tr("Rejected — chessboard not detected (%1 events).")
@@ -605,9 +612,21 @@ void CalibrationWizard::update_intrinsic_preview(const QImage& img) {
 
 void CalibrationWizard::set_status(const QString& text) {
     if (in_status_) in_status_->setText(text);
-    // Mirror onto the chessboard HUD so the status is visible in fullscreen
-    // (audit §9.2-C). HUD updates are state-change driven, never per flip.
-    if (chessboard_) chessboard_->set_status(text);
+    // §12.2-A #3: throttle the chessboard HUD mirror to 5Hz (200ms) + dedup.
+    // The worker posts set_status at up to 20Hz (one per flip); each setText
+    // on the HUD label triggers a repaint that competes with the flip repaint
+    // on the same fullscreen surface, causing visual jank/flicker. The wizard's
+    // own in_status_ label (above) updates immediately — it's a separate
+    // window, no compositing conflict.
+    if (chessboard_) {
+        const auto now = std::chrono::steady_clock::now();
+        if (text != last_hud_text_ ||
+            now - last_hud_time_ > std::chrono::milliseconds(200)) {
+            last_hud_text_ = text;
+            last_hud_time_ = now;
+            chessboard_->set_status(text);
+        }
+    }
 }
 
 QImage CalibrationWizard::cv_to_qimage(const cv::Mat& mat) {

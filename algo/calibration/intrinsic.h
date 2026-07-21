@@ -63,6 +63,18 @@ public:
     /// @return DetectionResult with found state and corner points.
     DetectionResult add_frame(const cv::Mat& frame, bool annotate = true);
 
+    /// @brief Overload that reuses pre-detected corners, skipping internal
+    /// findChessboardCorners/cornerSubPix (audit §12.2-A #2 / §11.4-P1-4).
+    /// Used by the calibration wizard, which pre-detects corners for
+    /// duplicate-pose checking — calling findChessboardCorners twice per
+    /// frame (once in the wizard, once here) was a major source of
+    /// chessboard flicker/jank at 20Hz.
+    /// @param hint_corners Pre-detected, sub-pixel-refined corners. If empty
+    ///                     or pattern != Chessboard, falls back to internal
+    ///                     detection (equivalent to the 2-arg overload).
+    DetectionResult add_frame(const cv::Mat& frame, bool annotate,
+                              std::vector<cv::Point2f> hint_corners);
+
     /// @brief Runs cv::calibrateCamera on all collected observations.
     IntrinsicResult run();
 

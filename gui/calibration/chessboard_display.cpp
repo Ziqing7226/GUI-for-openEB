@@ -88,12 +88,16 @@ ChessboardDisplay::ChessboardDisplay(QWidget* parent) : QWidget(parent, Qt::Wind
     timer_->setInterval(kFlipIntervalMs);
     connect(timer_, &QTimer::timeout, this, [this]() {
         inverted_ = !inverted_;
+        // §12.2-A #1 / §11.4-P0-2(a): use repaint() instead of update() so
+        // each flip is painted immediately. update() posts a paint event
+        // that Qt can coalesce — if the GUI thread is busy (e.g. processing
+        // set_status calls), two consecutive flips can merge into one,
+        // halving the effective flicker rate and destabilising detection.
+        // repaint() forces the backing-store sync now; the board draw is
+        // cheap (filled rectangles), well within the 50ms budget.
         // Only repaint the board area — the HUD band and the black margin
-        // don't change between flips. This is the critical performance win:
-        // a full-screen update() on a 4K surface at 20 Hz forces ~660 MB/s
-        // of backing-store compositing; scoping the update to the board rect
-        // cuts that by the screen-to-board area ratio.
-        update(QRect(board_origin_x_, board_origin_y_, board_w_px_, board_h_px_));
+        // don't change between flips.
+        repaint(QRect(board_origin_x_, board_origin_y_, board_w_px_, board_h_px_));
     });
 
     attach_to_screen(QGuiApplication::primaryScreen());
