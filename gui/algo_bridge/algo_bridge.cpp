@@ -118,12 +118,18 @@ void AlgoInstance::set_enabled(bool e) {
         rate_window_start_ = {};
         total_pushed_ = 0;
         total_dropped_ = 0;
-    } else if (backend_) {
-        // Disabling releases heavyweight resources (E2VID ONNX session,
-        // large frame buffers). Backends that support it rebuild lazily on
-        // the next push after re-enable (audit §5-E3). Default is a no-op.
-        backend_->release_resources();
     }
+    // §11.2-E: do NOT call backend_->release_resources() on disable. The
+    // previous behavior (§5-E3) released the E2VID ONNX session and large
+    // frame buffers, but this forced a 300-500ms model reload on re-enable
+    // (ensure_algo → rebuild → set_model_path), breaking the pause-resume /
+    // A-B-comparison workflow with 0.5-1s black screens on every algorithm
+    // switch. Resources are now kept loaded while disabled (worker idles on
+    // queue_cv_, model stays in memory) and released only when the
+    // AlgoInstance is destroyed (backend destructor). Memory cost is one
+    // model (~50-200MB) per disabled algorithm — acceptable for a desktop
+    // app. The release_resources() method is still available for explicit
+    // teardown if a future "Reset" button needs it.
 }
 
 bool AlgoInstance::is_enabled() const {

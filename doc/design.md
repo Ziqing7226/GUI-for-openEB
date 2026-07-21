@@ -1677,7 +1677,7 @@ v1.0.9 起菜单栏由 CustomTitleBar 实现（下拉菜单替代 QMenuBar）。
 1. **滑窗测速**：`push_events()` 按墙钟维护 1 秒滑动窗口，累计窗口内事件数；窗口满 1 秒时计算事件速率（events/s）。批次不再截断——在保护触发前每个事件都完整投递。用墙钟（而非批大小或事件时间戳）使文件回放与实况流适用同一阈值（原按"每批 5 万事件"的实现会在文件播放时误杀，见 doc/systematic_audit.md §五-E1）。
 2. **连续超限判定**：窗口速率 ≤ `kMaxEventRateEvPerSec`（30 Mev/s）时重置 `flood_strikes_ = 0`（偶发尖峰不触发停用）。
 3. **自动停用阈值**：连续 `kFloodStrikes`（默认 `4`，即持续约 4 秒超 30 Mev/s）个窗口超限，设置 `overloaded_ = true` 并将 `enabled_ = false`，算法实例停止处理事件，并通过 overload 回调通知 AlgorithmsPanel 同步取消侧栏复选框勾选。
-4. **用户重新启用**：用户在侧边栏"算法模块"面板重新勾选 "Enable" 时，`set_enabled(true)` 同时清零 `overloaded_`、`flood_strikes_` 与速率窗口，算法从干净状态重启（后端内部缓冲/累加器状态保留，维持暂停-恢复语义）；禁用时调用后端 `release_resources()` 释放重量级资源（E2VID ONNX session、大帧缓冲），重新启用后懒重建。
+4. **用户重新启用**：用户在侧边栏"算法模块"面板重新勾选 "Enable" 时，`set_enabled(true)` 同时清零 `overloaded_`、`flood_strikes_` 与速率窗口，算法从干净状态重启（后端内部缓冲/累加器状态保留，维持暂停-恢复语义）。禁用时**不再**调用后端 `release_resources()`（§11.2-E 修复）——重量级资源（E2VID ONNX session、大帧缓冲）在禁用期间保留，避免重新启用时 300-500ms 模型重载导致的黑屏；资源仅在 AlgoInstance 销毁时释放。
 
 **GUI 反馈**：
 - `is_overloaded()` 暴露停用原因，`process_algo_results()` 在遍历 live 实例时检测到该状态，于状态栏显示 "auto-disabled: event rate too high (re-enable to retry)"，并在对应 AlgoWindow 的状态标签显示 "AUTO-DISABLED: event flooding detected. Re-enable from the sidebar."

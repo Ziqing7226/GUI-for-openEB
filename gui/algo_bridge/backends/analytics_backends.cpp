@@ -381,7 +381,7 @@ public:
         return {};
     }
     void push_events(const Metavision::EventCD* b, const Metavision::EventCD* e) override {
-        ensure_algo();  // lazily rebuild after release_resources()
+        ensure_algo();  // lazily rebuild if algo_ was dropped (e.g. initial construction)
         // SDK data thread: preprocess ONLY, then enqueue — never touch algo_
         // here (audit §五-C1). The worker runs process()/get_frame().
         std::vector<gui_algo::Event> batch;
@@ -417,7 +417,7 @@ public:
         queue_cv_.notify_one();
     }
     AlgoResult pull_result() override {
-        ensure_algo();  // lazily rebuild after release_resources()
+        ensure_algo();  // lazily rebuild if algo_ was dropped (e.g. initial construction)
         // GUI thread: copy the latest finished frame out of the double
         // buffer — pull NEVER triggers inference (audit §五-C1).
         AlgoResult r;
@@ -473,11 +473,15 @@ public:
         }
         rebuild();
     }
-    /// @brief Releases the ONNX session and all frame buffers while the
-    /// instance is disabled (audit §5-E3). Stops the worker FIRST so it
-    /// cannot touch algo_ during teardown; the algorithm (and the worker)
-    /// is rebuilt/restarted lazily by ensure_algo() on the first push/pull
-    /// after re-enable.
+    /// @brief Releases the ONNX session and all frame buffers. Stops the
+    /// worker FIRST so it cannot touch algo_ during teardown; the algorithm
+    /// (and the worker) is rebuilt/restarted lazily by ensure_algo() on the
+    /// next push/pull.
+    /// NOTE (audit §11.2-E): this is NO LONGER called from
+    /// AlgoInstance::set_enabled(false) — disabling keeps resources loaded
+    /// to support the pause-resume / A-B-comparison workflow without
+    /// 300-500ms model reloads. The method is retained for explicit
+    /// teardown (e.g. a future "Reset" button or memory-pressure response).
     void release_resources() override {
         stop_worker();
         {
@@ -500,10 +504,9 @@ public:
         }
     }
 private:
-    /// Lazily rebuilds the algorithm (and restarts the worker) after
-    /// release_resources() dropped them. Always called under
-    /// AlgoInstance::mutex_ by the bridge, so it cannot race
-    /// rebuild()/release_resources().
+    /// Lazily rebuilds the algorithm (and restarts the worker) if algo_ was
+    /// dropped. Always called under AlgoInstance::mutex_ by the bridge, so it
+    /// cannot race rebuild()/release_resources().
     void ensure_algo() {
         if (!algo_) rebuild();
         start_worker();
