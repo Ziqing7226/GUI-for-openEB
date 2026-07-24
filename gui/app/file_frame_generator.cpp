@@ -74,10 +74,16 @@ void FileFrameGenerator::set_duration_us(Metavision::timestamp us) {
 void FileFrameGenerator::play() {
     if (playing_) return;
     if (width_ <= 0 || height_ <= 0) return;
-    // If at or past EOF, restart from the beginning.
+    // If at or past EOF, restart from the beginning. Only meaningful once
+    // loading is complete — a cursor parked at the buffer top while the
+    // file is still streaming is NOT EOF (audit §六-P2).
     const Metavision::timestamp dur = duration_us_.load(std::memory_order_relaxed);
-    if (dur > 0 && cursor_us_ >= dur) {
+    if (dur > 0 && cursor_us_ >= dur &&
+        loading_complete_.load(std::memory_order_acquire)) {
         cursor_us_ = 0;
+        // Same contract as seek()/looped(): stateful algorithms must reset
+        // before events from the beginning of the file arrive (audit §六-P4).
+        emit seeked(0);
     }
     playing_ = true;
     timer_.start(1000 / static_cast<int>(fps_));
@@ -91,6 +97,11 @@ void FileFrameGenerator::pause() {
 
 void FileFrameGenerator::seek(Metavision::timestamp t_us) {
     if (t_us < 0) t_us = 0;
+    // Clamp to the known duration so a Step past EOF can't park the cursor
+    // beyond the last event (the next Play would then restart from 0 as if
+    // EOF had been reached — audit §六-P5).
+    const Metavision::timestamp dur = duration_us_.load(std::memory_order_relaxed);
+    if (dur > 0 && t_us > dur) t_us = dur;
     cursor_us_ = t_us;
     // Notify listeners so stateful algorithms can reset their temporal state
     // before the new (possibly earlier) events arrive. Without this, a
@@ -129,15 +140,50 @@ void FileFrameGenerator::clear() {
         events_.clear();
     }
     duration_us_.store(0, std::memory_order_relaxed);
+    // A new file is about to stream in: suspend EOF handling until the
+    // loader signals completion (audit §六-P2).
+    loading_complete_.store(false, std::memory_order_release);
     cursor_us_ = 0;
 }
 
 void FileFrameGenerator::on_timer() {
     if (width_ <= 0 || height_ <= 0) return;
 
+    const Metavision::timestamp dur = duration_us_.load(std::memory_order_relaxed);
+
+    // EOF / buffer-wait check (audit §六-P2). duration_us_ is only the max
+    // timestamp buffered SO FAR, so a cursor at/past it means one of two
+    // things:
+    //   - loading complete  → genuine EOF: stop (emit eof_reached) or,
+    //     in loop mode, wrap to 0 (emit looped).
+    //   - still loading     → the cursor merely caught up with the read
+    //     progress: wait silently (no advance, no EOF, no wrap — wrapping
+    //     only makes sense for a complete file) until more events are
+    //     buffered or loading completes. playing_ stays true.
+    //
+    // §12.2-A #1 fix (edcfbf3 form): loading_complete_ gates ONLY the
+    // non-loop EOF-stop path, NOT the loop-wrap path. Baseline loop was
+    // robust without this gate; gating loop-wrap caused loop failure when
+    // loading_complete_ was never set (runtime_error filtered as glitch,
+    // stale callback, etc.) or racy (QueuedConnection vs on_timer).
+    // Loop-wrap simply replays [0, dur) — safe regardless of loading state.
+    if (dur > 0 && cursor_us_ >= dur) {
+        if (loop_) {
+            cursor_us_ = 0;
+            emit looped();
+        } else {
+            if (!loading_complete_.load(std::memory_order_acquire)) {
+                return;
+            }
+            timer_.stop();
+            playing_ = false;
+            emit eof_reached();
+            return;
+        }
+    }
+
     const Metavision::timestamp start = cursor_us_;
     const Metavision::timestamp end = start + accumulation_us_;
-    const Metavision::timestamp dur = duration_us_.load(std::memory_order_relaxed);
 
     // Render events in [start, end) to frame_.
     render_frame(start, end);
@@ -154,18 +200,6 @@ void FileFrameGenerator::on_timer() {
 
     cursor_us_ = end;
     emit position_changed(cursor_us_, dur);
-
-    // EOF check: cursor has passed the last event.
-    if (dur > 0 && cursor_us_ >= dur) {
-        if (loop_) {
-            cursor_us_ = 0;
-            emit looped();
-        } else {
-            timer_.stop();
-            playing_ = false;
-            emit eof_reached();
-        }
-    }
 }
 
 void FileFrameGenerator::render_frame(Metavision::timestamp start_us,

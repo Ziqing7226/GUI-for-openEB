@@ -77,6 +77,10 @@ public:
     void seek_file(Metavision::timestamp t_us);
     void set_file_loop(bool on);
     void set_file_duration_us(Metavision::timestamp us);
+    /// @brief Tells the FileFrameGenerator whether the file loader has
+    /// finished streaming the whole file into the buffer (audit §六-P2).
+    /// Called by CameraController when the SDK file camera hits EOF.
+    void set_file_loading_complete(bool complete);
     Metavision::timestamp file_position_us() const;
     Metavision::timestamp file_duration_us() const;
 

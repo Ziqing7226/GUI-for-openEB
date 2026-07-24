@@ -101,8 +101,24 @@ public:
     std::size_t event_count() const;
 
     /// @brief Clears the event buffer and resets the cursor. Called when
-    /// opening a new file or stopping the pipeline.
+    /// opening a new file or stopping the pipeline. Also resets the
+    /// loading_complete_ state: a new file is about to stream in, so EOF
+    /// handling is suspended until set_loading_complete(true).
     void clear();
+
+    /// @brief Marks whether the file loader has finished streaming the
+    /// whole file into the buffer (SDK file-camera EOF). EOF handling in
+    /// on_timer() (stop / loop wrap) only engages once this is true;
+    /// before that, a cursor that caught up with the read progress waits
+    /// instead of triggering a false EOF (audit §六-P2).
+    /// Defaults to true so standalone use (no loader attached) behaves as
+    /// before; clear() resets it to false for a fresh file load.
+    void set_loading_complete(bool complete) {
+        loading_complete_.store(complete, std::memory_order_release);
+    }
+    bool is_loading_complete() const {
+        return loading_complete_.load(std::memory_order_acquire);
+    }
 
 signals:
     /// @brief Emitted on each timer tick with the rendered frame.
@@ -155,6 +171,10 @@ private:
     std::uint16_t fps_{30};
     Metavision::timestamp accumulation_us_{33000};
     std::atomic<Metavision::timestamp> duration_us_{0};
+    // True once the file loader has streamed the whole file (SDK file EOF).
+    // Default true: with no loader attached (standalone tests, pre-filled
+    // buffer) EOF handling works as before. clear() resets it to false.
+    std::atomic<bool> loading_complete_{true};
     bool loop_{false};
     Metavision::ColorPalette palette_{Metavision::ColorPalette::Dark};
 

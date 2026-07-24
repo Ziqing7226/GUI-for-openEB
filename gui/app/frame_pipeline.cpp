@@ -199,6 +199,10 @@ void FramePipeline::set_file_duration_us(Metavision::timestamp us) {
     if (file_mode_) file_generator_.set_duration_us(us);
 }
 
+void FramePipeline::set_file_loading_complete(bool complete) {
+    if (file_mode_) file_generator_.set_loading_complete(complete);
+}
+
 Metavision::timestamp FramePipeline::file_position_us() const {
     if (file_mode_) return file_generator_.position_us();
     return 0;

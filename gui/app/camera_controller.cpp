@@ -219,6 +219,10 @@ void CameraController::setup_camera(Metavision::Camera&& cam, bool is_file) {
                 emit runtime_warning(tr("Playback ended: %1").arg(msg));
                 QMetaObject::invokeMethod(this, [this]() {
                     if (!camera_) return;
+                    // The whole file is now buffered: allow the
+                    // FileFrameGenerator's EOF handling (stop / loop wrap)
+                    // to engage (audit §六-P2).
+                    frame_pipeline_.set_file_loading_complete(true);
                     if (camera_->is_running()) {
                         try { camera_->stop(); } catch (...) {}
                     }

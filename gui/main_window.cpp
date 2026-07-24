@@ -776,6 +776,7 @@ void MainWindow::wire_signals() {
         // members are destroyed.
         remove_algo_callback();
         prev_frame_ts_ = 0;
+        prev_frame_wall_ = {};
         perf_meter_.reset();
         last_rate_eps_ = 0.0;
         settings_->information_panel()->clear();
@@ -809,6 +810,10 @@ void MainWindow::wire_signals() {
         stop_rec_blink();
     });
     connect(&camera_, &CameraController::stopped, this, [this]() {
+        // File source: the SDK camera stopping after buffering all events is
+        // NOT playback stopping — the FileFrameGenerator keeps playing from
+        // its buffer (same exemption as PlaybackController, audit §六-P3).
+        if (camera_.is_file_source()) return;
         // Auto-stop the recorder when the camera stops (user stop, file EOF,
         // runtime error). Without this, the recorder keeps running with a
         // dead camera — the flush timer ticks but get_latest_raw_data()
@@ -842,7 +847,21 @@ void MainWindow::wire_signals() {
                 display_->set_frame(frame);
                 settings_->statistics_panel()->set_timestamp(ts);
                 status_ts_->setText(QStringLiteral("t: %1 s").arg(ts / 1.0e6, 0, 'f', 3));
-                if (prev_frame_ts_ > 0 && ts > prev_frame_ts_) {
+                if (camera_.is_file_source()) {
+                    // File mode: ts is the FILE's timestamp, so ts-delta FPS
+                    // is distorted by the playback rate (slow motion shows
+                    // absurd values like 10000 fps). Use the wall-clock
+                    // interval between displayed frames instead (audit §六-P6).
+                    const auto now = std::chrono::steady_clock::now();
+                    if (prev_frame_wall_.time_since_epoch().count() > 0) {
+                        const double dt =
+                            std::chrono::duration<double>(now - prev_frame_wall_).count();
+                        if (dt > 0.0) {
+                            settings_->statistics_panel()->set_fps(1.0 / dt);
+                        }
+                    }
+                    prev_frame_wall_ = now;
+                } else if (prev_frame_ts_ > 0 && ts > prev_frame_ts_) {
                     const double fps = 1.0e6 / static_cast<double>(ts - prev_frame_ts_);
                     settings_->statistics_panel()->set_fps(fps);
                 }
