@@ -1,6 +1,10 @@
 // algo/cv/line_segment_detector.h — ELiSeD event-level line segment detection.
 //
-// ✅ 移植自 jAER ELiSeD (EBCCSP2016)
+// 移植自 jAER ELiSeD (EBCCSP2016) 的**时间戳 Sobel 梯度**部分；线支撑区为
+// 自研的"每包朝向分桶 + 矩拟合"（jAER 核心是逐事件生长/合并/分裂的持久
+// LineSupport 区域，由 8000 事件环形缓冲驱动，未移植）。jAER 的
+// predictTimestamps（邻居缺失/过期时取对侧像素时间戳保持梯度对称，
+// 默认开启）也未移植。
 // Ported from jAER's ch.unizh.ini.jaer.projects.elised.ELiSeD. The detector
 // maintains per-polarity timestamp maps, computes a 3x3 Sobel convolution on
 // the timestamp values (not on event counts), derives the level-line angle

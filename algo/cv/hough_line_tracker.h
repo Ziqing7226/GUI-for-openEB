@@ -2,9 +2,19 @@
 //
 // ✅ 移植自 jAER HoughLineTracker (net.sf.jaer.eventprocessing.tracking.
 // HoughLineTracker)。事件驱动增量霍夫直线变换：维护 2D 累加器 (ρ, θ)，θ ∈ [0, π)；
-// 逐事件对每个 θ 角度箱计算 ρ = x·cos(θ) + y·sin(θ) 并投票；累加器按时间常数
-// accumulatorDecayUs 指数衰减（事件过期）；在累加器中寻找局部极大值作为检测直线
-// (ρ, θ)，转换为图像内线段端点输出；按 (ρ, θ) 最近邻关联持久航迹。对应设计 §4.3.14。
+// 逐事件对每个 θ 角度箱计算 ρ = x·cos(θ) + y·sin(θ) 并投票；每包将整个累加器乘以
+// hough_decay_factor（与 jAER 一致；不存在 accumulatorDecayUs 时间常数衰减）；
+// 在累加器中寻找局部极大值作为检测直线 (ρ, θ)，转换为图像内线段端点输出；
+// 按 (ρ, θ) 最近邻关联持久航迹。对应设计 §4.3.14。
+//
+// 与 jAER 的差异：
+//   * 衰减时机：jAER 先投票再衰减且峰检测在衰减后的值上进行；本实现先衰减再投票。
+//   * ρ 未中心化（jAER 投票前先减 sx2/sy2 质心）。
+//   * 输出角度为线方向角（θ+90°）；jAER 输出法线角 θ。GUI 内部自洽，
+//     但数值不可直接与 jAER 对比。
+//   * 输出语义重写：jAER 单峰 + LowpassFilter/AngularLowpassFilter 平滑
+//     (tauMs=10) + favorVertical 裁剪；本实现多峰 + NMS + ≤16 条线 + 持久
+//     航迹（自研），丢弃了 jAER 的输出低通。
 // Header-only.
 
 #ifndef GUI_ALGO_CV_HOUGH_LINE_TRACKER_H
@@ -81,6 +91,9 @@ public:
     /// Used by the GUI backend to render the Hough space as an aux frame.
     const std::vector<float>& accum() const { return accum_; }
     Metavision::timestamp accumulator_decay_us() const {
+        // Legacy no-op, retained only because gui/algo_bridge passes it
+        // positionally; jAER has no time-constant decay (see header comment).
+        // Removal deferred to the gui bridge cleanup.
         return accumulator_decay_us_;
     }
     void set_num_theta_bins(int v) {
@@ -95,7 +108,7 @@ public:
     }
     void set_threshold(int v) { threshold_ = v; }
     void set_accumulator_decay_us(Metavision::timestamp v) {
-        accumulator_decay_us_ = v;
+        accumulator_decay_us_ = v;  // legacy no-op (gui/algo_bridge compat)
     }
     float hough_decay_factor() const { return hough_decay_factor_; }
     void set_hough_decay_factor(float v) {
