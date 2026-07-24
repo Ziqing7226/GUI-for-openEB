@@ -5,8 +5,10 @@
 #include <QApplication>
 #include <QComboBox>
 #include <QDialogButtonBox>
+#include <QDir>
 #include <QDoubleSpinBox>
 #include <QFileDialog>
+#include <QFileInfo>
 #include <QFormLayout>
 #include <QGuiApplication>
 #include <QHBoxLayout>
@@ -376,6 +378,9 @@ void CalibrationWizard::on_intrinsic_save() {
         default_export_path(),
         tr("YAML (*.yml *.yaml);;All Files (*)"));
     if (path.isEmpty()) return;
+    // §六-B2: the default path's directory doesn't exist on first use —
+    // create it, otherwise the export always fails.
+    QDir().mkpath(QFileInfo(path).absolutePath());
     try {
         cv::FileStorage fs(path.toStdString(), cv::FileStorage::WRITE);
         if (!fs.isOpened()) throw std::runtime_error("Cannot open file");

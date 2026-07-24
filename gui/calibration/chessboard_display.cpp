@@ -6,6 +6,7 @@
 #include <QKeyEvent>
 #include <QPainter>
 #include <QPaintEvent>
+#include <QResizeEvent>
 #include <QScreen>
 #include <QTimer>
 
@@ -56,10 +57,9 @@ void ChessboardDisplay::attach_to_screen(QScreen* screen) {
     attached_screen_ = screen ? screen : QGuiApplication::primaryScreen();
     recompute_geometry();
     if (attached_screen_) {
-        // Park the window at the screen's top-left; user can fullscreen from
-        // there with F.
-        const QRect g = attached_screen_->availableGeometry();
-        move(g.topLeft());
+        // Park the window at the screen's top-left so showFullScreen() lands
+        // on the right monitor; user can toggle windowed mode with F.
+        move(attached_screen_->geometry().topLeft());
     }
     update();  // full repaint — geometry changed
 }
@@ -71,11 +71,20 @@ void ChessboardDisplay::set_pattern(int inner_cols, int inner_rows) {
     update();  // full repaint — pattern changed
 }
 
+void ChessboardDisplay::resizeEvent(QResizeEvent* event) {
+    QWidget::resizeEvent(event);
+    // Geometry follows the widget's own rect (audit §9.2-B / §六-B5), so
+    // fullscreen↔windowed transitions recompute automatically. The resize
+    // itself already schedules a repaint — no explicit update() needed.
+    recompute_geometry();
+}
+
 void ChessboardDisplay::recompute_geometry() {
-    if (!attached_screen_) return;
-    const QRect g = attached_screen_->availableGeometry();
-    const int avail_w = g.width();
-    const int avail_h = g.height();
+    // Available drawing area: the widget's own rect — the same coordinate
+    // system paintEvent draws in — so the board is always exactly where it
+    // is painted, in both fullscreen and windowed mode.
+    const int avail_w = width();
+    const int avail_h = height();
     if (avail_w <= 0 || avail_h <= 0) return;
 
     // The board has (inner_cols+1) × (inner_rows+1) squares. Choose a square
@@ -91,14 +100,12 @@ void ChessboardDisplay::recompute_geometry() {
     board_origin_y_ = (avail_h - board_h_px_) / 2;
 
     // Physical size from screen DPI. QScreen::physicalDotsPerInch() reports
-    // the panel's physical DPI; square_mm = pixels / dpi * 25.4.
-    const qreal dpi = attached_screen_->physicalDotsPerInch();
-    if (dpi > 0.0) {
-        square_size_mm_ = static_cast<float>(square_size_px_ / dpi * 25.4);
-    } else {
-        // Fallback: assume 96 DPI (typical desktop).
-        square_size_mm_ = static_cast<float>(square_size_px_ / 96.0 * 25.4);
-    }
+    // the panel's physical DPI; square_mm = pixels / dpi * 25.4. This value
+    // is only a default — X11 DPI is often unreliable (audit §9.2-G).
+    qreal dpi = 0.0;
+    if (attached_screen_) dpi = attached_screen_->physicalDotsPerInch();
+    if (dpi <= 0.0) dpi = 96.0;  // Fallback: typical desktop DPI.
+    square_size_mm_ = static_cast<float>(square_size_px_ / dpi * 25.4);
 }
 
 void ChessboardDisplay::start_flicker() {

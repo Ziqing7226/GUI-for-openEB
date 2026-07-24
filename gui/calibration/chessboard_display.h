@@ -7,9 +7,11 @@
 // OpenCV corner detection — so the camera "sees" the chessboard for free,
 // without any APS frame grabber.
 //
-// The board geometry is computed from the target screen's pixel dimensions
-// and physical DPI so the reported square_size_mm is physically meaningful
-// for cv::calibrateCamera's object-point scale.
+// Board geometry is computed from the widget's own rect() (resizeEvent), so
+// fullscreen and windowed modes are both correct (audit §9.2-B / §六-B5 —
+// the previous code computed origin from the screen's availableGeometry but
+// painted in widget coordinates, misplacing the board in windowed mode).
+// Only the physical-DPI lookup for square_size_mm still uses the screen.
 //
 // Rendering: squares are drawn directly in paintEvent via fillRect — no
 // pre-rendered full-screen pixmaps. On each flip, update() is scoped to the
@@ -20,6 +22,7 @@
 #ifndef GUI_CALIBRATION_CHESSBOARD_DISPLAY_H
 #define GUI_CALIBRATION_CHESSBOARD_DISPLAY_H
 
+#include <QPointer>
 #include <QWidget>
 
 class QScreen;
@@ -56,6 +59,7 @@ public:
 protected:
     void paintEvent(QPaintEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
 
 private:
     void recompute_geometry();
@@ -73,7 +77,8 @@ private:
     bool fullscreen_{true};  ///< Defaults to fullscreen — the board must fill
                               ///< the screen for the camera to see it whole.
     QTimer* timer_{nullptr};
-    QScreen* attached_screen_{nullptr};
+    QPointer<QScreen> attached_screen_;  ///< QPointer (audit §六-B6): a hot-
+                                         ///< unplugged screen must not dangle.
 };
 
 } // namespace gui
