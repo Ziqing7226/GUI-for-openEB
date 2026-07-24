@@ -387,19 +387,30 @@ void AlgoBridge::apply_global_preproc(const std::string& key,
     // OpenEB event-transform stages (source=="openeb") have backend_==nullptr
     // (pass-through to FilterChain); preproc_* params have no effect on them
     // and would pollute their param_values_ map, so they are skipped.
-    std::lock_guard<std::mutex> lk(live_mutex_);
-    // Cache the value so instances created later (by other code paths) inherit
-    // the shared preprocessing state (BUG-R4).
-    preproc_cache_[key] = value;
-    for (auto it = live_instances_.begin(); it != live_instances_.end(); ) {
-        if (auto inst = it->second.lock()) {
-            if (inst->info().source == "self") {
-                inst->set_param(key, value);
+    //
+    // Threading (audit §五-C2): set_param can be heavyweight (e.g. E2VID
+    // rebuilds reload the ONNX model). Take a snapshot under live_mutex_ and
+    // apply the params OUTSIDE the lock so list_live/find_live callers are
+    // not blocked for the duration.
+    std::vector<std::shared_ptr<AlgoInstance>> snapshot;
+    {
+        std::lock_guard<std::mutex> lk(live_mutex_);
+        // Cache the value so instances created later (by other code paths)
+        // inherit the shared preprocessing state (BUG-R4).
+        preproc_cache_[key] = value;
+        for (auto it = live_instances_.begin(); it != live_instances_.end(); ) {
+            if (auto inst = it->second.lock()) {
+                if (inst->info().source == "self") {
+                    snapshot.push_back(std::move(inst));
+                }
+                ++it;
+            } else {
+                it = live_instances_.erase(it);
             }
-            ++it;
-        } else {
-            it = live_instances_.erase(it);
         }
+    }
+    for (auto& inst : snapshot) {
+        inst->set_param(key, value);
     }
 }
 
@@ -410,26 +421,33 @@ void AlgoBridge::apply_global_roi(const std::string& enabled,
                                   const std::string& h) {
     // Apply the roi_* parameters to every live self-developed instance and
     // cache them so instances created later inherit the current ROI (N3).
-    // Same source/category filter as apply_global_preproc.
-    std::lock_guard<std::mutex> lk(live_mutex_);
-    roi_cache_["roi_enabled"] = enabled;
-    roi_cache_["roi_x"] = x;
-    roi_cache_["roi_y"] = y;
-    roi_cache_["roi_w"] = w;
-    roi_cache_["roi_h"] = h;
-    for (auto it = live_instances_.begin(); it != live_instances_.end(); ) {
-        if (auto inst = it->second.lock()) {
-            if (inst->info().source == "self") {
-                inst->set_param("roi_enabled", enabled);
-                inst->set_param("roi_x", x);
-                inst->set_param("roi_y", y);
-                inst->set_param("roi_w", w);
-                inst->set_param("roi_h", h);
+    // Same snapshot-then-apply-outside-lock pattern as apply_global_preproc
+    // (audit §五-C2).
+    std::vector<std::shared_ptr<AlgoInstance>> snapshot;
+    {
+        std::lock_guard<std::mutex> lk(live_mutex_);
+        roi_cache_["roi_enabled"] = enabled;
+        roi_cache_["roi_x"] = x;
+        roi_cache_["roi_y"] = y;
+        roi_cache_["roi_w"] = w;
+        roi_cache_["roi_h"] = h;
+        for (auto it = live_instances_.begin(); it != live_instances_.end(); ) {
+            if (auto inst = it->second.lock()) {
+                if (inst->info().source == "self") {
+                    snapshot.push_back(std::move(inst));
+                }
+                ++it;
+            } else {
+                it = live_instances_.erase(it);
             }
-            ++it;
-        } else {
-            it = live_instances_.erase(it);
         }
+    }
+    for (auto& inst : snapshot) {
+        inst->set_param("roi_enabled", enabled);
+        inst->set_param("roi_x", x);
+        inst->set_param("roi_y", y);
+        inst->set_param("roi_w", w);
+        inst->set_param("roi_h", h);
     }
 }
 

@@ -72,6 +72,13 @@ public:
         return r;
     }
     void reset() override { algo_.reset(); passthrough_.clear(); roi_buf_.clear(); last_t_ = 0; last_detect_t_ = 0; }
+    void set_sensor_dimensions(int w, int h) override {
+        roi_.set_sensor_dimensions(w, h);
+        algo_ = gui_algo::ParticleCounter(w, h);  // sensor-sized grid
+        // Re-apply an explicit counting line; -1 (auto) keeps the new
+        // sensor's height/2 ctor default.
+        if (line_y_ >= 0) algo_.set_counting_line_y(line_y_);
+    }
 };
 
 /// AutoBiasController backend — bias command as overlay text.
@@ -119,6 +126,11 @@ public:
         return r;
     }
     void reset() override { algo_.reset(); passthrough_.clear(); roi_buf_.clear(); last_t_ = 0; last_cmd_ = {}; }
+    void set_sensor_dimensions(int w, int h) override {
+        // The algo holds no sensor-sized state (rate controller) — only the
+        // ROI geometry needs updating (audit §五-D1).
+        roi_.set_sensor_dimensions(w, h);
+    }
 };
 
 // ===========================================================================
@@ -165,6 +177,10 @@ public:
         return r;
     }
     void reset() override { algo_.reset(); last_out_.clear(); passthrough_.clear(); roi_buf_.clear(); }
+    void set_sensor_dimensions(int w, int h) override {
+        roi_.set_sensor_dimensions(w, h);
+        algo_ = gui_algo::TriggerSyncedFilter(w, h);  // per-pixel timestamp grids
+    }
 };
 
 
@@ -223,7 +239,11 @@ public:
     }
     void reset() override { algo_.reset(); passthrough_.clear(); roi_buf_.clear(); last_.clear(); }
     void set_sensor_dimensions(int w, int h) override {
-        roi_.init(w, h);
+        roi_.set_sensor_dimensions(w, h);
+        // The algo keeps sensor-sized internal buffers (audit §五-D2) —
+        // rebuild at the new dimensions (params revert to ctor defaults;
+        // MainWindow resets instances on source change anyway).
+        algo_ = gui_algo::FreqDetector(w, h);
     }
 };
 
@@ -284,6 +304,10 @@ public:
         return r;
     }
     void reset() override { algo_.reset(); passthrough_.clear(); roi_buf_.clear(); last_.clear(); last_analyze_t_ = 0; }
+    void set_sensor_dimensions(int w, int h) override {
+        roi_.set_sensor_dimensions(w, h);
+        algo_ = gui_algo::ActiveMarker(w, h);  // sensor-sized cluster grid
+    }
 };
 
 
