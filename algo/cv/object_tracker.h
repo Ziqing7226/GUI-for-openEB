@@ -91,6 +91,13 @@ public:
 
     /// @brief Processes a batch of events, updating clusters.
     void process(const Event* events, std::size_t count) {
+        // First packet after construction/reset: anchor prev_batch_t_ to the
+        // first event (-1 sentinel). With large-timestamp sources (live camera
+        // t≈1e9us, cropped playback) a 0 initial value would age every cluster
+        // by t0 and instantly prune them all on the next packet (§四-M1).
+        if (prev_batch_t_ < 0 && count > 0) {
+            prev_batch_t_ = events[0].t;
+        }
         Metavision::timestamp last_t = prev_batch_t_;
         prune_lost();
         for (auto& c : clusters_) c.begin_batch();
@@ -141,7 +148,7 @@ public:
         clusters_.clear();
         tracked_.clear();
         next_id_ = 0;
-        prev_batch_t_ = 0;
+        prev_batch_t_ = -1;  // -1 sentinel: re-anchor on the next first event
     }
 
 private:
@@ -277,8 +284,15 @@ private:
                 }
             } else if (enable_velocity_prediction_) {
                 const float dt_s = static_cast<float>(dt_us) * 1e-6F;
-                x_ += vx_ * dt_s;
-                y_ += vy_ * dt_s;
+                // Clamp the per-batch extrapolation to ±cluster_size_px
+                // (§四-S1): without this, a noisy velocity estimate
+                // integrated over a whole packet gap threw the cluster
+                // hundreds of px away and every packet spawned a new cluster.
+                const float lim = static_cast<float>(cluster_size_px_);
+                const float dx = vx_ * dt_s;
+                const float dy = vy_ * dt_s;
+                x_ += (dx < -lim) ? -lim : (dx > lim ? lim : dx);
+                y_ += (dy < -lim) ? -lim : (dy > lim ? lim : dy);
             }
         }
 
@@ -556,8 +570,14 @@ private:
                 const float dt_s =
                     static_cast<float>(e.t - prev_pos_t_) * 1e-6F;
                 if (dt_s > 0.0F) {
-                    vx_ = (x_ - prev_x_) / dt_s;
-                    vy_ = (y_ - prev_y_) / dt_s;
+                    // jAER RCT velocityTauMs=100ms first-order low-pass on the
+                    // instantaneous velocity (alpha = min(1, dt/tau)). Without
+                    // it the IIR-smoothed per-event position step (~0.05 px)
+                    // divided by a us-scale dt produced huge velocity spikes
+                    // that broke tracking via age() extrapolation (§四-S1).
+                    const float alpha = std::min(1.0F, dt_s / 0.1F);
+                    vx_ += alpha * ((x_ - prev_x_) / dt_s - vx_);
+                    vy_ += alpha * ((y_ - prev_y_) / dt_s - vy_);
                 }
             }
             prev_x_ = x_;
@@ -676,7 +696,7 @@ private:
     std::vector<Cluster> clusters_;
     std::vector<TrackedObject> tracked_;
     int next_id_{0};
-    Metavision::timestamp prev_batch_t_{0};
+    Metavision::timestamp prev_batch_t_{-1};  // -1 = no packet seen yet
 };
 
 } // namespace gui_algo

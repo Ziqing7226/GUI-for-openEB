@@ -73,6 +73,7 @@ public:
         for (auto& b : buckets_) b.clear();
         auto& buckets = buckets_;
 
+        Metavision::timestamp now = -1;
         for (const Event& e : packet) {
             if (e.x >= width_ || e.y >= height_) continue;
             const std::size_t idx =
@@ -80,6 +81,7 @@ public:
             // Update the per-polarity timestamp map (jAER addEvent).
             std::vector<Metavision::timestamp>& ts_map = e.p ? on_ts_ : off_ts_;
             ts_map[idx] = e.t;
+            if (e.t > now) now = e.t;
 
             float gx = 0.0f;
             float gy = 0.0f;
@@ -93,6 +95,19 @@ public:
                 static_cast<float>(e.x), static_cast<float>(e.y));
         }
 
+        // Prune tracks unmatched for > 2 s (§四-M6: the association
+        // tolerance is only 5 px, so moving segments spawned a new track
+        // every packet and the list grew unbounded).
+        if (now >= 0) {
+            tracks_.erase(
+                std::remove_if(tracks_.begin(), tracks_.end(),
+                               [now](const Track& tr) {
+                                   return tr.last_seen >= 0 &&
+                                          now - tr.last_seen > kTrackTimeoutUs;
+                               }),
+                tracks_.end());
+        }
+
         for (int o = 0; o < num_bins; ++o) {
             if (buckets[static_cast<std::size_t>(o)].size() <
                 static_cast<std::size_t>(min_line_length_px_)) {
@@ -100,7 +115,7 @@ public:
             }
             LineSegment seg;
             if (fit_line_from_moments(buckets[static_cast<std::size_t>(o)], seg)) {
-                seg.track_id = associate(seg);
+                seg.track_id = associate(seg, now);
                 result.push_back(seg);
             }
         }
@@ -109,12 +124,12 @@ public:
 
     // Parameter accessors ---------------------------------------------------
     int min_line_length_px() const { return min_line_length_px_; }
-    float orientation_threshold() const { return orientation_threshold_; }
+    float orientation_threshold() const { return orientation_threshold_; }  // legacy no-op
     int max_line_gap_px() const { return max_line_gap_px_; }
     int max_age_us() const { return max_age_us_; }
     int num_orientations() const { return num_orientations_; }
     void set_min_line_length_px(int v) { min_line_length_px_ = v; }
-    void set_orientation_threshold(float v) { orientation_threshold_ = v; }
+    void set_orientation_threshold(float v) { orientation_threshold_ = v; }  // legacy no-op
     void set_max_line_gap_px(int v) { max_line_gap_px_ = v; }
     void set_max_age_us(int v) { max_age_us_ = v; }
     void set_num_orientations(int v) { num_orientations_ = v; }
@@ -133,6 +148,7 @@ private:
         int id{-1};
         cv::Point2f last_start;
         cv::Point2f last_end;
+        Metavision::timestamp last_seen{-1};  ///< last match time (us)
     };
 
     static float dist2(const cv::Point2f& a, const cv::Point2f& b) {
@@ -261,7 +277,7 @@ private:
     }
 
     /// @brief Associates a segment with an existing track by nearest endpoint.
-    int associate(const LineSegment& seg) {
+    int associate(const LineSegment& seg, Metavision::timestamp now) {
         const float tol = static_cast<float>(max_line_gap_px_);
         const float tol2 = tol * tol;
         int best_id = -1;
@@ -275,19 +291,26 @@ private:
         }
         if (best_id < 0) {
             best_id = next_track_id_++;
-            tracks_.push_back(Track{best_id, seg.start, seg.end});
+            tracks_.push_back(Track{best_id, seg.start, seg.end, now});
         } else {
             for (auto& tr : tracks_) {
-                if (tr.id == best_id) { tr.last_start = seg.start; tr.last_end = seg.end; break; }
+                if (tr.id == best_id) {
+                    tr.last_start = seg.start;
+                    tr.last_end = seg.end;
+                    tr.last_seen = now;
+                    break;
+                }
             }
         }
         return best_id;
     }
 
+    static constexpr Metavision::timestamp kTrackTimeoutUs = 2000000;  // 2 s
+
     int width_;
     int height_;
     int min_line_length_px_;
-    float orientation_threshold_;
+    float orientation_threshold_;  ///< Legacy no-op (removed in dead-code commit).
     int max_line_gap_px_;
     int max_age_us_{kDefaultMaxAgeUs};
     int num_orientations_{kDefaultNumOrientations};

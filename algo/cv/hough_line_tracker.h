@@ -51,6 +51,11 @@ struct HoughLine {
 /// are converted to image-spanning line segments for overlay rendering.
 class HoughLineTracker {
 public:
+    /// @param accumulator_decay_us Legacy no-op (jAER has no time-constant
+    ///                             decay — see header comment), retained only
+    ///                             because gui/algo_bridge passes it
+    ///                             positionally; removal deferred to the gui
+    ///                             bridge cleanup.
     HoughLineTracker(int width, int height,
                      int num_theta_bins = 90,
                      int num_rho_bins = 0,
@@ -75,11 +80,20 @@ public:
             apply_decay();
         }
         last_t_ = cur_t;
+        // Prune tracks unmatched for > 2 s (§四-M6: the track list used to
+        // grow unbounded, degrading the O(n) association over time).
+        tracks_.erase(
+            std::remove_if(tracks_.begin(), tracks_.end(),
+                           [cur_t](const Track& tr) {
+                               return tr.last_seen >= 0 &&
+                                      cur_t - tr.last_seen > kTrackTimeoutUs;
+                           }),
+            tracks_.end());
         for (const Event& e : packet) {
             if (e.x >= width_ || e.y >= height_) continue;
             accumulate(e.x, e.y);
         }
-        find_peaks(result);
+        find_peaks(result, cur_t);
         return result;
     }
 
@@ -90,10 +104,7 @@ public:
     /// @brief Read-only access to the θ-ρ accumulator (θ major, ρ minor).
     /// Used by the GUI backend to render the Hough space as an aux frame.
     const std::vector<float>& accum() const { return accum_; }
-    Metavision::timestamp accumulator_decay_us() const {
-        // Legacy no-op, retained only because gui/algo_bridge passes it
-        // positionally; jAER has no time-constant decay (see header comment).
-        // Removal deferred to the gui bridge cleanup.
+    Metavision::timestamp accumulator_decay_us() const {  // legacy no-op
         return accumulator_decay_us_;
     }
     void set_num_theta_bins(int v) {
@@ -127,6 +138,7 @@ private:
         int id{-1};
         int last_ti{0};
         int last_ri{0};
+        Metavision::timestamp last_seen{-1};  ///< last match time (us)
     };
 
     struct Cand { int ti; int ri; float val; };  // candidate peak (OPT-33)
@@ -185,7 +197,7 @@ private:
 
     /// @brief Finds local maxima above threshold, applies non-maximum
     /// suppression in (θ, ρ) space and associates persistent tracks.
-    void find_peaks(std::vector<HoughLine>& out) {
+    void find_peaks(std::vector<HoughLine>& out, Metavision::timestamp cur_t) {
         cands_.clear();
         auto& cands = cands_;
         for (int ti = 0; ti < num_theta_bins_; ++ti) {
@@ -214,7 +226,7 @@ private:
             if (suppress) continue;
             accepted.emplace_back(c.ti, c.ri);
             HoughLine hl = to_segment(c.ti, c.ri);
-            hl.track_id = associate(c.ti, c.ri);
+            hl.track_id = associate(c.ti, c.ri, cur_t);
             out.push_back(hl);
             if (out.size() >= kMaxDetections) break;
         }
@@ -262,7 +274,7 @@ private:
         return hl;
     }
 
-    int associate(int ti, int ri) {
+    int associate(int ti, int ri, Metavision::timestamp cur_t) {
         const int theta_tol = std::max(1, num_theta_bins_ / 9);
         const int rho_tol = std::max(1, num_rho_bins_ / 10);
         int best_id = -1;
@@ -275,16 +287,22 @@ private:
         }
         if (best_id < 0) {
             best_id = next_track_id_++;
-            tracks_.push_back(Track{best_id, ti, ri});
+            tracks_.push_back(Track{best_id, ti, ri, cur_t});
         } else {
             for (Track& tr : tracks_) {
-                if (tr.id == best_id) { tr.last_ti = ti; tr.last_ri = ri; break; }
+                if (tr.id == best_id) {
+                    tr.last_ti = ti;
+                    tr.last_ri = ri;
+                    tr.last_seen = cur_t;
+                    break;
+                }
             }
         }
         return best_id;
     }
 
     static constexpr std::size_t kMaxDetections = 16;
+    static constexpr Metavision::timestamp kTrackTimeoutUs = 2000000;  // 2 s
     static constexpr double kPi = 3.14159265358979323846;
 
     int width_;
@@ -292,7 +310,7 @@ private:
     int num_theta_bins_;
     int num_rho_bins_{1};
     int threshold_;
-    Metavision::timestamp accumulator_decay_us_;
+    Metavision::timestamp accumulator_decay_us_;  ///< Legacy no-op (gui compat).
     float hough_decay_factor_{0.6F};  // jAER houghDecayFactor default (per-packet)
     float rho_max_{0.0f};
     float rho_step_{1.0f};

@@ -354,19 +354,21 @@ private:
     /// circle of radius `max_radius_px_` centered at (centerX, centerY) into
     /// the accumulator, adding `weight` to each outlined cell. Uses only
     /// integer addition/subtraction. Ellipse eqn: A*x^2 + B*y^2 + C*x*y - 1
-    /// = 0, with A = B = radius^2, C = 0 (a circle).
+    /// = 0, with A = B = radius^2, C = 0 (a circle). All accumulator math is
+    /// int64: radius^2 overflows 32-bit int for radius >= 46341 (§四-低10).
     void accumulate(int centerX, int centerY, float weight) {
-        const int aa = max_radius_px_ * max_radius_px_;
-        const int bb = aa;
-        const int twoC = 0;
+        const std::int64_t aa =
+            static_cast<std::int64_t>(max_radius_px_) * max_radius_px_;
+        const std::int64_t bb = aa;
+        const std::int64_t twoC = 0;
 
         int x = 0;
-        int y = static_cast<int>(std::lround(std::sqrt(static_cast<float>(bb))));
-        const int twoaa = 2 * aa;
-        const int twobb = 2 * bb;
-        int dx = (twoaa * y) + (twoC * x);
-        int dy = -((twobb * x) + (twoC * y));
-        int ellipseError = aa * ((y * y) - bb);
+        int y = static_cast<int>(std::lround(std::sqrt(static_cast<double>(bb))));
+        const std::int64_t twoaa = 2 * aa;
+        const std::int64_t twobb = 2 * bb;
+        std::int64_t dx = (twoaa * y) + (twoC * x);
+        std::int64_t dy = -((twobb * x) + (twoC * y));
+        std::int64_t ellipseError = aa * ((static_cast<std::int64_t>(y) * y) - bb);
 
         // first sector: (dy/dx > 1) -> y+1 (x+1)
         while (dy > dx) {
