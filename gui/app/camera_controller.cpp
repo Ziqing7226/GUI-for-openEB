@@ -191,8 +191,12 @@ void CameraController::setup_camera(Metavision::Camera&& cam, bool is_file) {
     fetch_sensor_info();
 
     // Runtime error callback: file EOF, disconnects, firmware errors arrive here.
+    // Capture the camera pointer: this callback's queued lambdas may execute
+    // AFTER the user has connected a different source — without the identity
+    // check, a stale error from source A would stop the freshly-connected
+    // source B and emit a spurious stopped() (audit §六-C1).
     err_cb_id_ = camera_->add_runtime_error_callback(
-        [this](const Metavision::CameraException& e) {
+        [this, cam = camera_.get()](const Metavision::CameraException& e) {
             // Reaching end-of-file is a normal stop condition for playback.
             const QString msg = QString::fromUtf8(e.what());
 
@@ -217,8 +221,8 @@ void CameraController::setup_camera(Metavision::Camera&& cam, bool is_file) {
             } else if (is_file_) {
                 // File source + non-glitch error → genuine EOF.
                 emit runtime_warning(tr("Playback ended: %1").arg(msg));
-                QMetaObject::invokeMethod(this, [this]() {
-                    if (!camera_) return;
+                QMetaObject::invokeMethod(this, [this, cam]() {
+                    if (camera_.get() != cam) return;  // stale callback, see above
                     // The whole file is now buffered: allow the
                     // FileFrameGenerator's EOF handling (stop / loop wrap)
                     // to engage (audit §六-P2).
@@ -231,8 +235,8 @@ void CameraController::setup_camera(Metavision::Camera&& cam, bool is_file) {
             } else {
                 // Live camera + genuine error: stop and report.
                 emit error(msg);
-                QMetaObject::invokeMethod(this, [this]() {
-                    if (!camera_) return;
+                QMetaObject::invokeMethod(this, [this, cam]() {
+                    if (camera_.get() != cam) return;  // stale callback, see above
                     if (camera_->is_running()) {
                         try { camera_->stop(); } catch (...) {}
                     }
@@ -310,11 +314,20 @@ void CameraController::setup_camera(Metavision::Camera&& cam, bool is_file) {
     if (is_file) {
         frame_pipeline_.set_file_filter_chain(&filter_chain_);
         if (!frame_pipeline_.start_file(w, h, fps, acc)) {
-            emit runtime_warning(tr("Failed to start file frame pipeline."));
+            // Without a running pipeline the display stays black forever —
+            // abort the connection instead of reporting "Connected"
+            // (audit §六-C4).
+            teardown();
+            emit disconnected();
+            emit error(tr("Failed to start file frame pipeline."));
+            return;
         }
     } else {
         if (!frame_pipeline_.start(w, h, fps, acc)) {
-            emit runtime_warning(tr("Failed to start frame pipeline."));
+            teardown();
+            emit disconnected();
+            emit error(tr("Failed to start frame pipeline."));
+            return;
         }
     }
 

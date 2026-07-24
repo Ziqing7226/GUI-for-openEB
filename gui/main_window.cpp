@@ -1119,8 +1119,9 @@ void MainWindow::on_file_opened_for_playback(const QString& path) {
     // Route through the playback controller so it can capture duration and
     // start the position probe timer.
     if (!playback_.open_file(path)) {
-        QMessageBox::warning(this, tr("Open file"),
-                             tr("Failed to open event file:\n%1").arg(path));
+        // The failure was already reported via CameraController::error /
+        // PlaybackController::error (message box / status bar) — showing a
+        // second dialog here would duplicate it (audit §六-C3).
         return;
     }
     add_recent_file(path);
@@ -1428,8 +1429,13 @@ void MainWindow::install_algo_callback() {
                                 if (xyt_algo_) {
                                     const auto tw = xyt_algo_->get_param("time_window_us");
                                     if (!tw.empty()) {
-                                        xyt_display_->set_time_window_ms(
-                                            static_cast<float>(std::stoi(tw)) / 1000.0f);
+                                        // Malformed param (hand-edited JSON)
+                                        // must not throw out of the slot —
+                                        // keep the current window (audit §六-U5).
+                                        try {
+                                            xyt_display_->set_time_window_ms(
+                                                static_cast<float>(std::stoi(tw)) / 1000.0f);
+                                        } catch (const std::exception&) {}
                                     }
                                 }
                                 xyt_display_->push_events(copy->data(),
@@ -1562,8 +1568,12 @@ void MainWindow::on_events_window_ready(std::shared_ptr<std::vector<Metavision::
         if (xyt_algo_) {
             const auto tw = xyt_algo_->get_param("time_window_us");
             if (!tw.empty()) {
-                xyt_display_->set_time_window_ms(
-                    static_cast<float>(std::stoi(tw)) / 1000.0f);
+                // Malformed param (hand-edited JSON) must not throw out of
+                // the slot — keep the current window (audit §六-U5).
+                try {
+                    xyt_display_->set_time_window_ms(
+                        static_cast<float>(std::stoi(tw)) / 1000.0f);
+                } catch (const std::exception&) {}
             }
         }
         xyt_display_->push_events(copy->data(), copy->data() + copy->size());
@@ -1925,8 +1935,12 @@ void MainWindow::on_open_xyt_view() {
         if (xyt_algo_) {
             const auto tw_us = xyt_algo_->get_param("time_window_us");
             if (!tw_us.empty()) {
-                xyt_display_->set_time_window_ms(
-                    static_cast<float>(std::stoi(tw_us)) / 1000.0f);
+                // Malformed param (hand-edited JSON) must not throw out of
+                // the slot — keep the display's default window (audit §六-U5).
+                try {
+                    xyt_display_->set_time_window_ms(
+                        static_cast<float>(std::stoi(tw_us)) / 1000.0f);
+                } catch (const std::exception&) {}
             }
         }
         // Sync the sidebar checkbox (blocked, no re-entry).
