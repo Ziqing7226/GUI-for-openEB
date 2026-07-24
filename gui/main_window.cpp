@@ -432,11 +432,11 @@ void MainWindow::build_menus() {
     // management functions irrelevant to the current dock-based GUI.
     // Algorithm-specific windows are opened from the sidebar's Algorithms
     // section, not duplicated here.
-    m_tools_ = mb->addMenu(tr("&Tools"));
+    auto* m_tools = mb->addMenu(tr("&Tools"));
     // Calibration (Phase 9) — launches the wizard lazily.
-    m_tools_->addAction(tr("&Intrinsic Wizard..."), this, &MainWindow::on_intrinsic_wizard);
+    m_tools->addAction(tr("&Intrinsic Wizard..."), this, &MainWindow::on_intrinsic_wizard);
     // Sharpness meter — live variance-of-Laplacian of the current event frame.
-    m_tools_->addAction(tr("&Sharpness..."), this, &MainWindow::on_sharpness);
+    m_tools->addAction(tr("&Sharpness..."), this, &MainWindow::on_sharpness);
 
     // Help
     auto* m_help = mb->addMenu(tr("&Help"));
