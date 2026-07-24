@@ -224,8 +224,6 @@ public:
     int min_radius_px() const { return min_radius_px_; }  // legacy no-op
     int max_radius_px() const { return max_radius_px_; }
     int threshold() const { return threshold_; }
-    /// @brief Compatibility alias for threshold() (used by older callers).
-    int hough_threshold() const { return threshold_; }
     Metavision::timestamp accumulator_decay_us() const {  // legacy no-op
         return accumulator_decay_us_;
     }
@@ -250,8 +248,6 @@ public:
         rebuild();
     }
     void set_threshold(int v) { threshold_ = v; }
-    /// @brief Compatibility alias for set_threshold().
-    void set_hough_threshold(int v) { threshold_ = v; }
     void set_accumulator_decay_us(Metavision::timestamp v) {
         accumulator_decay_us_ = v;  // legacy no-op (gui/algo_bridge compat)
     }
