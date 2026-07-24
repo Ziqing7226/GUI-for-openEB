@@ -185,6 +185,10 @@ private:
     /// mode switches don't clobber user-customised ROI/fps (BUG-14 fix).
     bool first_init_{true};
 
+    /// One-shot guard for the E2VID "model failed to load" warning
+    /// (audit §五-H1) so the user is not spammed on every model_path edit.
+    bool e2vid_model_error_shown_{false};
+
     /// Tracks whether the user has manually toggled preproc_downsample.
     /// While false, enabling an algorithm auto-sets downsample based on
     /// whether the algorithm's backend halves coordinates (§11.2-I):

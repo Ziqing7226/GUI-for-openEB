@@ -86,7 +86,16 @@ void AlgoInstance::set_param(const std::string& key, const std::string& value) {
 std::string AlgoInstance::get_param(const std::string& key) const {
     std::lock_guard<std::mutex> lk(mutex_);
     auto it = param_values_.find(key);
-    return it == param_values_.end() ? std::string{} : it->second;
+    if (it != param_values_.end()) return it->second;
+    // Not a registered key: fall back to the backend so runtime pseudo-params
+    // (e.g. EventToVideo's "model_loaded", §五-H1) remain reachable. This
+    // cannot change the string format of registered params — every key in
+    // info_.params is initialised into param_values_ at construction, so the
+    // fallback only ever fires for unregistered keys, for which the backend
+    // is the only source (unknown keys still yield the backend's empty
+    // string, preserving the previous contract).
+    if (backend_) return backend_->get_param(key);
+    return {};
 }
 
 void AlgoInstance::set_enabled(bool e) {

@@ -653,6 +653,15 @@ void AlgorithmsPanel::apply_param(const std::string& algo_name,
                 }
             }
         }
+        // §五-H1: a failed ONNX load silently falls back to the heuristic
+        // path — warn once per panel session so the user does not mistake
+        // the heuristic output for "E2VID quality".
+        if (it->second->get_param("model_loaded") == "false" &&
+            !e2vid_model_error_shown_) {
+            e2vid_model_error_shown_ = true;
+            emit error_message(tr("E2VID model failed to load — using the "
+                                  "heuristic fallback reconstruction."));
+        }
     }
 }
 

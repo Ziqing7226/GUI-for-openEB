@@ -124,6 +124,15 @@ public:
     /// Backends holding w×h algorithm state must additionally rebuild or
     /// resize the algorithm here.
     virtual void set_sensor_dimensions(int /*width*/, int /*height*/) {}
+
+    /// @brief Releases heavyweight resources (ONNX sessions, large frame
+    /// buffers). NOT called by AlgoInstance::set_enabled(false) (§11.2-E:
+    /// releasing on disable forced a model reload on every algorithm switch,
+    /// breaking pause-resume). Retained for explicit teardown (destructor,
+    /// future memory-pressure handling). Backends that release resources
+    /// must rebuild them lazily on the next push/pull (ensure_algo pattern).
+    /// Default: no-op (lightweight backends keep their state).
+    virtual void release_resources() {}
 };
 
 /// @brief 工厂：按算法名字创建具体后端。

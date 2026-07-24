@@ -121,6 +121,22 @@ TEST(AlgoBridgeRegistry, EventToVideoIsRegistered) {
     EXPECT_FALSE(info->params.empty());
 }
 
+// §五-H1: the backend's runtime pseudo-param "model_loaded" must be
+// reachable through AlgoInstance::get_param (backend fallback for
+// unregistered keys) — the panel's one-shot load-failure warning depends
+// on it. In E2VID mode (the default) the value is "true"/"false" depending
+// on whether the ONNX file at model_path could be loaded; it must never be
+// empty.
+TEST(AlgoBridgeInstances, EventToVideoModelLoadedPseudoParam) {
+    AlgoBridge bridge;
+    auto inst = bridge.find_or_create("event_to_video");
+    ASSERT_NE(inst, nullptr);
+    const std::string v = inst->get_param("model_loaded");
+    EXPECT_TRUE(v == "true" || v == "false")
+        << "model_loaded must be reachable via the backend fallback, got: '"
+        << v << "'";
+}
+
 // ---------------------------------------------------------------------------
 // find_or_create() idempotency / create() freshness / find_live() visibility.
 // ---------------------------------------------------------------------------
