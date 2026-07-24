@@ -239,13 +239,18 @@ public:
     BackgroundMaskBackend(int w, int h) : algo_(w, h) { roi_.init(w, h); }
     void set_param(const std::string& k, const std::string& v) override {
         if (roi_.set_param(k, v)) return;
-        if (k == "learning_rate") algo_.set_learning_window_s(static_cast<float>(to_d(v)));
+        // "learning_window_s" maps to the algo's learning window in seconds
+        // (set_learning_window_s) — it is a window, not a rate (§五-B2).
+        // "learning_rate" is accepted as a backward-compat alias for configs
+        // saved before the rename (§11.2-G); ConfigManager also migrates it.
+        if (k == "learning_window_s" || k == "learning_rate")
+            algo_.set_learning_window_s(static_cast<float>(to_d(v)));
         else if (k == "threshold") algo_.set_background_rate_threshold_hz(static_cast<float>(to_d(v)));
         else if (k == "erosion_size") algo_.set_erosion_size(to_i(v));
     }
     std::string get_param(const std::string& k) const override {
         auto r = roi_.get_param(k); if (!r.empty()) return r;
-        if (k == "learning_rate") return from_d(algo_.learning_window_s());
+        if (k == "learning_window_s") return from_d(algo_.learning_window_s());
         if (k == "threshold") return from_d(algo_.background_rate_threshold_hz());
         if (k == "erosion_size") return from_i(algo_.erosion_size());
         return {};

@@ -25,16 +25,25 @@ class ParticleCounterBackend final : public AlgoBackend {
     Metavision::timestamp last_t_{0};
     static constexpr Metavision::timestamp kMinDetectIntervalUs = 50000;
     Metavision::timestamp last_detect_t_{0};
+    // -1 = auto (algo default: sensor-height midpoint). Persisted separately
+    // because the algo clamps negative values to 0 — it cannot represent
+    // "auto" itself (audit §五-B4).
+    int line_y_{-1};
 public:
     ParticleCounterBackend(int w, int h) : algo_(w, h) { roi_.init(w, h); }
     void set_param(const std::string& k, const std::string& v) override {
         if (roi_.set_param(k, v)) return;
-        if (k == "line_y") algo_.set_counting_line_y(to_i(v));
+        if (k == "line_y") {
+            line_y_ = to_i(v, -1);
+            // -1 = auto: keep the algo's ctor default (height/2); only an
+            // explicit non-negative row is forwarded.
+            if (line_y_ >= 0) algo_.set_counting_line_y(line_y_);
+        }
         else if (k == "min_area") algo_.set_min_particle_size_px(to_i(v));
     }
     std::string get_param(const std::string& k) const override {
         auto r = roi_.get_param(k); if (!r.empty()) return r;
-        if (k == "line_y") return from_i(algo_.counting_line_y());
+        if (k == "line_y") return from_i(line_y_);
         if (k == "min_area") return from_i(algo_.min_particle_size_px());
         return {};
     }
