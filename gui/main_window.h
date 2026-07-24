@@ -236,6 +236,10 @@ private:
     /// there — audit §六-P6).
     std::chrono::steady_clock::time_point prev_frame_wall_{};
 
+    /// True while closeEvent() is tearing down; AlgoWindow `closing`
+    /// handlers skip modal report dialogs in that case (audit §六-M3).
+    bool closing_app_{false};
+
     /// Performance profiler: measures end-to-end latency (event arrival →
     /// frame display), total events/frames, and drop count. Fed from the
     /// SDK CD callback (tick_events) and the frame_ready signal (tick_frame).

@@ -50,7 +50,15 @@ public:
 
     /// @brief Thread-safe: buffers events from the SDK streaming thread.
     /// Events MUST be sorted by timestamp (the SDK guarantees this).
+    /// Stops appending once kMaxBufferedEvents is reached (OOM guard,
+    /// audit §六-C2): the buffer is truncated and buffer_truncated() is
+    /// emitted once. Playback of the buffered prefix continues normally.
     void add_events(const Metavision::EventCD* begin, const Metavision::EventCD* end);
+
+    /// @brief Hard cap on buffered events (OOM guard, audit §六-C2).
+    /// Each buffered Metavision::EventCD is 16 bytes, so 300M events is
+    /// ~4.8 GB resident — beyond this we drop incoming batches.
+    static constexpr std::size_t kMaxBufferedEvents = 300'000'000;
 
     /// @brief Sets the sensor geometry for frame rendering.
     void set_geometry(long width, long height);
@@ -102,8 +110,8 @@ public:
 
     /// @brief Clears the event buffer and resets the cursor. Called when
     /// opening a new file or stopping the pipeline. Also resets the
-    /// loading_complete_ state: a new file is about to stream in, so EOF
-    /// handling is suspended until set_loading_complete(true).
+    /// loading_complete_/truncated_ state: a new file is about to stream
+    /// in, so EOF handling is suspended until set_loading_complete(true).
     void clear();
 
     /// @brief Marks whether the file loader has finished streaming the
@@ -119,6 +127,10 @@ public:
     bool is_loading_complete() const {
         return loading_complete_.load(std::memory_order_acquire);
     }
+
+    /// @brief True once the buffer hit kMaxBufferedEvents and incoming
+    /// events were dropped (audit §六-C2). Reset by clear().
+    bool is_truncated() const;
 
 signals:
     /// @brief Emitted on each timer tick with the rendered frame.
@@ -155,6 +167,11 @@ signals:
     void events_window_ready(std::shared_ptr<std::vector<Metavision::EventCD>> events,
                              Metavision::timestamp ts);
 
+    /// @brief Emitted once when the event buffer reaches kMaxBufferedEvents
+    /// and further events are dropped (audit §六-C2). Emitted from the SDK
+    /// streaming thread (queued to listeners on the GUI thread).
+    void buffer_truncated();
+
 private:
     void on_timer();
     void render_frame(Metavision::timestamp start_us, Metavision::timestamp end_us);
@@ -162,6 +179,8 @@ private:
     // Event buffer — appended from SDK thread, read from GUI thread.
     std::vector<Metavision::EventCD> events_;
     mutable std::mutex mutex_;
+    // OOM guard state (audit §六-C2), guarded by mutex_.
+    bool truncated_{false};
 
     // Geometry
     long width_{0};

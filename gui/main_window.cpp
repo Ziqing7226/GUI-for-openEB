@@ -147,6 +147,16 @@ MainWindow::MainWindow(QWidget* parent)
         auto* grip = new ResizeGrip(p, this);
         resize_grips_.push_back(grip);
     }
+    // Position the grips immediately: resizeEvent() is the only other place
+    // that repositions them, and if the WM delivers no resize event after
+    // show() the grips would keep their default geometry (0,0,100,30) —
+    // raised above the title bar's File menu (audit §六-M1).
+    {
+        const QRect r = rect();
+        for (auto* grip : resize_grips_) {
+            if (grip) grip->reposition(r);
+        }
+    }
 
     // Capture the factory layout (all docks in their default positions) so
     // reset_layout() can restore it. Must be called before load_default()
@@ -194,6 +204,11 @@ MainWindow::~MainWindow() = default;
 
 void MainWindow::closeEvent(QCloseEvent* event) {
     if (layout_manager_) layout_manager_->save_default();
+
+    // Mark shutdown in progress: the AlgoWindow `closing` handlers below
+    // consult this to skip modal report dialogs that would block the close
+    // sequence (audit §六-M3).
+    closing_app_ = true;
 
     // ---- Phase 1: stop all data sources BEFORE deleting child widgets. ----
     // The CD callback and frame pipeline run on the camera's data thread.
@@ -1621,7 +1636,14 @@ void MainWindow::process_algo_results(QImage& frame) {
         } catch (...) {
             continue;
         }
-        inst->apply_strategy(frame, r, ctx);
+        // apply_strategy runs mat_to_qimage / frame.copy etc. — a
+        // cv::Exception escaping this Qt slot would terminate the app
+        // (audit §五-H2). Skip this algorithm's output for one frame instead.
+        try {
+            inst->apply_strategy(frame, r, ctx);
+        } catch (...) {
+            continue;
+        }
     }
 
     // Draw the ROI rectangle of any enabled self-developed algorithm so the
@@ -1892,8 +1914,12 @@ void MainWindow::on_open_algo_window(const std::string& algo_name) {
             inst->set_param("__final_report", "1");
             auto r = inst->pull_result();
             inst->set_enabled(false);
-            QMessageBox::information(this, tr("Sensor Self-Test Report"),
-                QString::fromStdString(r.status));
+            // During application shutdown the modal report would block the
+            // close sequence — skip it (the window is going away anyway).
+            if (!closing_app_) {
+                QMessageBox::information(this, tr("Sensor Self-Test Report"),
+                    QString::fromStdString(r.status));
+            }
         } else {
             if (inst) inst->set_enabled(false);
         }

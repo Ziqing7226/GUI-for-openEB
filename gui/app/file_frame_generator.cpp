@@ -22,17 +22,38 @@ FileFrameGenerator::~FileFrameGenerator() {
 void FileFrameGenerator::add_events(const Metavision::EventCD* begin,
                                     const Metavision::EventCD* end) {
     if (begin == nullptr || end == nullptr || begin >= end) return;
-    std::lock_guard<std::mutex> lock(mutex_);
-    events_.insert(events_.end(), begin, end);
-    // Duration = last event timestamp. Updated atomically so on_timer()
-    // (GUI thread) can read it without locking.
-    const Metavision::timestamp last_t = (end - 1)->t;
-    Metavision::timestamp cur = duration_us_.load(std::memory_order_relaxed);
-    while (last_t > cur) {
-        if (duration_us_.compare_exchange_weak(cur, last_t,
-                                               std::memory_order_relaxed)) {
-            break;
+    bool just_truncated = false;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        // OOM guard (audit §六-C2): never let the buffer grow past
+        // kMaxBufferedEvents. A batch that would cross the cap is only
+        // appended up to the cap; the rest is dropped and reported once.
+        const std::size_t room = kMaxBufferedEvents - events_.size();
+        const std::size_t n = static_cast<std::size_t>(end - begin);
+        if (room > 0) {
+            const Metavision::EventCD* append_end =
+                begin + std::min(n, room);
+            events_.insert(events_.end(), begin, append_end);
+            // Duration = last buffered event timestamp. Updated atomically
+            // so on_timer() (GUI thread) can read it without locking.
+            const Metavision::timestamp last_t = (append_end - 1)->t;
+            Metavision::timestamp cur =
+                duration_us_.load(std::memory_order_relaxed);
+            while (last_t > cur) {
+                if (duration_us_.compare_exchange_weak(
+                        cur, last_t, std::memory_order_relaxed)) {
+                    break;
+                }
+            }
         }
+        if (n > room && !truncated_) {
+            truncated_ = true;
+            just_truncated = true;
+        }
+    }
+    // Emit outside the lock; Qt queues this to GUI-thread listeners.
+    if (just_truncated) {
+        emit buffer_truncated();
     }
 }
 
@@ -138,12 +159,18 @@ void FileFrameGenerator::clear() {
     {
         std::lock_guard<std::mutex> lock(mutex_);
         events_.clear();
+        truncated_ = false;
     }
     duration_us_.store(0, std::memory_order_relaxed);
     // A new file is about to stream in: suspend EOF handling until the
     // loader signals completion (audit §六-P2).
     loading_complete_.store(false, std::memory_order_release);
     cursor_us_ = 0;
+}
+
+bool FileFrameGenerator::is_truncated() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return truncated_;
 }
 
 void FileFrameGenerator::on_timer() {

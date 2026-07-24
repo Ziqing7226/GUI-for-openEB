@@ -115,6 +115,10 @@ signals:
     void events_window_ready(std::shared_ptr<std::vector<Metavision::EventCD>> events,
                              Metavision::timestamp ts);
 
+    /// File mode: emitted once when the FileFrameGenerator's event buffer
+    /// hits its hard cap and further events are dropped (audit §六-C2).
+    void file_buffer_truncated();
+
 private:
     void recreate_window();
     std::uint16_t clamp_fps(std::uint16_t fps) const;

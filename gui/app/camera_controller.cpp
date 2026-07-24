@@ -5,14 +5,37 @@
 #include <QMetaObject>
 #include <QString>
 
+#include <filesystem>
+
 #include <metavision/sdk/stream/camera_error_code.h>
 #include <metavision/sdk/stream/camera_exception.h>
 #include <metavision/sdk/stream/file_config_hints.h>
 
 namespace gui {
 
+namespace {
+// OOM guard for file playback (audit §六-C2a). RAW Evt3 encodes events at
+// ~8 bytes/event on average (CD events dominate; headers/time-high words
+// amortized), so file_size / 8 is a rough event-count estimate. Buffered
+// Metavision::EventCD is 16 bytes/event, so 150M events ≈ 2.4 GB resident
+// in the FileFrameGenerator buffer — warn above that, but never block the
+// open: the user decides whether to continue.
+constexpr unsigned long long kEvt3BytesPerEventEstimate = 8;
+constexpr unsigned long long kWarnEventCount = 150'000'000;
+} // namespace
+
 CameraController::CameraController(QObject* parent)
-    : QObject(parent), frame_pipeline_(nullptr), statistics_(nullptr) {}
+    : QObject(parent), frame_pipeline_(nullptr), statistics_(nullptr) {
+    // Surface the FileFrameGenerator's OOM guard (audit §六-C2b) through
+    // the existing warning chain (status bar in MainWindow). The signal
+    // is emitted from the SDK streaming thread; Qt queues it here.
+    connect(&frame_pipeline_, &FramePipeline::file_buffer_truncated,
+            this, [this]() {
+                emit runtime_warning(
+                    tr("Event buffer memory limit reached; events beyond "
+                       "this point were discarded."));
+            });
+}
 
 CameraController::~CameraController() {
     teardown();
@@ -79,6 +102,17 @@ bool CameraController::connect_serial(const std::string& serial) {
 
 bool CameraController::connect_file(const std::string& path) {
     teardown();
+    // OOM guard (audit §六-C2a): estimate the event count from the file
+    // size BEFORE opening (RAW Evt3 ≈ 8 bytes/event) and warn if the
+    // buffer would grow huge. Non-blocking: the file still opens.
+    unsigned long long estimated_events = 0;
+    {
+        std::error_code ec;
+        const auto size = std::filesystem::file_size(path, ec);
+        if (!ec) {
+            estimated_events = size / kEvt3BytesPerEventEstimate;
+        }
+    }
     try {
         // Always use real_time_playback=false: read all events as fast as
         // possible and buffer them in the FileFrameGenerator. Playback rate
@@ -88,6 +122,11 @@ bool CameraController::connect_file(const std::string& path) {
         hints.real_time_playback(false);
         auto cam = Metavision::Camera::from_file(path, hints);
         setup_camera(std::move(cam), true);
+        if (estimated_events > kWarnEventCount) {
+            emit runtime_warning(
+                tr("Very large file (est. %1M events): playback may use a "
+                   "lot of memory.").arg(estimated_events / 1'000'000));
+        }
         return true;
     } catch (const Metavision::CameraException& e) {
         emit disconnected();
