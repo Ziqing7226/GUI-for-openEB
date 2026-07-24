@@ -216,8 +216,22 @@ facility::TriggerOut* CameraController::trigger_out_facility() {
     return camera_->get_device().get_facility<facility::TriggerOut>();
 }
 
-void CameraController::set_cd_broadcast(bool enabled) {
-    cd_broadcast_.store(enabled, std::memory_order_relaxed);
+void CameraController::acquire_cd_broadcast() {
+    // GUI thread only (all current consumers). The SDK callback reads the
+    // atomic mirror; the store is release-ordered so a batch emitted after
+    // this point is never missed by a consumer that already holds a ref.
+    ++cd_broadcast_refs_;
+    cd_broadcast_.store(true, std::memory_order_release);
+}
+
+void CameraController::release_cd_broadcast() {
+    // Clamp at 0: an unbalanced release (defensive — consumers track their
+    // own acquired flag) must not wrap the count negative, which would
+    // leave the broadcast stuck on.
+    if (cd_broadcast_refs_ > 0) --cd_broadcast_refs_;
+    if (cd_broadcast_refs_ == 0) {
+        cd_broadcast_.store(false, std::memory_order_release);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -320,9 +334,9 @@ void CameraController::setup_camera(Metavision::Camera&& cam, bool is_file) {
                     frame_pipeline_.add_events(b, e);
                 }
                 // Optional CD broadcast for calibration tools. The atomic
-                // check is cheap; the copy only happens when a listener has
-                // explicitly opted in via set_cd_broadcast(true). The emit
-                // crosses to the GUI thread via Qt's queued-connection
+                // check is cheap; the copy only happens while at least one
+                // consumer holds a reference (acquire_cd_broadcast). The
+                // emit crosses to the GUI thread via Qt's queued-connection
                 // machinery (the shared_ptr is captured by value).
                 if (cd_broadcast_.load(std::memory_order_relaxed) && b != e) {
                     auto batch = std::make_shared<std::vector<Metavision::EventCD>>(b, e);
@@ -379,6 +393,8 @@ void CameraController::teardown() {
     //    stopping the pipeline (which resets generator_) races with the CD
     //    callback's frame_pipeline_.add_events() — a use-after-free.
     // Also disable CD broadcast so no in-flight emit references the camera.
+    // Drop every outstanding consumer reference — the camera is going away.
+    cd_broadcast_refs_ = 0;
     cd_broadcast_.store(false, std::memory_order_relaxed);
     if (camera_) {
         if (cd_cb_id_) {

@@ -109,12 +109,17 @@ public:
     facility::TriggerIn*   trigger_in_facility();
     facility::TriggerOut*  trigger_out_facility();
 
-    /// @brief Enables/disables broadcasting of every CD batch via
-    /// cd_events_ready(). When false (default), the CD callback takes the
-    /// fast path with zero extra copies. Calibration tools flip this to true
-    /// on start and back to false on stop so the SDK thread only pays the
-    /// copy cost while a consumer is actively listening.
-    void set_cd_broadcast(bool enabled);
+    /// @brief Reference-counted control of the cd_events_ready() broadcast
+    /// (audit §11.1-B4 — hardening beyond develop's shared boolean). Each
+    /// consumer (calibration wizard, sharpness dialog) acquires on start and
+    /// releases on stop; the broadcast runs while at least one reference is
+    /// held, so the two tools can be open concurrently without switching
+    /// each other's stream off. When the count is 0 (default), the CD
+    /// callback takes the fast path with zero extra copies. Must be called
+    /// from the GUI thread (all current consumers do); release is clamped
+    /// at 0 so an unbalanced call cannot wrap the count negative.
+    void acquire_cd_broadcast();
+    void release_cd_broadcast();
 
 signals:
     void connected(const SensorInfo& info);
@@ -150,7 +155,12 @@ private:
     FilterChain filter_chain_;
     /// @brief When true, the CD callback emits cd_events_ready() with a copy
     /// of every batch. Off by default so non-calibration usage pays nothing.
+    /// This is the SDK-thread-visible mirror of (cd_broadcast_refs_ > 0).
     std::atomic<bool> cd_broadcast_{false};
+    /// @brief Number of consumers holding a CD broadcast reference
+    /// (acquire_cd_broadcast/release_cd_broadcast). GUI thread only — the
+    /// SDK thread reads the atomic cd_broadcast_ mirror instead.
+    int cd_broadcast_refs_{0};
 };
 
 } // namespace gui

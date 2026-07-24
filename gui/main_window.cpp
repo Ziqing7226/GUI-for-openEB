@@ -1722,7 +1722,7 @@ void MainWindow::on_sharpness() {
             sharpness_dialog_ = nullptr;
         });
     }
-    sharpness_dialog_->set_display(display_);
+    sharpness_dialog_->set_camera(&camera_);
     sharpness_dialog_->show();
     sharpness_dialog_->raise();
     sharpness_dialog_->activateWindow();

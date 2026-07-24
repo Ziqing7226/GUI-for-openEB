@@ -321,9 +321,11 @@ void CalibrationWizard::on_start_capture() {
     worker_stop_ = false;
     worker_ = std::thread([this]() { worker_loop(); });
 
-    // Enable CD broadcast so the tap receives batches.
+    // Enable CD broadcast so the tap receives batches. Reference-counted
+    // (§11.1-B4): paired with release_cd_broadcast() in on_stop_capture()
+    // and in the auto-end completion lambda below.
     tap_.clear();
-    camera_->set_cd_broadcast(true);
+    camera_->acquire_cd_broadcast();
     capturing_ = true;
     capture_timer_->start();
 
@@ -347,7 +349,7 @@ void CalibrationWizard::on_stop_capture() {
     if (!capturing_) return;
     capture_timer_->stop();
     capturing_ = false;
-    if (camera_) camera_->set_cd_broadcast(false);
+    if (camera_) camera_->release_cd_broadcast();
     stop_and_join_worker();
     in_start_btn_->setEnabled(camera_ && camera_->is_connected());
     in_stop_btn_->setEnabled(false);
@@ -510,7 +512,7 @@ void CalibrationWizard::worker_loop() {
             post_to_gui([this, result]() {
                 join_worker();  // reap this worker (it is about to return)
                 capturing_ = false;
-                if (camera_) camera_->set_cd_broadcast(false);
+                if (camera_) camera_->release_cd_broadcast();
                 if (chessboard_) chessboard_->set_capturing(false);
                 intrinsic_result_ = *result;
                 in_start_btn_->setEnabled(camera_ && camera_->is_connected());
